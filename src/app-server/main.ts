@@ -1,3 +1,6 @@
+import { homedir } from "node:os";
+import { join } from "node:path";
+
 import { JsonRpcConnection } from "../protocol/connection.js";
 import {
   AgentLoop,
@@ -9,8 +12,29 @@ import {
   OpenAiResponsesProvider,
 } from "../llm/openai-responses.js";
 import {
-  LifecycleStore,
-} from "../runtime/lifecycle-store.js";
+  JsonRpcPermissionGate,
+} from "../permissions/json-rpc-permission-gate.js";
+import {
+  JsonFileRuntimePersistence,
+} from "../runtime/json-file-runtime-persistence.js";
+import {
+  WorkspaceSandbox,
+} from "../sandbox/workspace-sandbox.js";
+import {
+  WorkspaceCommandRunner,
+} from "../sandbox/workspace-command-runner.js";
+import {
+  financeMonthlySummaryAgentTool,
+} from "../tools/finance-monthly-summary-tool.js";
+import {
+  ToolRegistry,
+} from "../tools/tool-registry.js";
+import {
+  createRunCommandTool,
+} from "../tools/run-command-tool.js";
+import {
+  createWorkspaceTools,
+} from "../tools/workspace-tools.js";
 import {
   registerAppServerHandlers,
 } from "./handlers.js";
@@ -20,9 +44,21 @@ const connection = new JsonRpcConnection((data) => {
   process.stdout.write(data);
 });
 
-// main.ts 是组合入口：在这里创建真实依赖，再注入处理器层。
-const lifecycleStore = new LifecycleStore();
 const apiKey = process.env.OPENAI_API_KEY;
+
+// 默认状态进入用户数据目录，不在项目仓库产生运行时文件。
+const defaultStateRoot =
+  process.env.LOCALAPPDATA ??
+  join(homedir(), ".local", "share");
+const runtimePersistence = new JsonFileRuntimePersistence(
+  process.env.AGENT_STATE_PATH ??
+    join(defaultStateRoot, "god-agent", "runtime-state.json"),
+);
+const loadedRuntimeState = await runtimePersistence.load();
+const {
+  lifecycleStore,
+  contextCheckpointStore,
+} = loadedRuntimeState;
 
 const defaultModel = "gpt-5.4-mini";
 const defaultBaseUrl = "https://llmapi.lovbrowser.com";
@@ -35,6 +71,40 @@ const configuredBaseUrl = (
 const apiBaseUrl = configuredBaseUrl.endsWith("/v1")
   ? configuredBaseUrl
   : `${configuredBaseUrl}/v1`;
+
+const workspacePath =
+  process.env.AGENT_WORKSPACE ?? process.cwd();
+const workspaceTools = [];
+
+if (apiKey !== undefined) {
+  const workspaceSandbox = await WorkspaceSandbox.create(
+    workspacePath,
+  );
+  const npmExecutable =
+    process.platform === "win32" ? "npm.cmd" : "npm";
+  const commandRunner = await WorkspaceCommandRunner.create(
+    workspacePath,
+    {
+      recipes: {
+        check: {
+          executable: npmExecutable,
+          arguments: ["run", "check"],
+          display: "npm run check",
+        },
+        test: {
+          executable: npmExecutable,
+          arguments: ["test"],
+          display: "npm test",
+        },
+      },
+    },
+  );
+
+  workspaceTools.push(
+    ...createWorkspaceTools(workspaceSandbox),
+    createRunCommandTool(commandRunner),
+  );
+}
 
 // Runtime 事件通过反向 JSON-RPC Notification 实时推给 Client。
 const events: AgentEventSink = {
@@ -50,6 +120,13 @@ const agentLoop =
     : new AgentLoop({
         lifecycleStore,
         events,
+        // Tool 真正执行前，通过同一条双向 JSON-RPC 连接向 CLI 请求审批。
+        permissionGate: new JsonRpcPermissionGate(connection),
+        contextCheckpointStore,
+        toolRegistry: new ToolRegistry([
+          financeMonthlySummaryAgentTool,
+          ...workspaceTools,
+        ]),
         llm: new OpenAiResponsesProvider({
           apiKey,
           model: process.env.OPENAI_MODEL ?? defaultModel,
@@ -63,9 +140,26 @@ registerAppServerHandlers(connection, {
   lifecycleStore,
   events,
   ...(agentLoop === undefined ? {} : { agentLoop }),
+  saveState: () => runtimePersistence.save(
+    lifecycleStore,
+    contextCheckpointStore,
+  ),
   // 日志写 stderr，避免污染 stdout 上的 JSONL 协议数据。
   log: (message) => process.stderr.write(message),
 });
+
+if (loadedRuntimeState.restored) {
+  process.stderr.write(
+    "[app-server] runtime state restored\n",
+  );
+}
+
+if (loadedRuntimeState.recoveredTurnIds.length > 0) {
+  process.stderr.write(
+    `[app-server] recovered ${loadedRuntimeState.recoveredTurnIds.length} ` +
+      "interrupted turn(s)\n",
+  );
+}
 
 if (agentLoop === undefined) {
   process.stderr.write(

@@ -19,6 +19,12 @@ export type AgentEvent =
       round: number;
     }
   | {
+      type: "context/compacted";
+      turnId: TurnId;
+      beforeTokens: number;
+      afterTokens: number;
+    }
+  | {
       type: "reasoning/summary_delta";
       turnId: TurnId;
       delta: string;
@@ -34,6 +40,20 @@ export type AgentEvent =
       turnId: TurnId;
       callId: string;
       toolName: string;
+    }
+  | {
+      type: "permission/requested";
+      turnId: TurnId;
+      callId: string;
+      toolName: string;
+    }
+  | {
+      type: "permission/decided";
+      turnId: TurnId;
+      callId: string;
+      toolName: string;
+      decision: "allow" | "deny";
+      reason?: string;
     }
   | {
       type: "tool/completed";
@@ -52,6 +72,16 @@ export type AgentEvent =
     }
   | {
       type: "turn/failed";
+      turnId: TurnId;
+      message: string;
+    }
+  | {
+      type: "turn/interrupted";
+      turnId: TurnId;
+      message: string;
+    }
+  | {
+      type: "turn/timed_out";
       turnId: TurnId;
       message: string;
     };
@@ -95,6 +125,14 @@ export function isAgentEvent(value: unknown): value is AgentEvent {
     );
   }
 
+  if (value.type === "context/compacted") {
+    return (
+      typeof value.turnId === "string" &&
+      Number.isInteger(value.beforeTokens) &&
+      Number.isInteger(value.afterTokens)
+    );
+  }
+
   if (
     value.type === "reasoning/summary_delta" ||
     value.type === "assistant/delta"
@@ -116,11 +154,35 @@ export function isAgentEvent(value: unknown): value is AgentEvent {
     );
   }
 
+  if (value.type === "permission/requested") {
+    return (
+      typeof value.turnId === "string" &&
+      typeof value.callId === "string" &&
+      typeof value.toolName === "string"
+    );
+  }
+
+  if (value.type === "permission/decided") {
+    return (
+      typeof value.turnId === "string" &&
+      typeof value.callId === "string" &&
+      typeof value.toolName === "string" &&
+      (value.decision === "allow" ||
+        value.decision === "deny") &&
+      (value.reason === undefined ||
+        typeof value.reason === "string")
+    );
+  }
+
   if (value.type === "turn/completed") {
     return typeof value.turnId === "string";
   }
 
-  if (value.type === "turn/failed") {
+  if (
+    value.type === "turn/failed" ||
+    value.type === "turn/interrupted" ||
+    value.type === "turn/timed_out"
+  ) {
     return (
       typeof value.turnId === "string" &&
       typeof value.message === "string"

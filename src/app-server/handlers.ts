@@ -18,6 +18,10 @@ import {
 import {
   parseTurnRunParams,
 } from "../runtime/turn-run.js";
+import {
+  parseTurnCancelParams,
+  type TurnCancelResult,
+} from "../runtime/turn-cancel.js";
 import type {
   AgentLoop,
 } from "../agent/agent-loop.js";
@@ -28,8 +32,9 @@ import {
 
 export interface AppServerDependencies {
   lifecycleStore: LifecycleStore;
-  agentLoop?: AgentLoop;
+  agentLoop?: Pick<AgentLoop, "run" | "cancel">;
   events?: AgentEventSink;
+  saveState?: () => void | Promise<void>;
   log?: (message: string) => void;
 }
 
@@ -47,6 +52,7 @@ export function registerAppServerHandlers(
     lifecycleStore,
     agentLoop,
     events = NOOP_AGENT_EVENT_SINK,
+    saveState = () => undefined,
     log = () => undefined,
   } = dependencies;
 
@@ -71,6 +77,7 @@ export function registerAppServerHandlers(
         notifications: true,
         threads: true,
         turns: true,
+        cancellation: agentLoop !== undefined,
         llm: agentLoop !== undefined,
       },
     };
@@ -82,17 +89,27 @@ export function registerAppServerHandlers(
     log("[app-server] client initialized\n");
   });
 
-  connection.onRequest("thread/start", () => {
+  connection.onRequest("thread/start", async () => {
     requireInitialized();
 
     // Thread 是持久会话容器；这里只创建容器，还没有启动 Turn。
     const thread = lifecycleStore.createThread();
 
+    // RPC 成功返回前完成落盘，避免 Client 看见一个只存在于内存的 Thread。
+    await saveState();
+
     log(`[app-server] thread started: ${thread.id}\n`);
     return thread;
   });
 
-  connection.onRequest("turn/start", (params) => {
+  connection.onRequest("thread/list", () => {
+    requireInitialized();
+
+    // Map 不跨协议暴露；按创建顺序返回可恢复的 Thread 数组。
+    return lifecycleStore.listThreads();
+  });
+
+  connection.onRequest("turn/start", async (params) => {
     requireInitialized();
 
     // 第一道边界：验证来自 JSON-RPC 的不可信参数。
@@ -116,6 +133,8 @@ export function registerAppServerHandlers(
       turn,
       userMessage,
     };
+
+    await saveState();
 
     events.emit({
       type: "turn/started",
@@ -141,11 +160,40 @@ export function registerAppServerHandlers(
     }
 
     const request = parseTurnRunParams(params);
-    const result = await agentLoop.run(request.turnId);
 
-    log(
-      `[app-server] turn completed: ${result.turn.id}\n`,
-    );
+    try {
+      const result = await agentLoop.run(request.turnId);
+
+      log(
+        `[app-server] turn completed: ${result.turn.id}\n`,
+      );
+
+      return result;
+    } finally {
+      // completed、failed 都是需要恢复的终态；Checkpoint 也在这里一起保存。
+      await saveState();
+    }
+  });
+
+  connection.onRequest("turn/cancel", (params) => {
+    requireInitialized();
+
+    if (agentLoop === undefined) {
+      throw new Error("Agent runtime is unavailable");
+    }
+
+    const request = parseTurnCancelParams(params);
+
+    if (!agentLoop.cancel(request.turnId)) {
+      throw new Error(
+        `Turn is not running: ${request.turnId}`,
+      );
+    }
+
+    const result: TurnCancelResult = {
+      turnId: request.turnId,
+      cancelled: true,
+    };
 
     return result;
   });

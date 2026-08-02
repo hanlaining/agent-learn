@@ -1,13 +1,25 @@
 import type {
   LlmCreateResponseRequest,
   LlmFunctionOutput,
+  LlmMessage,
   LlmProvider,
   LlmStreamEvent,
 } from "../llm/types.js";
 import type {
-  Item,
   TurnId,
 } from "../runtime/lifecycle.js";
+import {
+  ContextBuilder,
+} from "../runtime/context-builder.js";
+import {
+  ContextCompactor,
+} from "../runtime/context-compactor.js";
+import {
+  ContextCheckpointStore,
+} from "../runtime/context-checkpoint-store.js";
+import {
+  TokenBudget,
+} from "../runtime/token-budget.js";
 import type {
   LifecycleStore,
 } from "../runtime/lifecycle-store.js";
@@ -15,11 +27,15 @@ import type {
   TurnRunResult,
 } from "../runtime/turn-run.js";
 import {
-  createFinanceSummaryModelOutput,
-  executeFinanceMonthlySummaryTool,
-  FINANCE_MONTHLY_SUMMARY_TOOL_NAME,
-  financeMonthlySummaryTool,
+  financeMonthlySummaryAgentTool,
 } from "../tools/finance-monthly-summary-tool.js";
+import {
+  ToolRegistry,
+} from "../tools/tool-registry.js";
+import {
+  ALLOW_ALL_PERMISSION_GATE,
+  type PermissionGate,
+} from "../permissions/permission-gate.js";
 import {
   NOOP_AGENT_EVENT_SINK,
   type AgentEventSink,
@@ -43,6 +59,29 @@ export interface AgentLoopOptions {
   llm: LlmProvider;
   events?: AgentEventSink;
   maxToolRounds?: number;
+  tokenBudget?: TokenBudget;
+  contextCompactor?: ContextCompactor;
+  contextCheckpointStore?: ContextCheckpointStore;
+  toolRegistry?: ToolRegistry;
+  permissionGate?: PermissionGate;
+  turnTimeoutMs?: number;
+}
+
+export class TurnCancelledError extends Error {
+  constructor(readonly turnId: TurnId) {
+    super(`Turn cancelled: ${turnId}`);
+    this.name = "TurnCancelledError";
+  }
+}
+
+export class TurnTimeoutError extends Error {
+  constructor(
+    readonly turnId: TurnId,
+    readonly timeoutMs: number,
+  ) {
+    super(`Turn timed out after ${timeoutMs}ms: ${turnId}`);
+    this.name = "TurnTimeoutError";
+  }
 }
 
 /**
@@ -50,25 +89,132 @@ export interface AgentLoopOptions {
  */
 export class AgentLoop {
   private readonly lifecycleStore: LifecycleStore;
+  private readonly contextBuilder: ContextBuilder;
+  private readonly tokenBudget: TokenBudget;
+  private readonly contextCompactor: ContextCompactor;
+  private readonly contextCheckpointStore: ContextCheckpointStore;
+  private readonly toolRegistry: ToolRegistry;
+  private readonly permissionGate: PermissionGate;
   private readonly llm: LlmProvider;
   private readonly events: AgentEventSink;
   private readonly maxToolRounds: number;
+  private readonly turnTimeoutMs: number;
+  private readonly activeTurns = new Map<
+    TurnId,
+    AbortController
+  >();
 
   constructor(options: AgentLoopOptions) {
     this.lifecycleStore = options.lifecycleStore;
+    this.contextCheckpointStore =
+      options.contextCheckpointStore ??
+      new ContextCheckpointStore();
+    this.contextBuilder = new ContextBuilder(
+      options.lifecycleStore,
+      this.contextCheckpointStore,
+    );
+    this.tokenBudget =
+      options.tokenBudget ??
+      new TokenBudget({
+        maxContextTokens: 128_000,
+        compactThresholdTokens: 96_000,
+      });
+    this.contextCompactor =
+      options.contextCompactor ??
+      new ContextCompactor({
+        llm: options.llm,
+        recentMessageTokens: 20_000,
+      });
+    this.toolRegistry =
+      options.toolRegistry ??
+      new ToolRegistry([
+        financeMonthlySummaryAgentTool,
+      ]);
+    this.permissionGate =
+      options.permissionGate ?? ALLOW_ALL_PERMISSION_GATE;
     this.llm = options.llm;
     this.events = options.events ?? NOOP_AGENT_EVENT_SINK;
     this.maxToolRounds = options.maxToolRounds ?? 3;
+    this.turnTimeoutMs = options.turnTimeoutMs ?? 120_000;
+
+    if (
+      !Number.isInteger(this.turnTimeoutMs) ||
+      this.turnTimeoutMs <= 0
+    ) {
+      throw new Error(
+        "turnTimeoutMs must be a positive integer",
+      );
+    }
   }
 
   async run(turnId: TurnId): Promise<TurnRunResult> {
+    if (this.activeTurns.has(turnId)) {
+      throw new Error(`Turn is already running: ${turnId}`);
+    }
+
+    const controller = new AbortController();
+    this.activeTurns.set(turnId, controller);
+    const timeout = setTimeout(() => {
+      controller.abort(
+        new TurnTimeoutError(turnId, this.turnTimeoutMs),
+      );
+    }, this.turnTimeoutMs);
+
     try {
-      const input = this.readUserInput(turnId);
+      return await this.runActiveTurn(
+        turnId,
+        controller.signal,
+      );
+    } finally {
+      clearTimeout(timeout);
+      this.activeTurns.delete(turnId);
+    }
+  }
+
+  cancel(turnId: TurnId): boolean {
+    const controller = this.activeTurns.get(turnId);
+
+    if (controller === undefined) {
+      return false;
+    }
+
+    controller.abort(new TurnCancelledError(turnId));
+    return true;
+  }
+
+  private async runActiveTurn(
+    turnId: TurnId,
+    signal: AbortSignal,
+  ): Promise<TurnRunResult> {
+    try {
+      signal.throwIfAborted();
+      let input = this.contextBuilder.build(turnId);
+      const budget = this.tokenBudget.assess(input);
+      let checkpointMessages: LlmMessage[] | undefined;
+      let compactedTokens: number | undefined;
+
+      if (budget.shouldCompact) {
+        input = await this.contextCompactor.compact(
+          input,
+          signal,
+        );
+        checkpointMessages = input;
+        compactedTokens =
+          this.tokenBudget.assess(input).estimatedTokens;
+
+        this.events.emit({
+          type: "context/compacted",
+          turnId,
+          beforeTokens: budget.estimatedTokens,
+          afterTokens: compactedTokens,
+        });
+      }
 
       let response = await this.requestModel(turnId, 0, {
         instructions: AGENT_INSTRUCTIONS,
         input,
-        tools: [financeMonthlySummaryTool],
+        tools: this.toolRegistry.getDefinitions(),
+        signal,
       });
 
       for (
@@ -95,6 +241,20 @@ export class AgentLoop {
           const turn =
             this.lifecycleStore.completeTurn(turnId);
 
+          if (
+            checkpointMessages !== undefined &&
+            compactedTokens !== undefined
+          ) {
+            // 只在 Turn 成功后安装窗口，失败 Turn 不污染后续 Context。
+            this.contextCheckpointStore.record({
+              threadId: turn.threadId,
+              throughTurnId: turn.id,
+              replacementMessages: checkpointMessages,
+              beforeTokens: budget.estimatedTokens,
+              afterTokens: compactedTokens,
+            });
+          }
+
           this.events.emit({
             type: "turn/completed",
             turnId,
@@ -115,6 +275,12 @@ export class AgentLoop {
         const toolOutputs: LlmFunctionOutput[] = [];
 
         for (const functionCall of response.functionCalls) {
+          const permissionDescription =
+            this.toolRegistry.getPermissionDescription(
+              functionCall.name,
+              functionCall.arguments,
+            );
+
           this.lifecycleStore.appendItem(
             turnId,
             "tool_call",
@@ -126,23 +292,75 @@ export class AgentLoop {
           );
 
           this.events.emit({
+            type: "permission/requested",
+            turnId,
+            callId: functionCall.callId,
+            toolName: functionCall.name,
+          });
+
+          const permission = await waitForAbortable(
+            this.permissionGate.request({
+              turnId,
+              callId: functionCall.callId,
+              toolName: functionCall.name,
+              arguments: functionCall.arguments,
+              ...(permissionDescription === undefined
+                ? {}
+                : { description: permissionDescription }),
+            }),
+            signal,
+          );
+
+          this.events.emit({
+            type: "permission/decided",
+            turnId,
+            callId: functionCall.callId,
+            toolName: functionCall.name,
+            decision: permission.decision,
+            ...(permission.decision === "deny" &&
+            permission.reason !== undefined
+              ? { reason: permission.reason }
+              : {}),
+          });
+
+          if (permission.decision === "deny") {
+            const denialResult = {
+              status: "denied",
+              reason:
+                permission.reason ?? "Permission denied",
+            };
+
+            this.lifecycleStore.appendItem(
+              turnId,
+              "tool_result",
+              {
+                callId: functionCall.callId,
+                name: functionCall.name,
+                result: denialResult,
+              },
+            );
+
+            toolOutputs.push({
+              callId: functionCall.callId,
+              name: functionCall.name,
+              arguments: functionCall.arguments,
+              output: JSON.stringify(denialResult),
+            });
+
+            continue;
+          }
+
+          this.events.emit({
             type: "tool/started",
             turnId,
             callId: functionCall.callId,
             toolName: functionCall.name,
           });
 
-          if (
-            functionCall.name !==
-            FINANCE_MONTHLY_SUMMARY_TOOL_NAME
-          ) {
-            throw new Error(
-              `Unknown tool: ${functionCall.name}`,
-            );
-          }
-
-          const result = executeFinanceMonthlySummaryTool(
+          const execution = await this.toolRegistry.execute(
+            functionCall.name,
             functionCall.arguments,
+            signal,
           );
 
           this.lifecycleStore.appendItem(
@@ -151,7 +369,7 @@ export class AgentLoop {
             {
               callId: functionCall.callId,
               name: functionCall.name,
-              result,
+              result: execution.result,
             },
           );
 
@@ -166,9 +384,7 @@ export class AgentLoop {
             callId: functionCall.callId,
             name: functionCall.name,
             arguments: functionCall.arguments,
-            output: JSON.stringify(
-              createFinanceSummaryModelOutput(result),
-            ),
+            output: execution.output,
           });
         }
 
@@ -177,10 +393,11 @@ export class AgentLoop {
           turnId,
           round + 1,
           {
-          instructions: AGENT_INSTRUCTIONS,
-          input: toolOutputs,
-          previousResponseId: response.id,
-          tools: [financeMonthlySummaryTool],
+            instructions: AGENT_INSTRUCTIONS,
+            input: toolOutputs,
+            previousResponseId: response.id,
+            tools: this.toolRegistry.getDefinitions(),
+            signal,
           },
         );
       }
@@ -188,9 +405,45 @@ export class AgentLoop {
       throw new Error("Agent loop ended unexpectedly");
     } catch (error) {
       const turn = this.lifecycleStore.getTurn(turnId);
+      const cancellation =
+        signal.aborted &&
+        signal.reason instanceof TurnCancelledError
+          ? signal.reason
+          : undefined;
+      const timeout =
+        signal.aborted &&
+        signal.reason instanceof TurnTimeoutError
+          ? signal.reason
+          : undefined;
 
       if (turn?.status === "in_progress") {
-        this.lifecycleStore.failTurn(turnId);
+        if (timeout !== undefined) {
+          this.lifecycleStore.timeoutTurn(turnId);
+        } else if (cancellation === undefined) {
+          this.lifecycleStore.failTurn(turnId);
+        } else {
+          this.lifecycleStore.interruptTurn(turnId);
+        }
+      }
+
+      if (cancellation !== undefined) {
+        this.events.emit({
+          type: "turn/interrupted",
+          turnId,
+          message: cancellation.message,
+        });
+
+        throw cancellation;
+      }
+
+      if (timeout !== undefined) {
+        this.events.emit({
+          type: "turn/timed_out",
+          turnId,
+          message: timeout.message,
+        });
+
+        throw timeout;
       }
 
       this.events.emit({
@@ -254,33 +507,32 @@ export class AgentLoop {
     });
   }
 
-  private readUserInput(turnId: TurnId): string {
-    const userMessage = this.lifecycleStore
-      .getItemsForTurn(turnId)
-      .find((item) => item.type === "user_message");
-
-    const text = readTextContent(userMessage);
-
-    if (text === undefined) {
-      throw new Error(
-        `Turn has no valid user message: ${turnId}`,
-      );
-    }
-
-    return text;
-  }
 }
 
-function readTextContent(item: Item | undefined): string | undefined {
-  if (
-    item === undefined ||
-    typeof item.content !== "object" ||
-    item.content === null ||
-    !("text" in item.content) ||
-    typeof item.content.text !== "string"
-  ) {
-    return undefined;
+function waitForAbortable<T>(
+  promise: Promise<T>,
+  signal: AbortSignal,
+): Promise<T> {
+  if (signal.aborted) {
+    return Promise.reject(signal.reason);
   }
 
-  return item.content.text;
+  return new Promise<T>((resolve, reject) => {
+    const handleAbort = () => reject(signal.reason);
+
+    signal.addEventListener("abort", handleAbort, {
+      once: true,
+    });
+
+    void promise.then(
+      (value) => {
+        signal.removeEventListener("abort", handleAbort);
+        resolve(value);
+      },
+      (error: unknown) => {
+        signal.removeEventListener("abort", handleAbort);
+        reject(error);
+      },
+    );
+  });
 }

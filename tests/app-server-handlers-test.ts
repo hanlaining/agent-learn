@@ -19,8 +19,17 @@ import {
 import {
   isTurnStartResult,
 } from "../src/runtime/turn-start.js";
+import {
+  isTurnCancelResult,
+} from "../src/runtime/turn-cancel.js";
+import type {
+  AgentLoop,
+} from "../src/agent/agent-loop.js";
 
-function createTestAppServer() {
+function createTestAppServer(options: {
+  saveState?: () => void | Promise<void>;
+  agentLoop?: Pick<AgentLoop, "run" | "cancel">;
+} = {}) {
   const clientToServer: string[] = [];
   const serverToClient: string[] = [];
 
@@ -39,6 +48,12 @@ function createTestAppServer() {
 
   registerAppServerHandlers(server, {
     lifecycleStore: store,
+    ...(options.saveState === undefined
+      ? {}
+      : { saveState: options.saveState }),
+    ...(options.agentLoop === undefined
+      ? {}
+      : { agentLoop: options.agentLoop }),
   });
 
   // 测试中手动搬运 JSONL，模拟真实的 Client ↔ App Server 双向通道。
@@ -97,6 +112,75 @@ test("握手后可以通过 thread/start 创建 Thread", async () => {
   assert.deepEqual(result.turnIds, []);
   // JSONL 跨进程传递的是序列化后的数据，不会保留对象引用。
   assert.deepEqual(app.store.getThread(result.id), result);
+});
+
+test("Thread 和 Turn 在 RPC 返回前保存状态", async () => {
+  let saveCount = 0;
+  const app = createTestAppServer({
+    saveState: async () => {
+      saveCount += 1;
+    },
+  });
+
+  await completeHandshake(app);
+
+  const threadPromise = app.client.sendRequest("thread/start");
+  await app.flushClientRequest();
+  const thread = await threadPromise;
+  assert.ok(isThread(thread));
+  assert.equal(saveCount, 1);
+
+  const turnPromise = app.client.sendRequest("turn/start", {
+    threadId: thread.id,
+    input: "持久化这一轮",
+  });
+  await app.flushClientRequest();
+  await turnPromise;
+
+  assert.equal(saveCount, 2);
+});
+
+test("turn/cancel 取消指定的运行中 Turn", async () => {
+  let cancelledTurnId: string | undefined;
+  const app = createTestAppServer({
+    agentLoop: {
+      run: async () => {
+        throw new Error("not used");
+      },
+      cancel: (turnId) => {
+        cancelledTurnId = turnId;
+        return true;
+      },
+    },
+  });
+
+  await completeHandshake(app);
+
+  const resultPromise = app.client.sendRequest(
+    "turn/cancel",
+    { turnId: "turn-running" },
+  );
+  await app.flushClientRequest();
+  const result = await resultPromise;
+
+  assert.ok(isTurnCancelResult(result));
+  assert.equal(cancelledTurnId, "turn-running");
+});
+
+test("thread/list 返回可恢复的 Thread", async () => {
+  const app = createTestAppServer();
+  const existingThread = app.store.createThread();
+
+  await completeHandshake(app);
+
+  const resultPromise = app.client.sendRequest("thread/list");
+  await app.flushClientRequest();
+  const result = await resultPromise;
+
+  assert.ok(Array.isArray(result));
+  assert.equal(result.length, 1);
+  assert.ok(isThread(result[0]));
+  assert.equal(result[0].id, existingThread.id);
 });
 
 test("握手完成前拒绝 thread/start", async () => {
