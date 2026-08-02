@@ -11,7 +11,8 @@ export type TurnStatus =
   | "in_progress"
   | "completed"
   | "failed"
-  | "interrupted";
+  | "interrupted"
+  | "timed_out";
 
 export type ItemType =
   | "user_message"
@@ -98,7 +99,8 @@ export function isTurn(value: unknown): value is Turn {
     value.status === "in_progress" ||
     value.status === "completed" ||
     value.status === "failed" ||
-    value.status === "interrupted";
+    value.status === "interrupted" ||
+    value.status === "timed_out";
 
   const validCompletedAt =
     value.completedAt === undefined ||
