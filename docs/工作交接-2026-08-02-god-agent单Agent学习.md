@@ -2,11 +2,149 @@
 
 > 交接日期：2026-08-02<br>
 > 项目目录：`D:\练手\agent-learn`<br>
-> 当前阶段：单 Agent 主链路已经跑通，下一步实现跨 Turn Context Builder<br>
-> 当前 CLI：`god-agent` 调试型学习 CLI<br>
-> 测试基线：TypeScript 检查通过，自动化测试 45/45
+> 当前阶段：第一阶段单 Agent Runtime 与 `god-agent` CLI 产品化已经完成<br>
+> 当前 CLI：默认产品模式；使用 `--debug` 可保留完整学习型内部日志<br>
+> 测试基线：TypeScript 检查通过，自动化测试 123/123
 
-## 一、学习目标
+## 零、2026-08-02 续作完成快照
+
+本节记录续作后的最新真实状态。后面的“一”到“十二”是开始续作时的历史交接记录，保留它们是为了复盘学习过程；其中“下一步 Context Builder”“45/45”“CLI 尚未产品化”等描述已经过期，不再代表当前源码。
+
+### 0.1 当前架构
+
+```text
+god-agent CLI
+  ├─ 读取命令、排队用户消息、渲染 Assistant 输出
+  ├─ 通过双向 JSON-RPC 处理 Tool 审批
+  └─ 通过 JSONL 启动并连接 App Server
+              ↓
+App Server
+  ├─ Thread / Turn RPC 与取消 RPC
+  ├─ LifecycleStore + ContextCheckpointStore
+  └─ Runtime JSON 原子持久化
+              ↓
+Agent Loop
+  ├─ ContextBuilder → TokenBudget → ContextCompactor
+  ├─ Model → ToolRegistry → PermissionGate → Tool
+  └─ Cancel / Timeout / Provider Retry / Event System
+              ↓
+边界能力
+  ├─ WorkspaceSandbox：路径、符号链接、大小、二进制与数量限制
+  ├─ WorkspaceCommandRunner：只运行预注册命令配方
+  └─ 金融 Tool：使用整数“分”做确定性金额计算
+```
+
+App Server 的 `stdout` 仍只承载 JSONL 协议，诊断日志写入 `stderr`。默认 CLI 隐藏这些内部日志；`--debug` 会完整显示它们，学习和调试能力没有删除。
+
+### 0.2 Context、Message History、LifecycleStore 的区别
+
+| 概念 | 职责 | 是否是事实源 |
+|---|---|---|
+| `LifecycleStore` | 保存完整的 Thread、Turn、Item、状态和关联关系 | 是 |
+| Message History | 从 Lifecycle Item 中按规则投影出的 `user` / `assistant` 消息序列 | 否，是派生视图 |
+| Context | 某一次模型请求真正收到的输入；可能来自 Message History，也可能经过 Token Budget、Compaction 和 Checkpoint 替换 | 否，是本次请求视图 |
+
+因此 Compaction 不删除原始 Lifecycle Items。它只创建新的语义 Checkpoint，让后续 Context 从“摘要 + 最近真实消息”继续构建。
+
+### 0.3 本轮已经完成
+
+1. 跨 Turn Context Builder：第二个 Turn 能读取同一 Thread 中已经完成的对话。
+2. Token Budget：确定性估算中英文输入，判断剩余预算和压缩阈值。
+3. Context Compaction：生成 Handoff Summary，保留最近消息并记录 Context Window Checkpoint。
+4. Tool Registry：Agent Loop 不再硬编码金融 Tool，并支持异步 Tool。
+5. Permission Runtime：Tool 执行前通过 App Server → CLI 反向 JSON-RPC 请求用户审批。
+6. Workspace Sandbox：阻止 `..` 越界、越界符号链接、超大文件和二进制文件，并限制目录结果数量。
+7. Workspace Tool：提供受控的 `list_files`、`read_file` 和 `run_command`。
+8. 命令边界：`run_command` 只能选择预注册的 `check` / `test` 配方，不接受任意 shell 或额外参数；固定工作目录并限制环境、输出、时限和取消。
+9. Runtime 持久化：Lifecycle 与 Context Checkpoint 使用“临时文件 → rename”的 JSON 原子快照，拒绝损坏状态。
+10. Cancel / Timeout / Retry / Resume：取消信号贯穿 LLM 与 Tool；Provider 仅对临时错误做有限指数退避；重启后把遗留 `in_progress` Turn 归一化为 `interrupted`。
+11. CLI 产品化：默认显示 `You ›`、`Assistant ›` 和 `Thinking…`，支持 FIFO 输入队列、Thread 恢复以及 `/help`、`/status`、`/threads`、`/new`、`/cancel`、`/exit`。
+12. 可执行入口：支持 `god-agent --debug`、`--help`、`--version`，入口文件为 `bin/god-agent.js`。
+
+### 0.4 关键文件及用途
+
+| 文件 | 用途 |
+|---|---|
+| `src/runtime/context-builder.ts` | 从 Lifecycle 与最新 Checkpoint 构建本次模型 Context |
+| `src/runtime/token-budget.ts` | 估算消息 Token 并决定是否触发压缩 |
+| `src/runtime/context-compactor.ts` | 把旧消息转换成语义 Handoff Summary，并保留最近真实消息 |
+| `src/runtime/context-checkpoint-store.ts` | 记录每个 Thread 的窗口编号与替换历史 |
+| `src/tools/tool-registry.ts` | 注册、描述和统一执行 Tool |
+| `src/permissions/json-rpc-permission-gate.ts` | 把 Runtime 审批接口适配为 App Server → CLI 反向 RPC |
+| `src/sandbox/workspace-sandbox.ts` | 为文件读取与目录列表提供教学级 Workspace 边界 |
+| `src/sandbox/workspace-command-runner.ts` | 在固定 Workspace 中执行预注册命令配方 |
+| `src/runtime/json-file-runtime-persistence.ts` | 原子保存并恢复 Lifecycle 与 Context Checkpoint |
+| `src/runtime/turn-cancel.ts` | 定义并校验 `turn/cancel` RPC |
+| `src/cli/input-router.ts` | 保证 readline 是唯一输入消费者，并路由审批与命令输入 |
+| `src/cli/message-queue.ts` | 按 FIFO 保存运行期间到达的用户消息 |
+| `src/cli/interrupt-handler.ts` | 将 Ctrl+C 路由为“运行中取消、空闲退出” |
+| `src/cli/options.ts` | 解析 `--debug`、`--help` 和 `--version` |
+| `src/cli/main.ts` | 组装 CLI、App Server、Thread 恢复、命令循环和产品/调试渲染 |
+| `bin/god-agent.js` | 真正的 `god-agent` Node.js 可执行入口 |
+
+核心 Runtime 与 CLI 代码保留中文注释，重点解释 Context 边界、Permission 竞态、Sandbox 限制、取消传播和产品/调试模式差异。
+
+### 0.5 当前验证证据
+
+```powershell
+cd D:\练手\agent-learn
+npm run check
+npm test
+node bin/god-agent.js --help
+```
+
+2026-08-02 最终结果：
+
+```text
+npm run check                 通过
+npm test                      123/123 通过
+node bin/god-agent.js --help  通过
+```
+
+CLI Smoke Test 还验证了：
+
+- 默认产品模式与 `--debug` 模式分离。
+- 使用同一状态文件再次启动时恢复最近 active Thread。
+- 第一轮模型仍在运行时，第二条输入进入 FIFO，并在下一轮携带上一轮 Context。
+- `/cancel` 可以端到端中断挂起的 HTTP 模型请求。
+- CLI 退出后安全关闭 App Server。
+
+测试使用本机临时 HTTP 假模型和明确的测试占位 Key，没有读取、输出或使用真实 Key。
+
+### 0.6 明确未进入的范围
+
+当前没有实现：
+
+```text
+Skill Loader
+MCP Client
+Electron
+Multi-Agent
+生产级容器 / 虚拟机 Sandbox
+生产级金融执行
+```
+
+当前 Workspace Sandbox 是教学级进程内边界，不能宣称等价于容器、虚拟机或操作系统级隔离。
+
+### 0.7 当前阶段结论
+
+原定第一阶段顺序已经全部走完：
+
+```text
+跨 Turn Context
+→ Token Budget
+→ Compaction
+→ Tool Registry
+→ Permission
+→ Sandbox
+→ Persistence
+→ Cancel / Timeout / Retry / Resume
+→ CLI 产品化
+```
+
+本阶段不再新增 Runtime 功能。下一步是否进入 Electron 或开启新的单 Agent 增强阶段，应由新的学习目标单独决定。
+
+## 历史记录：一、续作前学习目标
 
 从零手写一个 Codex-like 单 Agent Runtime，重点理解底层架构，不使用 LangChain 隐藏核心流程。
 
