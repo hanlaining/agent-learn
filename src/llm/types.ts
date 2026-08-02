@@ -21,6 +21,19 @@ export interface LlmFunctionOutput {
   output: string;
 }
 
+/**
+ * Runtime 生成的 Provider 无关消息。
+ * Provider 负责把它转换成具体厂家的 HTTP input 结构。
+ */
+export interface LlmMessage {
+  role: "user" | "assistant";
+  text: string;
+}
+
+export type LlmInputItem =
+  | LlmMessage
+  | LlmFunctionOutput;
+
 export interface LlmResponse {
   id: string;
   text: string;
@@ -42,9 +55,10 @@ export type LlmStreamEvent =
 
 export interface LlmCreateResponseRequest {
   instructions: string;
-  input: string | LlmFunctionOutput[];
+  input: string | readonly LlmInputItem[];
   tools: readonly LlmToolDefinition[];
   previousResponseId?: string;
+  signal?: AbortSignal;
   onEvent?: (event: LlmStreamEvent) => void;
 }
 

@@ -1,6 +1,8 @@
 import type {
   LlmCreateResponseRequest,
   LlmFunctionCall,
+  LlmInputItem,
+  LlmMessage,
   LlmProvider,
   LlmResponse,
   LlmStreamEvent,
@@ -11,8 +13,14 @@ export interface OpenAiResponsesOptions {
   model: string;
   baseUrl?: string;
   timeoutMs?: number;
+  maxRetries?: number;
+  retryBaseDelayMs?: number;
   usePreviousResponseId?: boolean;
   fetch?: typeof fetch;
+  sleep?: (
+    milliseconds: number,
+    signal?: AbortSignal,
+  ) => Promise<void>;
 }
 
 /**
@@ -24,8 +32,14 @@ export class OpenAiResponsesProvider implements LlmProvider {
   private readonly model: string;
   private readonly baseUrl: string;
   private readonly timeoutMs: number;
+  private readonly maxRetries: number;
+  private readonly retryBaseDelayMs: number;
   private readonly usePreviousResponseId: boolean;
   private readonly fetchImpl: typeof fetch;
+  private readonly sleep: (
+    milliseconds: number,
+    signal?: AbortSignal,
+  ) => Promise<void>;
 
   constructor(options: OpenAiResponsesOptions) {
     if (options.apiKey.trim().length === 0) {
@@ -38,9 +52,29 @@ export class OpenAiResponsesProvider implements LlmProvider {
       options.baseUrl ?? "https://api.openai.com/v1"
     ).replace(/\/$/, "");
     this.timeoutMs = options.timeoutMs ?? 45_000;
+    this.maxRetries = options.maxRetries ?? 2;
+    this.retryBaseDelayMs =
+      options.retryBaseDelayMs ?? 250;
     this.usePreviousResponseId =
       options.usePreviousResponseId ?? true;
     this.fetchImpl = options.fetch ?? globalThis.fetch;
+    this.sleep = options.sleep ?? wait;
+
+    if (
+      !Number.isInteger(this.maxRetries) ||
+      this.maxRetries < 0
+    ) {
+      throw new Error("maxRetries must be a non-negative integer");
+    }
+
+    if (
+      !Number.isInteger(this.retryBaseDelayMs) ||
+      this.retryBaseDelayMs < 0
+    ) {
+      throw new Error(
+        "retryBaseDelayMs must be a non-negative integer",
+      );
+    }
   }
 
   async createResponse(
@@ -62,7 +96,7 @@ export class OpenAiResponsesProvider implements LlmProvider {
                 ],
               },
             ]
-          : this.createToolContinuationInput(request.input),
+          : this.createInputItems(request.input),
       tools: request.tools.map((tool) => ({
         type: "function",
         name: tool.name,
@@ -81,7 +115,7 @@ export class OpenAiResponsesProvider implements LlmProvider {
       body.previous_response_id = request.previousResponseId;
     }
 
-    const response = await this.fetchImpl(
+    const response = await this.fetchWithRetry(
       `${this.baseUrl}/responses`,
       {
         method: "POST",
@@ -90,9 +124,8 @@ export class OpenAiResponsesProvider implements LlmProvider {
           "content-type": "application/json",
         },
         body: JSON.stringify(body),
-        // 外部 API 无响应时主动终止，Agent Loop 会把 Turn 标记为 failed。
-        signal: AbortSignal.timeout(this.timeoutMs),
       },
+      request.signal,
     );
 
     if (!response.ok) {
@@ -136,35 +169,174 @@ export class OpenAiResponsesProvider implements LlmProvider {
     return result;
   }
 
-  private createToolContinuationInput(
-    outputs: Extract<
-      LlmCreateResponseRequest["input"],
-      readonly unknown[]
-    >,
-  ): Record<string, unknown>[] {
-    if (this.usePreviousResponseId) {
-      return outputs.map((output) => ({
-        type: "function_call_output",
-        call_id: output.callId,
-        output: output.output,
-      }));
+  private async fetchWithRetry(
+    url: string,
+    init: RequestInit,
+    externalSignal: AbortSignal | undefined,
+  ): Promise<Response> {
+    for (
+      let attempt = 0;
+      attempt <= this.maxRetries;
+      attempt += 1
+    ) {
+      externalSignal?.throwIfAborted();
+
+      const timeoutSignal = AbortSignal.timeout(
+        this.timeoutMs,
+      );
+      const signal =
+        externalSignal === undefined
+          ? timeoutSignal
+          : AbortSignal.any([
+              externalSignal,
+              timeoutSignal,
+            ]);
+
+      let response: Response;
+
+      try {
+        response = await this.fetchImpl(url, {
+          ...init,
+          signal,
+        });
+      } catch (error) {
+        if (externalSignal?.aborted === true) {
+          throw externalSignal.reason;
+        }
+
+        if (attempt === this.maxRetries) {
+          throw error;
+        }
+
+        await this.waitBeforeRetry(
+          attempt,
+          externalSignal,
+        );
+        continue;
+      }
+
+      if (
+        !response.ok &&
+        isRetryableStatus(response.status) &&
+        attempt < this.maxRetries
+      ) {
+        await response.body?.cancel();
+        await this.waitBeforeRetry(
+          attempt,
+          externalSignal,
+        );
+        continue;
+      }
+
+      return response;
     }
 
-    // 无状态兼容端点需要显式回放 function_call，再追加 Tool 结果。
-    return outputs.flatMap((output) => [
-      {
-        type: "function_call",
-        call_id: output.callId,
-        name: output.name,
-        arguments: output.arguments,
-      },
-      {
-        type: "function_call_output",
-        call_id: output.callId,
-        output: output.output,
-      },
-    ]);
+    throw new Error("OpenAI retry loop ended unexpectedly");
   }
+
+  private waitBeforeRetry(
+    attempt: number,
+    signal: AbortSignal | undefined,
+  ): Promise<void> {
+    const delay =
+      this.retryBaseDelayMs * 2 ** attempt;
+
+    return this.sleep(delay, signal);
+  }
+
+  private createInputItems(
+    items: readonly LlmInputItem[],
+  ): Record<string, unknown>[] {
+    const input: Record<string, unknown>[] = [];
+
+    for (const item of items) {
+      if (isLlmMessage(item)) {
+        input.push({
+          role: item.role,
+          content: [
+            {
+              type:
+                item.role === "user"
+                  ? "input_text"
+                  : "output_text",
+              text: item.text,
+            },
+          ],
+        });
+        continue;
+      }
+
+      if (this.usePreviousResponseId) {
+        input.push({
+          type: "function_call_output",
+          call_id: item.callId,
+          output: item.output,
+        });
+        continue;
+      }
+
+      // 无状态兼容端点需要显式回放 function_call，再追加 Tool 结果。
+      input.push(
+        {
+          type: "function_call",
+          call_id: item.callId,
+          name: item.name,
+          arguments: item.arguments,
+        },
+        {
+          type: "function_call_output",
+          call_id: item.callId,
+          output: item.output,
+        },
+      );
+    }
+
+    return input;
+  }
+}
+
+function isRetryableStatus(status: number): boolean {
+  return (
+    status === 408 ||
+    status === 409 ||
+    status === 429 ||
+    status >= 500
+  );
+}
+
+function wait(
+  milliseconds: number,
+  signal?: AbortSignal,
+): Promise<void> {
+  if (signal?.aborted === true) {
+    return Promise.reject(signal.reason);
+  }
+
+  return new Promise((resolve, reject) => {
+    const handleComplete = () => {
+      signal?.removeEventListener("abort", handleAbort);
+      resolve();
+    };
+    const timeout = setTimeout(
+      handleComplete,
+      milliseconds,
+    );
+    const handleAbort = () => {
+      clearTimeout(timeout);
+      signal?.removeEventListener("abort", handleAbort);
+      reject(signal?.reason);
+    };
+
+    signal?.addEventListener("abort", handleAbort, {
+      once: true,
+    });
+  });
+}
+
+function isLlmMessage(
+  item: LlmInputItem,
+): item is LlmMessage {
+  return "role" in item;
 }
 
 /**
