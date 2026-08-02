@@ -12,6 +12,9 @@ import type {
 import type {
   LlmToolDefinition,
 } from "../llm/types.js";
+import type {
+  AgentTool,
+} from "./tool-registry.js";
 
 export const FINANCE_MONTHLY_SUMMARY_TOOL_NAME =
   "finance_monthly_summary";
@@ -85,6 +88,24 @@ export function createFinanceSummaryModelOutput(
     ),
   };
 }
+
+/**
+ * Registry 使用的通用适配器。原始结果进入 LifecycleStore，
+ * 带确定性 display 的安全结果交给模型解释。
+ */
+export const financeMonthlySummaryAgentTool: AgentTool = {
+  definition: financeMonthlySummaryTool,
+  execute(argumentsJson) {
+    const result = executeFinanceMonthlySummaryTool(
+      argumentsJson,
+    );
+
+    return {
+      result,
+      modelOutput: createFinanceSummaryModelOutput(result),
+    };
+  },
+};
 
 function createModelMoney(money: Money) {
   return {
