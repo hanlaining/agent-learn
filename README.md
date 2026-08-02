@@ -18,19 +18,23 @@ Client
 ## 当前进度
 
 - `T00`：TypeScript CLI 项目骨架，已完成。
-- `T01-1`：JSON-RPC 消息类型，进行中。
+- `T01`：JSON-RPC 消息类型、类型守卫和协议测试，已完成。
+- `T02`：JSONL、Request Map、双向 Connection 和 `initialize` 握手，已完成。
+- 金融 Walking Skeleton：模拟流水通过 App Server 返回月度汇总，已完成。
+- 下一步：由学习者手写 Runtime 生命周期接入和 Agent Loop。
 - 当前入口：`src/cli/main.ts`。
-- 当前输出：`Agent Lab ready`。
+- 当前输出：`2026-07` 收入、支出、净现金流和分类支出。
 
 ## 目录结构
 
 ```text
 src/
-├── app-server/   # Codex-like App Server，后续实现
+├── app-server/   # Codex-like App Server 与金融 RPC 入口
 ├── cli/          # 第一阶段测试客户端
+├── domains/      # 业务领域；当前包含确定性金融汇总
 ├── model/        # Model Provider Adapter，后续实现
 ├── protocol/     # JSON-RPC 与 App Server 协议
-├── runtime/      # Agent Loop 与状态机，后续实现
+├── runtime/      # Thread / Turn / Item；下一阶段手写接入
 └── tools/        # Tool Registry 与 Executor，后续实现
 tests/            # 协议与 Runtime 测试
 ```
@@ -46,7 +50,10 @@ npm run dev
 预期输出：
 
 ```text
-Agent Lab ready
+2026-07 财务摘要
+收入：¥10,000.00
+支出：¥3,150.00
+净现金流：¥6,850.00
 ```
 
 ## 换电脑继续学习
