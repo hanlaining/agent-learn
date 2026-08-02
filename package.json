@@ -4,7 +4,7 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1",
+    "test": "tsx --test tests/json-rpc-test.ts tests/jsonl-test.ts tests/request-map-test.ts tests/connection-test.ts tests/lifecycle-store-test.ts tests/app-server-handlers-test.ts tests/finance-summary-test.ts tests/openai-responses-test.ts tests/agent-loop-test.ts tests/agent-events-test.ts",
     "dev": "tsx src/cli/main.ts",
     "check": "tsc --noEmit"
   },
