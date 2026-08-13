@@ -2,6 +2,9 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  applyAgentModeToTools,
+  buildParentAgentInstructions,
+  selectInitialChildProfile,
   registerAppServerHandlers,
 } from "../src/app-server/handlers.js";
 import {
@@ -25,10 +28,26 @@ import {
 import type {
   AgentLoop,
 } from "../src/agent/agent-loop.js";
+import type { AgentRunResult } from "../src/agents/agent-run.js";
+import type { PersistedThreadConfig } from "../src/runtime/json-file-runtime-persistence.js";
+import { DEFAULT_AGENT_TEAM_CONFIG } from "../src/agents/agent-runtime.js";
+import { AgentRegistry } from "../src/agents/agent-registry.js";
+import {
+  isThreadHistoryResult,
+} from "../src/runtime/thread-history.js";
+import {
+  isRuntimeCapabilities,
+  type RuntimeCapabilities,
+} from "../src/app-server/runtime-capabilities.js";
 
 function createTestAppServer(options: {
   saveState?: () => void | Promise<void>;
   agentLoop?: Pick<AgentLoop, "run" | "cancel">;
+  runtimeCapabilities?: RuntimeCapabilities;
+  selectModel?: (model: string) => RuntimeCapabilities;
+  runInitialChildAgent?: (request: { parentTurnId: string; profileId: string; task: string }) => Promise<AgentRunResult>;
+  threadConfigs?: Map<string, PersistedThreadConfig>;
+  agentRegistry?: AgentRegistry;
 } = {}) {
   const clientToServer: string[] = [];
   const serverToClient: string[] = [];
@@ -41,9 +60,18 @@ function createTestAppServer(options: {
     serverToClient.push(data);
   });
 
+  const idSequence = {
+    thread: 0,
+    turn: 0,
+    item: 0,
+  };
+
   const store = new LifecycleStore({
     now: () => "2026-08-01T09:00:00.000Z",
-    createId: (prefix) => `${prefix}-test-1`,
+    createId: (prefix) => {
+      idSequence[prefix] += 1;
+      return `${prefix}-test-${idSequence[prefix]}`;
+    },
   });
 
   registerAppServerHandlers(server, {
@@ -54,6 +82,21 @@ function createTestAppServer(options: {
     ...(options.agentLoop === undefined
       ? {}
       : { agentLoop: options.agentLoop }),
+    ...(options.runtimeCapabilities === undefined
+      ? {}
+      : { runtimeCapabilities: options.runtimeCapabilities }),
+    ...(options.selectModel === undefined
+      ? {}
+      : { selectModel: options.selectModel }),
+    ...(options.runInitialChildAgent === undefined
+      ? {}
+      : { runInitialChildAgent: options.runInitialChildAgent }),
+    ...(options.threadConfigs === undefined
+      ? {}
+      : { threadConfigs: options.threadConfigs }),
+    ...(options.agentRegistry === undefined
+      ? {}
+      : { agentRegistry: options.agentRegistry }),
   });
 
   // 测试中手动搬运 JSONL，模拟真实的 Client ↔ App Server 双向通道。
@@ -70,6 +113,77 @@ function createTestAppServer(options: {
     flushClientRequest,
   };
 }
+
+test("子 Agent 开关控制委派工具和父 Agent 监工合同", () => {
+  assert.deepEqual(applyAgentModeToTools(["*"], "off"), ["*", "!run_agent"]);
+  assert.deepEqual(applyAgentModeToTools(["read_file", "run_agent"], "off"), ["read_file"]);
+  assert.deepEqual(applyAgentModeToTools(["*"], "auto"), ["*"]);
+
+  const disabled = buildParentAgentInstructions("基础指令", "off");
+  assert.match(disabled, /必须独立完成/);
+  assert.match(disabled, /不得创建或委派子 Agent/);
+
+  const enabled = buildParentAgentInstructions("基础指令", "auto");
+  assert.match(enabled, /父 Agent和监工/);
+  assert.match(enabled, /委派给子 Agent/);
+  assert.match(enabled, /检查 Evidence、验收 Return/);
+  assert.match(enabled, /实际执行工作必须委派给子 Agent完成/);
+
+  const delivered = buildParentAgentInstructions("基础指令", "auto", {
+    runId: "child-1", status: "completed", summary: "子任务已完成",
+  });
+  assert.match(delivered, /Runtime 已强制派发首个子 Agent/);
+  assert.match(delivered, /子任务已完成/);
+
+  assert.equal(selectInitialChildProfile("修复项目代码", ["coder", "researcher"]), "coder");
+  assert.equal(selectInitialChildProfile("查询今年政策", ["coder", "researcher"]), "researcher");
+  assert.equal(selectInitialChildProfile("分析这个问题", ["investigator", "coder"]), "investigator");
+});
+
+test("开启子 Agent 后在父 Agent 汇总前强制派发首个执行 Agent", async () => {
+  const threadConfigs = new Map<string, PersistedThreadConfig>();
+  const delegated: Array<{ parentTurnId: string; profileId: string; task: string }> = [];
+  let parentInstructions = "";
+  const app = createTestAppServer({
+    threadConfigs,
+    agentRegistry: new AgentRegistry(),
+    runInitialChildAgent: async (request) => {
+      delegated.push(request);
+      return { runId: "child-1", status: "completed", summary: "已完成代码修复" };
+    },
+    agentLoop: {
+      cancel: () => false,
+      run: async (turnId, options) => {
+        parentInstructions = options?.instructions ?? "";
+        return {
+          turn: { id: turnId, threadId: "thread-test-1", status: "completed", createdAt: "2026-08-01T09:00:00.000Z", completedAt: "2026-08-01T09:00:01.000Z", itemIds: [] },
+          assistantMessage: { id: "item-result", threadId: "thread-test-1", turnId, type: "assistant_message", content: { text: "父 Agent 汇总" }, createdAt: "2026-08-01T09:00:01.000Z" },
+        };
+      },
+    },
+  });
+  await completeHandshake(app);
+  const threadPromise = app.client.sendRequest("thread/start");
+  await app.flushClientRequest();
+  const thread = await threadPromise as { id: string };
+  threadConfigs.set(thread.id, {
+    threadId: thread.id,
+    model: "gpt-5.6-sol",
+    reasoningEffort: "high",
+    agentProfileId: "orchestrator",
+    agentTeam: { ...DEFAULT_AGENT_TEAM_CONFIG, mode: "auto" },
+  });
+  const turnPromise = app.client.sendRequest("turn/start", { threadId: thread.id, input: "修复项目代码" });
+  await app.flushClientRequest();
+  const turn = await turnPromise as { turn: { id: string } };
+  const runPromise = app.client.sendRequest("turn/run", { turnId: turn.turn.id });
+  await app.flushClientRequest();
+  await runPromise;
+
+  assert.deepEqual(delegated, [{ parentTurnId: turn.turn.id, profileId: "coder", task: "修复项目代码" }]);
+  assert.match(parentInstructions, /已强制派发首个子 Agent/);
+  assert.match(parentInstructions, /已完成代码修复/);
+});
 
 type TestAppServer =
   ReturnType<typeof createTestAppServer>;
@@ -181,6 +295,111 @@ test("thread/list 返回可恢复的 Thread", async () => {
   assert.equal(result.length, 1);
   assert.ok(isThread(result[0]));
   assert.equal(result[0].id, existingThread.id);
+});
+
+test("thread/history 只返回可展示的对话消息", async () => {
+  const app = createTestAppServer();
+  const thread = app.store.createThread();
+  const turn = app.store.createTurn(thread.id);
+  app.store.appendItem(turn.id, "user_message", {
+    text: "第一条消息",
+  });
+  app.store.appendItem(turn.id, "tool_result", {
+    raw: "hidden tool result",
+  });
+  app.store.appendItem(turn.id, "assistant_message", {
+    text: "第一条回复",
+  });
+  app.store.completeTurn(turn.id);
+
+  await completeHandshake(app);
+  const resultPromise = app.client.sendRequest(
+    "thread/history",
+    { threadId: thread.id },
+  );
+  await app.flushClientRequest();
+  const result = await resultPromise;
+
+  assert.ok(isThreadHistoryResult(result));
+  assert.equal(result.messages.length, 2);
+  assert.doesNotMatch(JSON.stringify(result), /hidden tool result/);
+});
+
+test("runtime/capabilities 返回安全能力目录", async () => {
+  const app = createTestAppServer({
+    runtimeCapabilities: {
+      llm: true,
+      currentModel: "gpt-5.6-sol",
+      models: [{ id: "gpt-5.6-sol", label: "GPT-5.6 Sol" }],
+      webSearch: true,
+      tools: [{
+        name: "read_file",
+        description: "读取工作区文本",
+        source: "workspace",
+      }],
+      skills: [{
+        name: "demo-skill",
+        description: "演示 Skill",
+      }],
+      mcpServers: [{
+        name: "demo-mcp",
+        protocolVersion: "2026-07-28",
+        toolCount: 2,
+      }],
+    },
+  });
+
+  await completeHandshake(app);
+  const resultPromise = app.client.sendRequest(
+    "runtime/capabilities",
+  );
+  await app.flushClientRequest();
+  const result = await resultPromise;
+
+  assert.ok(isRuntimeCapabilities(result));
+  assert.equal(result.tools.length, 1);
+  assert.equal(result.skills.length, 1);
+  assert.equal(result.mcpServers.length, 1);
+});
+
+test("runtime/select-model 只通过受控选择器切换模型", async () => {
+  const allowed = new Set(["gpt-5.6-sol", "gpt-5.6-terra"]);
+  const selected: string[] = [];
+  const app = createTestAppServer({
+    selectModel: (model) => {
+      if (!allowed.has(model)) {
+        throw new Error("Model is not available");
+      }
+      selected.push(model);
+      return {
+        llm: true,
+        currentModel: model,
+        models: [...allowed].map((id) => ({ id, label: id })),
+        webSearch: false,
+        tools: [],
+        skills: [],
+        mcpServers: [],
+      };
+    },
+  });
+  await completeHandshake(app);
+
+  const validPromise = app.client.sendRequest("runtime/select-model", {
+    model: "gpt-5.6-terra",
+  });
+  await app.flushClientRequest();
+  const valid = await validPromise;
+  assert.ok(isRuntimeCapabilities(valid));
+  assert.equal(valid.currentModel, "gpt-5.6-terra");
+  assert.deepEqual(selected, ["gpt-5.6-terra"]);
+
+  const invalidPromise = app.client.sendRequest("runtime/select-model", {
+    model: "unlisted-model",
+  });
+  const rejection = assert.rejects(invalidPromise, /Model is not available/);
+  await app.flushClientRequest();
+  await rejection;
+  assert.deepEqual(selected, ["gpt-5.6-terra"]);
 });
 
 test("握手完成前拒绝 thread/start", async () => {

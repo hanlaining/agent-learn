@@ -1,10 +1,14 @@
 import {
   spawn,
+  type ChildProcess,
 } from "node:child_process";
 import {
   realpath,
   stat,
 } from "node:fs/promises";
+import {
+  join,
+} from "node:path";
 
 const DEFAULT_TIMEOUT_MS = 30_000;
 const DEFAULT_MAX_OUTPUT_BYTES = 64 * 1024;
@@ -109,6 +113,8 @@ export class WorkspaceCommandRunner {
         cwd: this.workspacePath,
         env: createFilteredEnvironment(),
         shell: false,
+        // POSIX 使用独立进程组，取消时可以连同孙进程一起终止。
+        detached: process.platform !== "win32",
         windowsHide: true,
         stdio: ["ignore", "pipe", "pipe"],
       },
@@ -146,7 +152,7 @@ export class WorkspaceCommandRunner {
         cleanup();
 
         if (child.exitCode === null) {
-          child.kill();
+          terminateProcessTree(child);
           return;
         }
 
@@ -230,6 +236,48 @@ export class WorkspaceCommandRunner {
       recipe.display ??
       [recipe.executable, ...recipe.arguments].join(" ")
     );
+  }
+}
+
+/**
+ * 只终止本 Runner 刚创建的 PID/进程组。Windows 使用系统 taskkill 的 /T，
+ * POSIX 使用负 PID 定位独立进程组；失败时退回 Node 的单进程 kill。
+ */
+function terminateProcessTree(child: ChildProcess): void {
+  if (child.pid === undefined) {
+    child.kill();
+    return;
+  }
+
+  if (process.platform === "win32") {
+    const systemRoot =
+      process.env.SystemRoot ?? process.env.SYSTEMROOT;
+
+    if (systemRoot === undefined) {
+      child.kill();
+      return;
+    }
+
+    const killer = spawn(
+      join(systemRoot, "System32", "taskkill.exe"),
+      ["/PID", String(child.pid), "/T", "/F"],
+      {
+        shell: false,
+        windowsHide: true,
+        stdio: "ignore",
+      },
+    );
+
+    killer.once("error", () => {
+      child.kill();
+    });
+    return;
+  }
+
+  try {
+    process.kill(-child.pid, "SIGTERM");
+  } catch {
+    child.kill();
   }
 }
 

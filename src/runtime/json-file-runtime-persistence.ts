@@ -18,16 +18,46 @@ import {
   LifecycleStore,
   type LifecycleSnapshot,
 } from "./lifecycle-store.js";
+import { AgentRunStore } from "../agents/agent-run-store.js";
+import type { AgentRunSnapshot } from "../agents/agent-run.js";
+import type { AgentProfile } from "../agents/agent-profile.js";
+import { AgentRuntimeStore } from "../agents/agent-runtime-store.js";
+import type { AgentRuntimeSnapshot, AgentTeamConfig } from "../agents/agent-runtime.js";
+import { isRuntimeSession, type RuntimeSession } from "./runtime-session.js";
+
+export interface PersistedThreadConfig {
+  threadId: string;
+  model: string;
+  reasoningEffort: string;
+  agentProfileId: string;
+  agentTeam?: AgentTeamConfig;
+}
+
+export interface PersistedRuntimeSession {
+  threadId: string;
+  turnState: string;
+  session: RuntimeSession;
+}
 
 export interface RuntimeStateSnapshot {
-  version: 1;
+  version: 3;
   lifecycle: LifecycleSnapshot;
   contextCheckpoints: ContextCheckpointSnapshot;
+  threadConfigs: PersistedThreadConfig[];
+  agentProfiles: AgentProfile[];
+  agentRuns: AgentRunSnapshot;
+  agentRuntime: AgentRuntimeSnapshot;
+  runtimeSessions: PersistedRuntimeSession[];
 }
 
 export interface LoadedRuntimeState {
   lifecycleStore: LifecycleStore;
   contextCheckpointStore: ContextCheckpointStore;
+  agentRunStore: AgentRunStore;
+  agentRuntimeStore: AgentRuntimeStore;
+  threadConfigs: PersistedThreadConfig[];
+  agentProfiles: AgentProfile[];
+  runtimeSessions: PersistedRuntimeSession[];
   restored: boolean;
   recoveredTurnIds: string[];
 }
@@ -55,6 +85,11 @@ export class JsonFileRuntimePersistence {
           lifecycleStore: new LifecycleStore(),
           contextCheckpointStore:
             new ContextCheckpointStore(),
+          agentRunStore: new AgentRunStore(),
+          agentRuntimeStore: new AgentRuntimeStore(),
+          threadConfigs: [],
+          agentProfiles: [],
+          runtimeSessions: [],
           restored: false,
           recoveredTurnIds: [],
         };
@@ -68,7 +103,7 @@ export class JsonFileRuntimePersistence {
 
       if (
         !isRecord(value) ||
-        value.version !== 1
+        (value.version !== 1 && value.version !== 2 && value.version !== 3)
       ) {
         throw new Error("Unsupported state version");
       }
@@ -80,6 +115,20 @@ export class JsonFileRuntimePersistence {
         ContextCheckpointStore.fromSnapshot(
           value.contextCheckpoints,
         );
+      const version2 = value.version === 2 || value.version === 3;
+      const agentRunStore = AgentRunStore.fromSnapshot(
+        version2 ? value.agentRuns as AgentRunSnapshot : undefined,
+      );
+      const agentRuntimeStore = AgentRuntimeStore.fromSnapshot(
+        value.version === 3 ? value.agentRuntime as AgentRuntimeSnapshot : undefined,
+      );
+      const threadConfigs = version2 && Array.isArray(value.threadConfigs)
+        ? value.threadConfigs as PersistedThreadConfig[] : [];
+      const agentProfiles = version2 && Array.isArray(value.agentProfiles)
+        ? value.agentProfiles as AgentProfile[] : [];
+      const runtimeSessions = version2 && Array.isArray(value.runtimeSessions)
+        ? value.runtimeSessions.filter(isPersistedRuntimeSession)
+        : [];
       const recoveredTurnIds =
         lifecycleStore
           .recoverInProgressTurns()
@@ -89,12 +138,22 @@ export class JsonFileRuntimePersistence {
         await this.save(
           lifecycleStore,
           contextCheckpointStore,
+          agentRunStore,
+          threadConfigs,
+          agentProfiles,
+          runtimeSessions,
+          agentRuntimeStore,
         );
       }
 
       return {
         lifecycleStore,
         contextCheckpointStore,
+        agentRunStore,
+        agentRuntimeStore,
+        threadConfigs,
+        agentProfiles,
+        runtimeSessions,
         restored: true,
         recoveredTurnIds,
       };
@@ -113,12 +172,22 @@ export class JsonFileRuntimePersistence {
   save(
     lifecycleStore: LifecycleStore,
     contextCheckpointStore: ContextCheckpointStore,
+    agentRunStore: AgentRunStore = new AgentRunStore(),
+    threadConfigs: PersistedThreadConfig[] = [],
+    agentProfiles: AgentProfile[] = [],
+    runtimeSessions: PersistedRuntimeSession[] = [],
+    agentRuntimeStore: AgentRuntimeStore = new AgentRuntimeStore(),
   ): Promise<void> {
     const snapshot: RuntimeStateSnapshot = {
-      version: 1,
+      version: 3,
       lifecycle: lifecycleStore.exportSnapshot(),
       contextCheckpoints:
         contextCheckpointStore.exportSnapshot(),
+      threadConfigs: structuredClone(threadConfigs),
+      agentProfiles: structuredClone(agentProfiles),
+      agentRuns: agentRunStore.exportSnapshot(),
+      agentRuntime: agentRuntimeStore.exportSnapshot(),
+      runtimeSessions: structuredClone(runtimeSessions),
     };
     const operation = this.saveQueue.then(() =>
       this.writeSnapshot(snapshot),
@@ -149,6 +218,11 @@ export class JsonFileRuntimePersistence {
     });
     await rename(temporaryPath, this.statePath);
   }
+}
+
+function isPersistedRuntimeSession(value: unknown): value is PersistedRuntimeSession {
+  return isRecord(value) && typeof value.threadId === "string" &&
+    typeof value.turnState === "string" && isRuntimeSession(value.session);
 }
 
 function hasErrorCode(

@@ -59,6 +59,11 @@ test("read_file 通过 Sandbox 读取文本", async (t) => {
 
 test("list_files 返回受数量限制的目录结果", async (t) => {
   const registry = await createRegistry(t);
+  const definition = registry.getDefinitions().find(
+    (candidate) => candidate.name === "list_files",
+  );
+
+  assert.deepEqual(definition?.parameters.required, ["path"]);
 
   const execution = await registry.execute(
     "list_files",

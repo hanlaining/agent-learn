@@ -12,6 +12,7 @@ import type {
 import type {
   LlmToolDefinition,
 } from "../llm/types.js";
+import { strictObjectSchema } from "../llm/tool-schema.js";
 import type {
   AgentTool,
 } from "./tool-registry.js";
@@ -28,18 +29,13 @@ export const financeMonthlySummaryTool: LlmToolDefinition = {
   description:
     "计算指定月份的已入账收入、支出、净现金流和分类支出。" +
     "涉及金额事实时必须调用此工具，不要自行计算或猜测。",
-  parameters: {
-    type: "object",
-    properties: {
-      period: {
-        type: "string",
-        description: "要分析的月份，格式为 YYYY-MM",
-        pattern: "^\\d{4}-(0[1-9]|1[0-2])$",
-      },
+  parameters: strictObjectSchema({
+    period: {
+      type: "string",
+      description: "要分析的月份，格式为 YYYY-MM",
+      pattern: "^\\d{4}-(0[1-9]|1[0-2])$",
     },
-    required: ["period"],
-    additionalProperties: false,
-  },
+  }),
 };
 
 /**

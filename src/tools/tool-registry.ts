@@ -1,6 +1,9 @@
 import type {
   LlmToolDefinition,
 } from "../llm/types.js";
+import type {
+  ToolRiskLevel,
+} from "../permissions/permission-gate.js";
 
 export interface AgentToolExecution {
   /** Runtime 保存的原始确定性结果。 */
@@ -11,10 +14,14 @@ export interface AgentToolExecution {
 
 export interface AgentToolExecutionContext {
   signal: AbortSignal;
+  turnId?: string;
 }
 
 export interface AgentTool {
   definition: LlmToolDefinition;
+  /** 默认需要审批；只读且已由 Runtime 预授权的内部 Tool 可以关闭。 */
+  requiresPermission?: boolean;
+  riskLevel?: ToolRiskLevel;
   describePermission?: (argumentsJson: string) => string;
   execute(
     argumentsJson: string,
@@ -50,10 +57,14 @@ export class ToolRegistry {
     this.tools.set(name, tool);
   }
 
-  getDefinitions(): LlmToolDefinition[] {
-    return [...this.tools.values()].map(
+  getDefinitions(allowedNames: readonly string[] = ["*"]): LlmToolDefinition[] {
+    return [...this.tools.values()].filter((tool) => isAllowed(tool.definition.name, allowedNames)).map(
       (tool) => tool.definition,
     );
+  }
+
+  isAllowed(name: string, allowedNames: readonly string[] = ["*"]): boolean {
+    return this.tools.has(name) && isAllowed(name, allowedNames);
   }
 
   getPermissionDescription(
@@ -77,21 +88,30 @@ export class ToolRegistry {
     return description;
   }
 
+  requiresPermission(name: string): boolean {
+    return this.requireTool(name).requiresPermission !== false;
+  }
+
+  getRiskLevel(name: string): ToolRiskLevel {
+    return this.requireTool(name).riskLevel ?? "sensitive";
+  }
+
   async execute(
     name: string,
     argumentsJson: string,
     signal = new AbortController().signal,
+    turnId?: string,
+    allowedNames: readonly string[] = ["*"],
   ): Promise<ToolRegistryExecution> {
-    const tool = this.tools.get(name);
-
-    if (tool === undefined) {
-      throw new Error(`Unknown tool: ${name}`);
+    if (!isAllowed(name, allowedNames)) {
+      throw new Error(`Tool is not allowed for this Agent: ${name}`);
     }
+    const tool = this.requireTool(name);
 
     signal.throwIfAborted();
     const execution = await tool.execute(
       argumentsJson,
-      { signal },
+      { signal, ...(turnId === undefined ? {} : { turnId }) },
     );
     signal.throwIfAborted();
     const output = JSON.stringify(execution.modelOutput);
@@ -107,4 +127,19 @@ export class ToolRegistry {
       output,
     };
   }
+
+  private requireTool(name: string): AgentTool {
+    const tool = this.tools.get(name);
+
+    if (tool === undefined) {
+      throw new Error(`Unknown tool: ${name}`);
+    }
+
+    return tool;
+  }
+}
+
+function isAllowed(name: string, allowedNames: readonly string[]): boolean {
+  return !allowedNames.includes(`!${name}`) &&
+    (allowedNames.includes("*") || allowedNames.includes(name));
 }

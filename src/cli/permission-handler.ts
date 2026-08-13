@@ -23,9 +23,10 @@ export function registerCliPermissionHandler(
       const request = parseToolPermissionPrompt(params);
       const action =
         request.description ?? `工具 ${request.toolName}`;
+      const risk = request.riskLevel ?? "sensitive";
       const answer = await question(
-        `\n[Permission] ${action} 请求执行，` +
-          "允许吗？[y/N] ",
+        `\n[Permission:${risk}] ${action} 请求执行，` +
+          "允许吗？[y/N/a=本会话允许] ",
       );
       const normalizedAnswer = answer.trim().toLowerCase();
 
@@ -33,7 +34,14 @@ export function registerCliPermissionHandler(
         normalizedAnswer === "y" ||
         normalizedAnswer === "yes"
       ) {
-        return { decision: "allow" };
+        return { decision: "allow", scope: "once" };
+      }
+
+      if (
+        normalizedAnswer === "a" ||
+        normalizedAnswer === "always"
+      ) {
+        return { decision: "allow", scope: "session" };
       }
 
       return {

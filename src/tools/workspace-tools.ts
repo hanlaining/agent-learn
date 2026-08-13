@@ -1,6 +1,7 @@
 import type {
   WorkspaceSandbox,
 } from "../sandbox/workspace-sandbox.js";
+import { strictObjectSchema } from "../llm/tool-schema.js";
 import type {
   AgentTool,
 } from "./tool-registry.js";
@@ -20,24 +21,34 @@ export function createWorkspaceTools(
         name: LIST_FILES_TOOL_NAME,
         description:
           "列出当前授权 Workspace 内指定目录的文件和子目录。",
-        parameters: {
-          type: "object",
-          properties: {
-            path: {
-              type: "string",
-              description:
-                "Workspace 内的相对目录；省略时使用根目录。",
-            },
+        parameters: strictObjectSchema({
+          path: {
+            type: "string",
+            description:
+              "Workspace 内的相对目录；根目录请传入 .。",
           },
-          additionalProperties: false,
-        },
+        }),
+      },
+      riskLevel: "read",
+      describePermission(argumentsJson) {
+        const input = parseArguments(
+          LIST_FILES_TOOL_NAME,
+          argumentsJson,
+        );
+        return `列出 Workspace 目录：${readRequiredPath(
+          LIST_FILES_TOOL_NAME,
+          input,
+        )}`;
       },
       async execute(argumentsJson) {
         const input = parseArguments(
           LIST_FILES_TOOL_NAME,
           argumentsJson,
         );
-        const path = readOptionalPath(input, ".");
+        const path = readRequiredPath(
+          LIST_FILES_TOOL_NAME,
+          input,
+        );
         const result = await sandbox.listFiles(path);
 
         return {
@@ -51,17 +62,23 @@ export function createWorkspaceTools(
         name: READ_FILE_TOOL_NAME,
         description:
           "读取当前授权 Workspace 内 UTF-8 文本文件。",
-        parameters: {
-          type: "object",
-          properties: {
-            path: {
-              type: "string",
-              description: "Workspace 内的相对文件路径。",
-            },
+        parameters: strictObjectSchema({
+          path: {
+            type: "string",
+            description: "Workspace 内的相对文件路径。",
           },
-          required: ["path"],
-          additionalProperties: false,
-        },
+        }),
+      },
+      riskLevel: "read",
+      describePermission(argumentsJson) {
+        const input = parseArguments(
+          READ_FILE_TOOL_NAME,
+          argumentsJson,
+        );
+        return `读取 Workspace 文件：${readRequiredPath(
+          READ_FILE_TOOL_NAME,
+          input,
+        )}`;
       },
       async execute(argumentsJson) {
         const input = parseArguments(
@@ -114,17 +131,6 @@ function parseArguments(
   }
 
   return value;
-}
-
-function readOptionalPath(
-  input: Record<string, unknown>,
-  fallback: string,
-): string {
-  if (input.path === undefined) {
-    return fallback;
-  }
-
-  return readPath("list_files", input.path);
 }
 
 function readRequiredPath(

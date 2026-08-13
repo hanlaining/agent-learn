@@ -8,9 +8,11 @@ import type { AddressInfo } from "node:net";
 import {
   mkdtemp,
   rm,
+  writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import test from "node:test";
 
 test("god-agent 可执行入口直接输出版本", async () => {
@@ -78,6 +80,122 @@ test("--debug 保留 Runtime 内部日志", async (t) => {
   assert.equal(result.exitCode, 0, result.stderr);
   assert.match(result.stdout, /Initialize result/);
   assert.match(result.stderr, /\[app-server\]/);
+});
+
+test("普通 CLI 按 Codex 顺序展示公开推理摘要", async (t) => {
+  const stateDirectory = await mkdtemp(
+    join(tmpdir(), "god-agent-cli-reasoning-"),
+  );
+  t.after(() => rm(stateDirectory, {
+    recursive: true,
+    force: true,
+  }));
+  let requestBody: Record<string, unknown> | undefined;
+  const server = createServer((request, response) => {
+    void readRequestBody(request).then((body) => {
+      requestBody = JSON.parse(body) as Record<string, unknown>;
+      response.writeHead(200, {
+        "content-type": "text/event-stream",
+      });
+      response.end([
+        'event: response.created\ndata: {"type":"response.created","response":{"id":"response-reasoning"}}',
+        'event: response.reasoning_summary_part.added\ndata: {"type":"response.reasoning_summary_part.added","summary_index":0}',
+        'event: response.reasoning_summary_text.delta\ndata: {"type":"response.reasoning_summary_text.delta","summary_index":0,"delta":"**检查当前请求**\\n\\n我会先确认输入，再给出简洁回答。"}',
+        'event: response.output_item.done\ndata: {"type":"response.output_item.done","item":{"type":"reasoning","summary":[{"type":"summary_text","text":"**检查当前请求**\\n\\n我会先确认输入，再给出简洁回答。"}]}}',
+        'event: response.output_item.added\ndata: {"type":"response.output_item.added","item":{"id":"ws-1","type":"web_search_call","status":"in_progress"}}',
+        'event: response.web_search_call.searching\ndata: {"type":"response.web_search_call.searching","item_id":"ws-1"}',
+        'event: response.output_item.done\ndata: {"type":"response.output_item.done","item":{"id":"ws-1","type":"web_search_call","status":"completed","action":{"type":"search","query":"OpenAI Responses API"}}}',
+        'event: response.output_text.delta\ndata: {"type":"response.output_text.delta","delta":"已完成分析。"}',
+        'event: response.output_text.annotation.added\ndata: {"type":"response.output_text.annotation.added","annotation":{"type":"url_citation","start_index":0,"end_index":6,"title":"OpenAI Developers","url":"https://developers.openai.com/"}}',
+        'event: response.output_text.annotation.added\ndata: {"type":"response.output_text.annotation.added","annotation":{"type":"url_citation","start_index":0,"end_index":6,"title":"重复引用","url":"https://developers.openai.com/"}}',
+        'event: response.output_item.done\ndata: {"type":"response.output_item.done","item":{"type":"message","content":[{"type":"output_text","text":"已完成分析。"}]}}',
+        'event: response.completed\ndata: {"type":"response.completed","response":{"id":"response-reasoning"}}',
+        "",
+      ].join("\n\n"));
+    });
+  });
+  const baseUrl = await listenOnRandomPort(server);
+  t.after(() => closeServer(server));
+  const cli = startCli({
+    ...createSmokeEnvironment(
+      join(stateDirectory, "state.json"),
+    ),
+    OPENAI_API_KEY: "test-only-key",
+    OPENAI_BASE_URL: baseUrl,
+  });
+
+  await waitForText(cli, "god-agent 已启动");
+  cli.child.stdin.write("分析当前请求\n");
+  // Citation 在 Assistant Delta 之后到达；等待 Sources 可避免退出与 Turn 完成竞态。
+  await waitForText(cli, "Sources:");
+  cli.child.stdin.end("/exit\n");
+  const exitCode = await cli.exit;
+  const output = cli.stdout();
+  const tools = requestBody?.tools as Array<{
+    name?: string;
+    parameters?: { required?: unknown };
+  }> | undefined;
+  const listFiles = tools?.find(
+    (tool) => tool.name === "list_files",
+  );
+  const webSearch = tools?.find(
+    (tool) => (tool as { type?: string }).type === "web_search",
+  ) as Record<string, unknown> | undefined;
+
+  assert.equal(exitCode, 0, cli.stderr());
+  assert.deepEqual(requestBody?.reasoning, {
+    effort: "high",
+    summary: "auto",
+  });
+  assert.equal(requestBody?.model, "gpt-5.6-sol");
+  assert.deepEqual(requestBody?.include, [
+    "reasoning.encrypted_content",
+  ]);
+  assert.equal(requestBody?.tool_choice, "auto");
+  assert.equal(requestBody?.parallel_tool_calls, true);
+  assert.equal(requestBody?.store, false);
+  assert.equal(requestBody?.service_tier, "fast");
+  assert.deepEqual(listFiles?.parameters?.required, ["path"]);
+  assert.deepEqual(webSearch, {
+    type: "web_search",
+    external_web_access: true,
+    search_context_size: "low",
+  });
+  assert.match(output, /Thinking…/);
+  assert.match(output, /Thinking: 检查当前请求/);
+  assert.match(
+    output,
+    /• 我会先确认输入，再给出简洁回答。/,
+  );
+  assert.match(output, /Search › 正在联网搜索…/);
+  assert.match(output, /Search ✓ OpenAI Responses API/);
+  assert.match(output, /Assistant › 已完成分析。/);
+  assert.match(output, /Sources:/);
+  assert.match(
+    output,
+    /• OpenAI Developers — https:\/\/developers\.openai\.com\//,
+  );
+  assert.equal(
+    output.match(/https:\/\/developers\.openai\.com\//g)?.length,
+    1,
+  );
+  assert.ok(
+    output.indexOf("Thinking: 检查当前请求") <
+      output.indexOf("• 我会先确认输入，再给出简洁回答。"),
+  );
+  assert.ok(
+    output.indexOf("• 我会先确认输入，再给出简洁回答。") <
+      output.indexOf("Search › 正在联网搜索…"),
+  );
+  assert.ok(
+    output.indexOf("Search ✓ OpenAI Responses API") <
+      output.indexOf("Assistant › 已完成分析。"),
+  );
+  assert.ok(
+    output.indexOf("Assistant › 已完成分析。") <
+      output.indexOf("Sources:"),
+  );
+  assert.doesNotMatch(output, /\[Model\]|\[Tool\]/);
 });
 
 test("运行中的第二条消息进入队列并携带上一轮 Context", async (t) => {
@@ -211,6 +329,130 @@ test("/cancel 端到端中断挂起模型请求", async (t) => {
   assert.equal(exitCode, 0, cli.stderr());
   assert.equal(requestClosed, true);
   assert.match(cli.stdout(), /已请求取消 Turn/);
+});
+
+test("CLI 完成 LLM 选择 MCP Tool、审批、调用和最终回答", async (t) => {
+  const stateDirectory = await mkdtemp(
+    join(tmpdir(), "god-agent-cli-mcp-"),
+  );
+  t.after(() => rm(stateDirectory, {
+    recursive: true,
+    force: true,
+  }));
+
+  const fixturePath = fileURLToPath(new URL(
+    "./fixtures/mcp-test-server.mjs",
+    import.meta.url,
+  ));
+  const mcpConfigPath = join(stateDirectory, "mcp.json");
+  await writeFile(
+    mcpConfigPath,
+    JSON.stringify({
+      mcpServers: {
+        demo: {
+          command: process.execPath,
+          args: [fixturePath, "happy"],
+          requestTimeoutMs: 2_000,
+        },
+      },
+    }),
+    "utf8",
+  );
+
+  const requestBodies: Array<Record<string, unknown>> = [];
+  const server = createServer((request, response) => {
+    void readRequestBody(request).then((body) => {
+      requestBodies.push(
+        JSON.parse(body) as Record<string, unknown>,
+      );
+      const firstRequest = requestBodies.length === 1;
+
+      response.writeHead(200, {
+        "content-type": "application/json",
+      });
+      response.end(JSON.stringify(
+        firstRequest
+          ? {
+              id: "response-mcp-call",
+              output: [
+                {
+                  type: "function_call",
+                  call_id: "call-mcp-cli-1",
+                  name: "mcp__demo__echo",
+                  arguments: '{"text":"CLI MCP 成功"}',
+                },
+              ],
+            }
+          : {
+              id: "response-mcp-final",
+              output: [
+                {
+                  type: "message",
+                  content: [
+                    {
+                      type: "output_text",
+                      text: "MCP 回显完成：CLI MCP 成功",
+                    },
+                  ],
+                },
+              ],
+            },
+      ));
+    });
+  });
+  const baseUrl = await listenOnRandomPort(server);
+  t.after(() => closeServer(server));
+
+  const cli = startCli({
+    ...createSmokeEnvironment(
+      join(stateDirectory, "state.json"),
+    ),
+    AGENT_MCP_CONFIG: mcpConfigPath,
+    OPENAI_API_KEY: "test-only-key",
+    OPENAI_BASE_URL: baseUrl,
+  });
+
+  await waitForText(cli, "god-agent 已启动");
+  cli.child.stdin.write("请让 MCP 回显\n");
+  await waitForText(cli, "允许吗？");
+  cli.child.stdin.write("y\n");
+  await waitForText(cli, "MCP 回显完成：CLI MCP 成功");
+  cli.child.stdin.end("/exit\n");
+  const exitCode = await cli.exit;
+
+  assert.equal(exitCode, 0, cli.stderr());
+  assert.match(cli.stdout(), /Permission:sensitive/);
+  assert.match(cli.stdout(), /MCP Server “demo”.*“echo”/);
+  assert.match(
+    cli.stdout(),
+    /Assistant › MCP 回显完成：CLI MCP 成功/,
+  );
+
+  const firstTools = requestBodies[0]?.tools as Array<{
+    name?: string;
+    parameters?: Record<string, unknown>;
+  }>;
+  const mcpTool = firstTools.find(
+    (tool) => tool.name === "mcp__demo__echo",
+  );
+  assert.deepEqual(mcpTool?.parameters, {
+    type: "object",
+    properties: { text: { type: "string" } },
+    required: ["text"],
+    additionalProperties: false,
+  });
+
+  const continuationInput = requestBodies[1]?.input as Array<
+    Record<string, unknown>
+  >;
+  assert.deepEqual(
+    continuationInput.map((item) => item.type),
+    ["function_call", "function_call_output"],
+  );
+  assert.match(
+    String(continuationInput[1]?.output),
+    /"echoed":"CLI MCP 成功"/,
+  );
 });
 
 function createSmokeEnvironment(

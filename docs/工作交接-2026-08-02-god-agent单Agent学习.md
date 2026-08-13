@@ -2,11 +2,11 @@
 
 > 交接日期：2026-08-02<br>
 > 项目目录：`D:\练手\agent-learn`<br>
-> 当前阶段：第一阶段单 Agent Runtime 与 `god-agent` CLI 产品化已经完成<br>
+> 当前阶段：单 Agent Runtime、CLI 产品化、Skill Loader 与 MCP stdio Tool 主链路已经完成<br>
 > 当前 CLI：默认产品模式；使用 `--debug` 可保留完整学习型内部日志<br>
-> 测试基线：TypeScript 检查通过，自动化测试 123/123
+> 测试基线：TypeScript 检查通过，自动化测试 165/165
 
-## 零、2026-08-02 续作完成快照
+## 零、2026-08-03 续作完成快照
 
 本节记录续作后的最新真实状态。后面的“一”到“十二”是开始续作时的历史交接记录，保留它们是为了复盘学习过程；其中“下一步 Context Builder”“45/45”“CLI 尚未产品化”等描述已经过期，不再代表当前源码。
 
@@ -24,11 +24,13 @@ App Server
   └─ Runtime JSON 原子持久化
               ↓
 Agent Loop
-  ├─ ContextBuilder → TokenBudget → ContextCompactor
+  ├─ ContextBuilder → o200k TokenBudget → ContextCompactor
   ├─ Model → ToolRegistry → PermissionGate → Tool
-  └─ Cancel / Timeout / Provider Retry / Event System
+  ├─ Cancel / Timeout / Provider Retry / Event System
+  └─ Skill Catalog → read_skill 渐进披露
               ↓
 边界能力
+  ├─ MCP stdio：新旧协议协商 → tools/list → Tool Adapter → tools/call
   ├─ WorkspaceSandbox：路径、符号链接、大小、二进制与数量限制
   ├─ WorkspaceCommandRunner：只运行预注册命令配方
   └─ 金融 Tool：使用整数“分”做确定性金额计算
@@ -44,13 +46,13 @@ App Server 的 `stdout` 仍只承载 JSONL 协议，诊断日志写入 `stderr`�
 | Message History | 从 Lifecycle Item 中按规则投影出的 `user` / `assistant` 消息序列 | 否，是派生视图 |
 | Context | 某一次模型请求真正收到的输入；可能来自 Message History，也可能经过 Token Budget、Compaction 和 Checkpoint 替换 | 否，是本次请求视图 |
 
-因此 Compaction 不删除原始 Lifecycle Items。它只创建新的语义 Checkpoint，让后续 Context 从“摘要 + 最近真实消息”继续构建。
+因此 Compaction 不删除原始 Lifecycle Items。它只创建新的语义 Checkpoint，让后续 Context 从“最近真实用户消息 + 最后一条 Codex 式摘要 user 消息”继续构建。
 
 ### 0.3 本轮已经完成
 
 1. 跨 Turn Context Builder：第二个 Turn 能读取同一 Thread 中已经完成的对话。
-2. Token Budget：确定性估算中英文输入，判断剩余预算和压缩阈值。
-3. Context Compaction：生成 Handoff Summary，保留最近消息并记录 Context Window Checkpoint。
+2. Token Budget：使用 o200k BPE 计算中英文正文，判断剩余预算和压缩阈值。
+3. Context Compaction：用全历史生成 Handoff Summary，从最新往前保留真实用户消息，并记录 Codex 式 Context Window Checkpoint。
 4. Tool Registry：Agent Loop 不再硬编码金融 Tool，并支持异步 Tool。
 5. Permission Runtime：Tool 执行前通过 App Server → CLI 反向 JSON-RPC 请求用户审批。
 6. Workspace Sandbox：阻止 `..` 越界、越界符号链接、超大文件和二进制文件，并限制目录结果数量。
@@ -60,6 +62,14 @@ App Server 的 `stdout` 仍只承载 JSONL 协议，诊断日志写入 `stderr`�
 10. Cancel / Timeout / Retry / Resume：取消信号贯穿 LLM 与 Tool；Provider 仅对临时错误做有限指数退避；重启后把遗留 `in_progress` Turn 归一化为 `interrupted`。
 11. CLI 产品化：默认显示 `You ›`、`Assistant ›` 和 `Thinking…`，支持 FIFO 输入队列、Thread 恢复以及 `/help`、`/status`、`/threads`、`/new`、`/cancel`、`/exit`。
 12. 可执行入口：支持 `god-agent --debug`、`--help`、`--version`，入口文件为 `bin/god-agent.js`。
+13. Reasoning Summary SSE：补齐 `reasoning.effort`，完整传递公开摘要分段、增量和完成边界。
+14. 托管联网搜索：Provider 执行 `web_search`，CLI 展示搜索生命周期、URL Citation 和去重 Sources。
+15. 真实 Tokenizer：使用 `o200k_base` BPE 计算正文 Token，并保留可注入 TokenCounter 边界。
+16. Compaction 加固：限制压缩输入与单条旧消息，Tool Output 只裁剪交给模型的副本，Lifecycle 保留原始结果。
+17. Permission / Process：支持一次或本会话审批，命令在独立进程组运行并在取消、超时或输出超限时终止进程树。
+18. Skill Loader：发现并校验 `SKILL.md`，只注入名称和描述，模型通过免重复审批的 `read_skill` 按需读取正文。
+19. MCP stdio Client：按官方 `2026-07-28` Schema 实现每请求元数据和 `server/discover`，并兼容 `2025-11-25 initialize / initialized`。
+20. MCP Tool 闭环：完成分页 `tools/list`、`tools/call`、单请求取消与超时、静态配置、Manager、Tool Adapter、Permission、Agent Loop 和 CLI 端到端。
 
 ### 0.4 关键文件及用途
 
@@ -67,7 +77,9 @@ App Server 的 `stdout` 仍只承载 JSONL 协议，诊断日志写入 `stderr`�
 |---|---|
 | `src/runtime/context-builder.ts` | 从 Lifecycle 与最新 Checkpoint 构建本次模型 Context |
 | `src/runtime/token-budget.ts` | 估算消息 Token 并决定是否触发压缩 |
-| `src/runtime/context-compactor.ts` | 把旧消息转换成语义 Handoff Summary，并保留最近真实消息 |
+| `src/runtime/token-counter.ts` | 使用 o200k BPE 计数并提供 Token 上限裁剪 |
+| `src/runtime/context-compactor.ts` | 用全历史生成 Handoff Summary，保留最近真实 user 消息，并把摘要作为替换历史最后一条 user 消息 |
+| `src/runtime/tool-output-limiter.ts` | 限制交给模型的 Tool Output 副本，不删除事实记录 |
 | `src/runtime/context-checkpoint-store.ts` | 记录每个 Thread 的窗口编号与替换历史 |
 | `src/tools/tool-registry.ts` | 注册、描述和统一执行 Tool |
 | `src/permissions/json-rpc-permission-gate.ts` | 把 Runtime 审批接口适配为 App Server → CLI 反向 RPC |
@@ -80,6 +92,13 @@ App Server 的 `stdout` 仍只承载 JSONL 协议，诊断日志写入 `stderr`�
 | `src/cli/interrupt-handler.ts` | 将 Ctrl+C 路由为“运行中取消、空闲退出” |
 | `src/cli/options.ts` | 解析 `--debug`、`--help` 和 `--version` |
 | `src/cli/main.ts` | 组装 CLI、App Server、Thread 恢复、命令循环和产品/调试渲染 |
+| `src/skills/skill-loader.ts` | 安全发现、校验并按需读取 SKILL.md |
+| `src/tools/read-skill-tool.ts` | 把 Skill 渐进披露接入 Agent Tool Calling |
+| `src/mcp/mcp-protocol.ts` | 校验新旧 MCP 握手、Tool Schema 与 Tool Result |
+| `src/mcp/stdio-mcp-client.ts` | 启动 stdio MCP Server，完成协议协商、分页、调用、取消、超时和关闭 |
+| `src/mcp/mcp-config.ts` | 严格读取用户静态 MCP 配置，不允许传入 env |
+| `src/mcp/mcp-tool-adapter.ts` | 把 MCP Tool 转换为默认需要审批的 AgentTool |
+| `src/mcp/mcp-manager.ts` | 管理多个 Server、聚合 Tool，并负责失败和退出清理 |
 | `bin/god-agent.js` | 真正的 `god-agent` Node.js 可执行入口 |
 
 核心 Runtime 与 CLI 代码保留中文注释，重点解释 Context 边界、Permission 竞态、Sandbox 限制、取消传播和产品/调试模式差异。
@@ -93,11 +112,11 @@ npm test
 node bin/god-agent.js --help
 ```
 
-2026-08-02 最终结果：
+2026-08-03 最终结果：
 
 ```text
 npm run check                 通过
-npm test                      123/123 通过
+npm test                      165/165 通过
 node bin/god-agent.js --help  通过
 ```
 
@@ -107,6 +126,7 @@ CLI Smoke Test 还验证了：
 - 使用同一状态文件再次启动时恢复最近 active Thread。
 - 第一轮模型仍在运行时，第二条输入进入 FIFO，并在下一轮携带上一轮 Context。
 - `/cancel` 可以端到端中断挂起的 HTTP 模型请求。
+- Fake LLM 选择 MCP Tool 后，CLI 完成审批、`tools/call`、结果回放和最终回答。
 - CLI 退出后安全关闭 App Server。
 
 测试使用本机临时 HTTP 假模型和明确的测试占位 Key，没有读取、输出或使用真实 Key。
@@ -116,15 +136,14 @@ CLI Smoke Test 还验证了：
 当前没有实现：
 
 ```text
-Skill Loader
-MCP Client
+MCP Streamable HTTP、Resources、Prompts、Sampling、Elicitation 与 OAuth
 Electron
 Multi-Agent
 生产级容器 / 虚拟机 Sandbox
 生产级金融执行
 ```
 
-当前 Workspace Sandbox 是教学级进程内边界，不能宣称等价于容器、虚拟机或操作系统级隔离。
+当前 Workspace Sandbox 是教学级路径边界，命令使用受控独立进程组；它仍不能宣称等价于容器、虚拟机或完整操作系统级隔离。
 
 ### 0.7 当前阶段结论
 
@@ -140,9 +159,14 @@ Multi-Agent
 → Persistence
 → Cancel / Timeout / Retry / Resume
 → CLI 产品化
+→ Reasoning Summary / Web Search
+→ 真实 Tokenizer / Compaction 加固
+→ Permission Session / Process Tree
+→ Skill Loader
+→ MCP stdio 新旧协议 / tools/list / tools/call / Agent / CLI 闭环
 ```
 
-本阶段不再新增 Runtime 功能。下一步是否进入 Electron 或开启新的单 Agent 增强阶段，应由新的学习目标单独决定。
+当前按本轮目标完成了 MCP stdio Tool 主链路。下一阶段可在 Electron 与其他单 Agent 扩展中择一推进；仍不同时进入 Multi-Agent。
 
 ## 历史记录：一、续作前学习目标
 

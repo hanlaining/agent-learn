@@ -8,6 +8,8 @@ import {
 
 export interface TurnRunParams {
   turnId: TurnId;
+  model?: string;
+  reasoningEffort?: "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra";
 }
 
 export interface TurnRunResult {
@@ -28,8 +30,17 @@ export function parseTurnRunParams(
     );
   }
 
+  const reasoningEffort = [
+    "minimal", "low", "medium", "high", "xhigh", "max", "ultra",
+  ].find((candidate) => candidate === value.reasoningEffort) as
+    TurnRunParams["reasoningEffort"];
+
   return {
     turnId: value.turnId,
+    ...(typeof value.model === "string" && value.model.trim().length > 0
+      ? { model: value.model }
+      : {}),
+    ...(reasoningEffort === undefined ? {} : { reasoningEffort }),
   };
 }
 

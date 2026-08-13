@@ -8,6 +8,7 @@ import {
   type AgentEvent,
 } from "../agent/events.js";
 import { JsonRpcConnection } from "../protocol/connection.js";
+import { JsonRpcRemoteError } from "../protocol/request-map.js";
 import {
   isThread,
   type Thread,
@@ -488,6 +489,17 @@ async function requestTurnCancel(
 
     console.log(`\n已请求取消 Turn：${result.turnId}`);
   } catch (error) {
+    if (
+      error instanceof JsonRpcRemoteError &&
+      error.code === -32603 &&
+      error.message ===
+        `Turn is not running: ${activeTurn.turnId}`
+    ) {
+      // Assistant 已输出但 completion.finally 尚未清空 activeTurn 时，
+      // Runtime 可能已经完成该 Turn；此时取消天然已经达到目标。
+      return;
+    }
+
     activeTurn.cancelRequested = false;
     throw error;
   }
@@ -580,6 +592,13 @@ function readItemText(content: unknown): string {
 class CliAgentEventRenderer {
   receivedAssistantDelta = false;
 
+  private reasoningBuffer = "";
+  private reasoningHeader: string | undefined;
+  private readonly citations = new Map<
+    string,
+    { title: string; url: string }
+  >();
+
   private openStream:
     | "reasoning"
     | "assistant"
@@ -589,6 +608,8 @@ class CliAgentEventRenderer {
 
   beginTurn(): void {
     this.endOpenStream();
+    this.resetReasoningSummary();
+    this.citations.clear();
     this.receivedAssistantDelta = false;
   }
 
@@ -601,6 +622,7 @@ class CliAgentEventRenderer {
 
       case "model/started":
         this.endOpenStream();
+        this.resetReasoningSummary();
         if (this.debug) {
           console.log(`[Model] round ${event.round + 1} started`);
         } else {
@@ -616,6 +638,14 @@ class CliAgentEventRenderer {
         );
         return;
 
+      case "reasoning/summary_part_added":
+        // 行式 CLI 暂不改变布局，但保留分段事件，后续全屏 TUI 可直接据此折叠展示。
+        this.endOpenStream();
+        this.debugLog(
+          `[Reasoning summary] part ${event.summaryIndex + 1}`,
+        );
+        return;
+
       case "reasoning/summary_delta":
         if (this.debug) {
           this.writeDelta(
@@ -623,11 +653,68 @@ class CliAgentEventRenderer {
             "[Reasoning summary]\n",
             event.delta,
           );
+        } else {
+          this.reasoningBuffer += event.delta;
+          const header = extractReasoningHeader(
+            this.reasoningBuffer,
+          );
+
+          if (
+            header !== undefined &&
+            header !== this.reasoningHeader
+          ) {
+            this.reasoningHeader = header;
+            console.log(`Thinking: ${header}`);
+          }
         }
         return;
 
-      case "assistant/delta":
-        this.receivedAssistantDelta = true;
+      case "reasoning/summary_completed":
+        this.completeReasoningSummary();
+        return;
+
+      case "web_search/started":
+        this.completeReasoningSummary();
+        this.endOpenStream();
+        if (this.debug) {
+          console.log(`[Web Search] started ${event.callId}`);
+        } else {
+          console.log("\nSearch › 正在联网搜索…");
+        }
+        return;
+
+      case "web_search/searching":
+        this.endOpenStream();
+        this.debugLog(`[Web Search] searching ${event.callId}`);
+        return;
+
+      case "web_search/completed":
+        this.endOpenStream();
+        if (this.debug) {
+          console.log(`[Web Search] completed ${event.callId}`);
+        } else {
+          console.log(
+            event.query === undefined
+              ? "Search ✓ 已完成"
+              : `Search ✓ ${event.query}`,
+          );
+        }
+        return;
+
+      case "citation/url_added":
+        // SSE 可能重复发送同一 annotation；按 URL 去重，最后统一显示。
+        if (!this.citations.has(event.url)) {
+          this.citations.set(event.url, {
+            title: event.title,
+            url: event.url,
+          });
+        }
+        this.debugLog(`[Citation] ${event.title} ${event.url}`);
+        return;
+
+      case "model/output_text_delta":
+        // Provider 正常会先发 completed；这里是兼容不完整中转事件的兜底。
+        this.completeReasoningSummary();
         this.writeDelta(
           "assistant",
           this.debug ? "[Assistant]\n" : "\nAssistant › ",
@@ -635,8 +722,22 @@ class CliAgentEventRenderer {
         );
         return;
 
-      case "model/completed":
+      case "model/output_text_completed":
         this.endOpenStream();
+        if (event.classification === "assistant") {
+          this.receivedAssistantDelta = true;
+        }
+        this.debugLog(
+          `[Model output] ${event.classification} round ${event.round + 1}`,
+        );
+        return;
+
+      case "model/completed":
+        this.completeReasoningSummary();
+        this.endOpenStream();
+        if (event.functionCallCount === 0) {
+          this.renderCitations();
+        }
         this.debugLog(
           event.functionCallCount > 0
             ? `[Model] selected ${event.functionCallCount} tool(s)`
@@ -673,6 +774,8 @@ class CliAgentEventRenderer {
 
       case "turn/interrupted":
         this.endOpenStream();
+        this.resetReasoningSummary();
+        this.citations.clear();
         console.log(
           this.debug
             ? `[Turn] interrupted ${event.turnId}`
@@ -682,6 +785,8 @@ class CliAgentEventRenderer {
 
       case "turn/timed_out":
         this.endOpenStream();
+        this.resetReasoningSummary();
+        this.citations.clear();
         console.log(
           this.debug
             ? `[Turn] timed out ${event.turnId}`
@@ -691,6 +796,8 @@ class CliAgentEventRenderer {
 
       case "turn/failed":
         this.endOpenStream();
+        this.resetReasoningSummary();
+        this.citations.clear();
         if (this.debug) {
           console.log(
             `[Turn] failed ${event.turnId}: ${event.message}`,
@@ -720,11 +827,92 @@ class CliAgentEventRenderer {
     }
   }
 
+  private completeReasoningSummary(): void {
+    if (this.debug) {
+      this.endOpenStream();
+      this.resetReasoningSummary();
+      return;
+    }
+
+    const summary = formatReasoningSummary(
+      this.reasoningBuffer,
+    );
+    this.resetReasoningSummary();
+
+    if (summary !== undefined) {
+      console.log(summary);
+    }
+  }
+
+  private resetReasoningSummary(): void {
+    this.reasoningBuffer = "";
+    this.reasoningHeader = undefined;
+  }
+
+  private renderCitations(): void {
+    if (this.debug || this.citations.size === 0) {
+      this.citations.clear();
+      return;
+    }
+
+    console.log("Sources:");
+    for (const citation of this.citations.values()) {
+      const title = citation.title.trim();
+      console.log(
+        title.length === 0
+          ? `• ${citation.url}`
+          : `• ${title} — ${citation.url}`,
+      );
+    }
+    this.citations.clear();
+  }
+
   private debugLog(message: string): void {
     if (this.debug) {
       console.log(message);
     }
   }
+}
+
+function extractReasoningHeader(
+  value: string,
+): string | undefined {
+  const match = /\*\*([^*\n]+)\*\*/.exec(value);
+  const header = match?.[1]?.trim();
+
+  return header === undefined || header.length === 0
+    ? undefined
+    : header;
+}
+
+function formatReasoningSummary(
+  value: string,
+): string | undefined {
+  const trimmed = value.trim();
+
+  if (trimmed.length === 0) {
+    return undefined;
+  }
+
+  const headerMatch = /\*\*([^*\n]+)\*\*/.exec(trimmed);
+  const header = headerMatch?.[1]?.trim();
+  const body = headerMatch === null
+    ? trimmed
+    : trimmed
+        .slice(headerMatch.index + headerMatch[0].length)
+        .trim() || header;
+
+  if (body === undefined || body.length === 0) {
+    return undefined;
+  }
+
+  // 与 Codex 的 ReasoningSummaryCell 一样，正文首行使用圆点，续行缩进。
+  return body
+    .split("\n")
+    .map((line, index) =>
+      index === 0 ? `• ${line}` : `  ${line}`,
+    )
+    .join("\n");
 }
 
 async function runCliEntry(): Promise<void> {

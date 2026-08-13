@@ -61,6 +61,7 @@ test("CLI 输入 y 或 yes 时允许 Tool", async () => {
 
     assert.deepEqual(await resultPromise, {
       decision: "allow",
+      scope: "once",
     });
     assert.match(
       prompts[0]!,
@@ -68,6 +69,29 @@ test("CLI 输入 y 或 yes 时允许 Tool", async () => {
     );
     assert.doesNotMatch(prompts[0]!, /period/);
   }
+});
+
+test("CLI 输入 a 时允许本会话复用审批", async () => {
+  const pair = createConnectionPair();
+
+  registerCliPermissionHandler(
+    pair.client,
+    async () => "a",
+  );
+
+  const resultPromise = pair.server.sendRequest(
+    "tool/request-permission",
+    {
+      ...rpcParams,
+      riskLevel: "read",
+    },
+  );
+  await pair.flushServerRequest();
+
+  assert.deepEqual(await resultPromise, {
+    decision: "allow",
+    scope: "session",
+  });
 });
 
 test("CLI 非确认输入默认拒绝 Tool", async () => {

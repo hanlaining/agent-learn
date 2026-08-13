@@ -1,6 +1,7 @@
 import type {
   WorkspaceCommandRunner,
 } from "../sandbox/workspace-command-runner.js";
+import { strictObjectSchema } from "../llm/tool-schema.js";
 import type {
   AgentTool,
 } from "./tool-registry.js";
@@ -16,23 +17,19 @@ export function createRunCommandTool(
   const commands = runner.listCommands();
 
   return {
+    riskLevel: "execute",
     definition: {
       name: RUN_COMMAND_TOOL_NAME,
       description:
         "在授权 Workspace 中运行预注册的检查或测试命令。" +
-        "每次执行都需要用户审批。",
-      parameters: {
-        type: "object",
-        properties: {
-          command: {
-            type: "string",
-            enum: commands,
-            description: "要运行的安全命令配方名。",
-          },
+        "是否需要用户审批由当前 Chat 的权限模式决定。",
+      parameters: strictObjectSchema({
+        command: {
+          type: "string",
+          enum: commands,
+          description: "要运行的安全命令配方名。",
         },
-        required: ["command"],
-        additionalProperties: false,
-      },
+      }),
     },
     describePermission(argumentsJson) {
       const input = parseRunCommandArguments(argumentsJson);

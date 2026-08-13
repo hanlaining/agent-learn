@@ -4,15 +4,26 @@ import type {
 
 export interface ToolPermissionRequest {
   turnId: TurnId;
+  threadId?: string;
+  jobId?: string;
+  agentId?: string;
+  agentName?: string;
+  taskId?: string;
+  taskTitle?: string;
   callId: string;
   toolName: string;
   arguments: string;
   description?: string;
+  riskLevel?: ToolRiskLevel;
 }
+
+export type ToolRiskLevel = "read" | "execute" | "sensitive";
+export type ToolPermissionScope = "once" | "session";
 
 export type ToolPermissionDecision =
   | {
       decision: "allow";
+      scope?: ToolPermissionScope;
     }
   | {
       decision: "deny";

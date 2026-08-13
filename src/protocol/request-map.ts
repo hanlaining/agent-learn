@@ -78,6 +78,22 @@ export class RequestMap {
     this.pendingRequests.clear();
   }
 
+  /**
+   * 只拒绝一个仍在等待的请求。
+   * MCP 的单次 Tool 调用可能被取消或超时，不能因此关闭整条 stdio 连接。
+   */
+  reject(id: JsonRpcId, error: Error): boolean {
+    const pending = this.pendingRequests.get(id);
+
+    if (pending === undefined) {
+      return false;
+    }
+
+    this.pendingRequests.delete(id);
+    pending.reject(error);
+    return true;
+  }
+
   private createRemoteError(
     error: JsonRpcErrorObject,
   ): JsonRpcRemoteError {

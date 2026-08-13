@@ -6,6 +6,7 @@ import {
   type ItemId,
   type ItemType,
   type Thread,
+  type ThreadDeleteBatch,
   type ThreadId,
   type Turn,
   type TurnId,
@@ -27,6 +28,7 @@ export interface LifecycleSnapshot {
   threads: Thread[];
   turns: Turn[];
   items: Item[];
+  deleteBatches?: ThreadDeleteBatch[];
 }
 
 export class LifecycleError extends Error {
@@ -40,6 +42,7 @@ export class LifecycleStore {
   private readonly threads = new Map<ThreadId, Thread>();
   private readonly turns = new Map<TurnId, Turn>();
   private readonly items = new Map<ItemId, Item>();
+  private readonly deleteBatches = new Map<string, ThreadDeleteBatch>();
 
   private readonly now: () => string;
   private readonly createId: (prefix: IdPrefix) => string;
@@ -79,6 +82,7 @@ export class LifecycleStore {
     for (const item of snapshot.items) {
       store.items.set(item.id, cloneItem(item));
     }
+    for (const batch of snapshot.deleteBatches ?? []) store.deleteBatches.set(batch.id, structuredClone(batch));
 
     return store;
   }
@@ -90,6 +94,7 @@ export class LifecycleStore {
       threads: [...this.threads.values()].map(cloneThread),
       turns: [...this.turns.values()].map(cloneTurn),
       items: [...this.items.values()].map(cloneItem),
+      deleteBatches: this.listDeleteBatches(),
     };
   }
 
@@ -98,6 +103,7 @@ export class LifecycleStore {
       id: this.createId("thread"),
       status: "active",
       createdAt: this.now(),
+      lastActivityAt: this.now(),
       turnIds: [],
     };
 
@@ -125,6 +131,7 @@ export class LifecycleStore {
 
     this.turns.set(turn.id, turn);
     thread.turnIds.push(turn.id);
+    thread.lastActivityAt = turn.createdAt;
 
     return turn;
   }
@@ -153,6 +160,7 @@ export class LifecycleStore {
 
     this.items.set(item.id, item);
     turn.itemIds.push(item.id);
+    this.requireThread(turn.threadId).lastActivityAt = item.createdAt;
 
     return item;
   }
@@ -224,6 +232,40 @@ export class LifecycleStore {
 
   listThreads(): Thread[] {
     return [...this.threads.values()];
+  }
+
+  listTrash(): Thread[] { return this.listThreads().filter((thread) => thread.deletedAt !== undefined).map(cloneThread); }
+  listDeleteBatches(): ThreadDeleteBatch[] { return [...this.deleteBatches.values()].map((item) => structuredClone(item)); }
+
+  renameThread(threadId: ThreadId, title: string): Thread {
+    const normalized = title.replace(/\s+/g, " ").trim();
+    if (normalized.length === 0 || [...normalized].length > 160) throw new LifecycleError("Invalid thread title");
+    const thread = this.requireThread(threadId); thread.title = normalized; thread.lastActivityAt = this.now(); return cloneThread(thread);
+  }
+
+  softDeleteThreads(threadIds: readonly ThreadId[], batchDeleteId: string): Thread[] {
+    if (batchDeleteId.trim().length === 0) throw new LifecycleError("Invalid batch delete id");
+    const now = this.now(); const expires = new Date(Date.parse(now) + 7 * 86_400_000).toISOString();
+    const frozenIds = [...new Set(threadIds)];
+    const existing = this.deleteBatches.get(batchDeleteId);
+    if (existing !== undefined && JSON.stringify(existing.threadIds) !== JSON.stringify(frozenIds)) throw new LifecycleError("Batch delete id belongs to another frozen Thread set");
+    const result = frozenIds.map((id) => {
+      const thread = this.requireThread(id);
+      if (thread.deletedAt === undefined) { thread.deletedAt = now; thread.trashExpiresAt = expires; thread.deleteBatchId = batchDeleteId; }
+      return cloneThread(thread);
+    });
+    if (existing === undefined) this.deleteBatches.set(batchDeleteId, { id: batchDeleteId, threadIds: frozenIds, createdAt: now, status: "completed" });
+    return result;
+  }
+
+  restoreThread(threadId: ThreadId): Thread {
+    const thread = this.requireThread(threadId); delete thread.deletedAt; delete thread.trashExpiresAt; delete thread.deleteBatchId; return cloneThread(thread);
+  }
+
+  restoreDeleteBatch(batchDeleteId: string): Thread[] {
+    const batch = this.deleteBatches.get(batchDeleteId); if (batch === undefined) throw new LifecycleError("Delete batch not found");
+    const restored = batch.threadIds.map((threadId) => this.restoreThread(threadId));
+    batch.status = "restored"; batch.restoredAt = this.now(); return restored;
   }
 
   getTurn(turnId: TurnId): Turn | undefined {
@@ -377,7 +419,13 @@ function parseLifecycleSnapshot(
     threads,
     turns,
     items,
+    deleteBatches: Array.isArray(value.deleteBatches) ? value.deleteBatches.filter(isDeleteBatch).map((item) => structuredClone(item)) : [],
   };
+}
+
+function isDeleteBatch(value: unknown): value is ThreadDeleteBatch {
+  return isRecord(value) && typeof value.id === "string" && Array.isArray(value.threadIds) && value.threadIds.every((id) => typeof id === "string") &&
+    typeof value.createdAt === "string" && (value.status === "completed" || value.status === "restored") && (value.restoredAt === undefined || typeof value.restoredAt === "string");
 }
 
 function createUniqueMap<T extends { id: string }>(
