@@ -183,7 +183,7 @@ export class ContextBuilder {
   private readCurrentUserMessage(turn: Turn): LlmMessage {
     const userMessage = this.lifecycleStore
       .getItemsForTurn(turn.id)
-      .find((item) => item.type === "user_message");
+      .find((item) => item.type === "user_message" || item.type === "runtime_message");
 
     const text = readTextContent(userMessage);
 
@@ -206,7 +206,8 @@ function readHistoricalMessage(
 ): LlmMessage | undefined {
   if (
     item.type !== "user_message" &&
-    item.type !== "assistant_message"
+    item.type !== "assistant_message" &&
+    item.type !== "runtime_message"
   ) {
     // 第一版跨 Turn Context 不回放 Tool 执行轨迹。
     return undefined;
@@ -222,7 +223,7 @@ function readHistoricalMessage(
 
   return {
     role:
-      item.type === "user_message"
+      item.type === "user_message" || item.type === "runtime_message"
         ? "user"
         : "assistant",
     text,

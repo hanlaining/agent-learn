@@ -157,6 +157,16 @@ export class AppServerClient {
     if (!Array.isArray(value) || !value.every(isThread)) throw new Error("Invalid thread/trash/list response"); return value;
   }
   async getAgentRuntime(threadId: string): Promise<unknown> { return this.sendRequest("agent/runtime", { threadId }); }
+  async advanceFixedProduct(threadId: string, expectedStage: import("../agents/fixed-software-team-coordinator.js").FixedProductStage): Promise<unknown> {
+    return this.sendRequest("agent/fixed-product/advance", { threadId, expectedStage });
+  }
+  async getRequirement(threadId: string): Promise<import("../requirements/requirement.js").Requirement | undefined> {
+    const value = await this.sendRequest("requirement/get", { threadId });
+    return value === null ? undefined : value as import("../requirements/requirement.js").Requirement;
+  }
+  async confirmRequirement(requirementId: string, revision: number, contentHash: string): Promise<import("../requirements/requirement.js").Requirement> {
+    return await this.sendRequest("requirement/confirm", { requirementId, revision, contentHash }) as import("../requirements/requirement.js").Requirement;
+  }
 
   async readThreadHistory(
     threadId: string,

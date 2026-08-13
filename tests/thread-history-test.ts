@@ -28,6 +28,9 @@ test("Thread 历史只公开 User 和 Assistant 消息", () => {
   store.appendItem(turn.id, "tool_result", {
     secret: "must-not-cross-history-boundary",
   });
+  store.appendItem(turn.id, "runtime_message", {
+    text: "Runtime recovery detail must stay internal",
+  });
   store.appendItem(turn.id, "assistant_message", {
     text: "项目读取完成。",
   });
@@ -43,5 +46,17 @@ test("Thread 历史只公开 User 和 Assistant 消息", () => {
       { role: "assistant", text: "项目读取完成。" },
     ],
   );
-  assert.doesNotMatch(JSON.stringify(result), /private-path|secret/);
+  assert.doesNotMatch(JSON.stringify(result), /private-path|secret|Runtime recovery detail/);
+});
+
+test("旧版 Runtime 恢复伪用户消息加载后迁移为内部消息", () => {
+  const source = new LifecycleStore();
+  const thread = source.createThread();
+  const turn = source.createTurn(thread.id);
+  source.appendItem(turn.id, "user_message", { text: "Runtime 重启恢复：以下子 Agent 结果已经持久化并等待自动继续" });
+  source.appendItem(turn.id, "assistant_message", { text: "恢复完成" });
+  source.completeTurn(turn.id);
+  const restored = LifecycleStore.fromSnapshot(source.exportSnapshot());
+  assert.deepEqual(readThreadHistory(restored, thread.id).messages.map((item) => item.text), ["恢复完成"]);
+  assert.equal(restored.getItemsForTurn(turn.id)[0]?.type, "runtime_message");
 });

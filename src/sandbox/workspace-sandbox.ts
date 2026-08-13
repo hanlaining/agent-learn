@@ -3,6 +3,7 @@ import {
   readdir,
   realpath,
   stat,
+  writeFile,
 } from "node:fs/promises";
 import {
   isAbsolute,
@@ -35,6 +36,7 @@ export interface SandboxReadResult {
   text: string;
   sizeBytes: number;
 }
+export interface SandboxWriteResult { path: string; sizeBytes: number; }
 
 /**
  * 教学级 Workspace Sandbox：所有文件能力都先经过这一层路径与容量检查。
@@ -173,6 +175,15 @@ export class WorkspaceSandbox {
     };
   }
 
+  async writeTextFile(requestedPath: string, text: string): Promise<SandboxWriteResult> {
+    if (text.includes("\0")) throw new Error("Binary content is not allowed");
+    const bytes = Buffer.byteLength(text, "utf8");
+    if (bytes > this.maxFileBytes) throw new Error(`File exceeds ${this.maxFileBytes} byte limit`);
+    const resolved = await this.resolveWritePath(requestedPath);
+    await writeFile(resolved.absolutePath, text, { encoding: "utf8", flag: "w" });
+    return { path: resolved.relativePath, sizeBytes: bytes };
+  }
+
   private async resolveExistingPath(
     requestedPath: string,
   ): Promise<{
@@ -215,6 +226,16 @@ export class WorkspaceSandbox {
           ? "."
           : normalizeRelativePath(pathFromRoot),
     };
+  }
+
+  private async resolveWritePath(requestedPath: string): Promise<{ absolutePath: string; relativePath: string }> {
+    if (requestedPath.length === 0 || isAbsolute(requestedPath)) throw new Error("Path escapes workspace");
+    const candidatePath = resolve(this.rootPath, requestedPath);
+    if (!isWithin(this.rootPath, candidatePath)) throw new Error("Path escapes workspace");
+    const parent = await realpath(resolve(candidatePath, ".."));
+    if (!isWithin(this.rootPath, parent)) throw new Error("Path escapes workspace through symbolic link");
+    const pathFromRoot = relative(this.rootPath, candidatePath);
+    return { absolutePath: candidatePath, relativePath: normalizeRelativePath(pathFromRoot) };
   }
 }
 

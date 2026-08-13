@@ -48,6 +48,8 @@ export interface OpenAiResponsesOptions {
   ) => Promise<void>;
 }
 
+export const DEFAULT_OPENAI_RESPONSES_TIMEOUT_MS = 120_000;
+
 /**
  * 使用原生 fetch 调用 OpenAI Responses API。
  * 这里负责供应商协议适配，上层 Agent Loop 只依赖 LlmProvider。
@@ -82,7 +84,8 @@ export class OpenAiResponsesProvider implements LlmProvider {
     this.baseUrl = (
       options.baseUrl ?? "https://api.openai.com/v1"
     ).replace(/\/$/, "");
-    this.timeoutMs = options.timeoutMs ?? 45_000;
+    this.timeoutMs =
+      options.timeoutMs ?? DEFAULT_OPENAI_RESPONSES_TIMEOUT_MS;
     this.maxRetries = options.maxRetries ?? 2;
     this.retryBaseDelayMs =
       options.retryBaseDelayMs ?? 250;
@@ -97,6 +100,13 @@ export class OpenAiResponsesProvider implements LlmProvider {
     this.webSearch = options.webSearch;
     this.fetchImpl = options.fetch ?? globalThis.fetch;
     this.sleep = options.sleep ?? wait;
+
+    if (
+      !Number.isInteger(this.timeoutMs) ||
+      this.timeoutMs <= 0
+    ) {
+      throw new Error("timeoutMs must be a positive integer");
+    }
 
     if (
       !Number.isInteger(this.maxRetries) ||

@@ -47,6 +47,10 @@ import type {
   PersistedRuntimeSession,
   PersistedThreadConfig,
 } from "../runtime/json-file-runtime-persistence.js";
+import type { RequirementStore } from "../requirements/requirement-store.js";
+import { ensureFixedSoftwareTeam } from "../agents/fixed-software-team.js";
+import { isRequirementConfirmed } from "../requirements/requirement.js";
+import type { FixedProductStage, FixedSoftwareTeamCoordinator } from "../agents/fixed-software-team-coordinator.js";
 
 export interface AppServerDependencies {
   lifecycleStore: LifecycleStore;
@@ -60,13 +64,10 @@ export interface AppServerDependencies {
   agentRuntimeStore?: AgentRuntimeStore;
   agentRegistry?: AgentRegistry;
   cancelChildAgentRuns?: (parentTurnId: string) => number;
-  runInitialChildAgent?: (request: {
-    parentTurnId: string;
-    profileId: string;
-    task: string;
-  }) => Promise<AgentRunResult>;
   threadConfigs?: Map<string, PersistedThreadConfig>;
   runtimeSessions?: Map<string, PersistedRuntimeSession>;
+  requirementStore?: RequirementStore;
+  fixedSoftwareTeamCoordinator?: FixedSoftwareTeamCoordinator;
 }
 
 /**
@@ -91,9 +92,10 @@ export function registerAppServerHandlers(
     agentRuntimeStore,
     agentRegistry,
     cancelChildAgentRuns = () => 0,
-    runInitialChildAgent,
     threadConfigs = new Map(),
     runtimeSessions = new Map(),
+    requirementStore,
+    fixedSoftwareTeamCoordinator,
   } = dependencies;
 
   let clientInitialized = false;
@@ -147,13 +149,13 @@ export function registerAppServerHandlers(
 
     // Map 不跨协议暴露；按创建顺序返回可恢复的 Thread 数组。
     return lifecycleStore.listThreads().filter(
-      (thread) => thread.deletedAt === undefined && agentRunStore?.isChildThread(thread.id) !== true,
+      (thread) => thread.deletedAt === undefined && thread.kind !== "agent_internal" && agentRunStore?.isChildThread(thread.id) !== true,
     );
   });
 
   connection.onRequest("thread/trash/list", () => {
     requireInitialized();
-    return lifecycleStore.listThreads().filter((thread) => thread.deletedAt !== undefined && agentRunStore?.isChildThread(thread.id) !== true);
+    return lifecycleStore.listThreads().filter((thread) => thread.deletedAt !== undefined && thread.kind !== "agent_internal" && agentRunStore?.isChildThread(thread.id) !== true);
   });
   connection.onRequest("thread/delete-batch/list", () => lifecycleStore.listDeleteBatches());
   connection.onRequest("thread/delete-batch/restore", async (params) => {
@@ -197,7 +199,36 @@ export function registerAppServerHandlers(
     const job = agentRuntimeStore?.listJobs(params.threadId).sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
     if (job === undefined) return { tasks: [], edges: [], evidence: [], board: [], returns: [] };
     const tasks = agentRuntimeStore!.listTasks(job.id);
-    return { job, tasks, edges: agentRuntimeStore!.listEdges(job.id), evidence: tasks.flatMap((task) => agentRuntimeStore!.listEvidence(task.id)), board: agentRuntimeStore!.listBoard(job.id), returns: agentRuntimeStore!.listReturns(job.id) };
+    return { job, tasks, edges: agentRuntimeStore!.listEdges(job.id), evidence: tasks.flatMap((task) => agentRuntimeStore!.listEvidence(task.id)), board: agentRuntimeStore!.listBoard(job.id), returns: agentRuntimeStore!.listReturns(job.id), fixedProductStage: fixedSoftwareTeamCoordinator?.getStage(job.id) };
+  });
+
+  connection.onRequest("agent/fixed-product/advance", async (params) => {
+    requireInitialized();
+    if (fixedSoftwareTeamCoordinator === undefined || agentRuntimeStore === undefined ||
+      !isRecord(params) || typeof params.threadId !== "string" || typeof params.expectedStage !== "string" ||
+      !["ready_first_return", "first_return_ready", "rework", "second_return_ready", "lead_return_ready", "completed"].includes(params.expectedStage)) {
+      throw new Error("Invalid fixed product advance request");
+    }
+    const job = agentRuntimeStore.listJobs(params.threadId).sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
+    if (job === undefined || job.threadId !== params.threadId) throw new Error("Fixed product Job is unavailable");
+    return fixedSoftwareTeamCoordinator.advance(job.id, params.expectedStage as FixedProductStage);
+  });
+
+  connection.onRequest("requirement/get", (params) => {
+    requireInitialized();
+    if (!isRecord(params) || typeof params.threadId !== "string") throw new Error("Invalid requirement request");
+    return requirementStore?.getActive(params.threadId) ?? null;
+  });
+
+  connection.onRequest("requirement/confirm", async (params) => {
+    requireInitialized();
+    if (requirementStore === undefined || !isRecord(params) || typeof params.requirementId !== "string" ||
+      !Number.isInteger(params.revision) || typeof params.contentHash !== "string") {
+      throw new Error("Invalid requirement confirmation");
+    }
+    const requirement = requirementStore.confirm(params.requirementId, Number(params.revision), params.contentHash);
+    await saveState();
+    return requirement;
   });
 
   connection.onRequest("runtime/capabilities", () => {
@@ -332,29 +363,28 @@ export function registerAppServerHandlers(
     const threadConfig = turnFact === undefined ? undefined : threadConfigs.get(turnFact.threadId);
     const profile = agentRegistry?.require(threadConfig?.agentProfileId ?? "orchestrator");
     const teamConfig = threadConfig?.agentTeam ?? DEFAULT_AGENT_TEAM_CONFIG;
-    const rootRun = turnFact === undefined
+    const requirement = turnFact === undefined ? undefined : requirementStore?.getActive(turnFact.threadId);
+    const executionConfirmed = isRequirementConfirmed(requirement);
+    const existingRequirementJob = requirement === undefined ? undefined :
+      agentRuntimeStore?.getJobByRequirement(requirement.id, requirement.revision);
+    agentRegistry?.requireAll(teamConfig.allowedProfiles);
+    if (teamConfig.independentReview) agentRegistry?.require("reviewer");
+    const rootRun = turnFact === undefined || requirement === undefined || !executionConfirmed
       ? undefined
-      : agentRunStore?.ensureRoot(turnFact.threadId, request.turnId, profile?.id);
-    const job = rootRun === undefined || turnFact === undefined ? undefined
+      : agentRunStore?.ensureRoot(turnFact.threadId, request.turnId, profile?.id,
+          existingRequirementJob?.id ?? `job-${requirement.id}-v${requirement.revision}`);
+    const job = rootRun === undefined || turnFact === undefined || requirement === undefined ? undefined
       : agentRuntimeStore?.createJob({ threadId: turnFact.threadId, rootTurnId: request.turnId,
-          rootRunId: rootRun.rootRunId, configSnapshot: threadConfig?.agentTeam ?? DEFAULT_AGENT_TEAM_CONFIG });
+          rootRunId: rootRun.rootRunId, configSnapshot: threadConfig?.agentTeam ?? DEFAULT_AGENT_TEAM_CONFIG,
+          requirementId: requirement.id, requirementRevision: requirement.revision });
+    if (job !== undefined && requirement !== undefined) requirementStore?.attachJob(requirement.id, job.id);
+    if (job !== undefined && rootRun !== undefined && agentRunStore !== undefined) {
+      ensureFixedSoftwareTeam(lifecycleStore, agentRunStore, rootRun);
+    }
     if (rootRun !== undefined) agentRunStore?.setStatus(rootRun.id, "running");
     if (job !== undefined) agentRuntimeStore?.setJobStatus(job.id, "running");
 
     try {
-      const initialChildResult = threadConfig?.agentTeam?.mode !== "auto" || runInitialChildAgent === undefined
-        ? undefined
-        : await runInitialChildAgent({
-            parentTurnId: request.turnId,
-            profileId: selectInitialChildProfile(
-              readTurnUserInput(lifecycleStore, request.turnId),
-              teamConfig.allowedProfiles,
-            ),
-            task: readTurnUserInput(lifecycleStore, request.turnId),
-          });
-      if (job !== undefined && initialChildResult !== undefined) {
-        agentRuntimeStore?.setJobStatus(job.id, "reviewing");
-      }
       const result = await agentLoop.run(request.turnId, {
         ...(request.model === undefined ? {} : { model: request.model }),
         ...(request.reasoningEffort === undefined
@@ -363,9 +393,11 @@ export function registerAppServerHandlers(
         ...(profile === undefined ? {} : { instructions: buildParentAgentInstructions(
           profile.instructions,
           teamConfig.mode,
-          initialChildResult,
+          undefined,
+          executionConfirmed,
+          requirement,
         ) }),
-        ...(profile === undefined ? {} : { allowedTools: applyAgentModeToTools(intersectCapabilities(profile.allowedTools, teamConfig.allowedTools), teamConfig.mode),
+        ...(profile === undefined ? {} : { allowedTools: applyRequirementGateToTools(applyAgentModeToTools(intersectCapabilities(profile.allowedTools, teamConfig.allowedTools), teamConfig.mode), executionConfirmed),
           allowedSkills: intersectCapabilities(profile.allowedSkills, teamConfig.allowedSkills) }),
       });
 
@@ -380,7 +412,10 @@ export function registerAppServerHandlers(
           summary: "主 Agent 已完成任务",
         });
       }
-      if (job !== undefined) agentRuntimeStore?.setJobStatus(job.id, "completed");
+      if (job !== undefined) {
+        const status = agentRuntimeStore?.reconcileJobStatus(job.id);
+        if (status === "completed" && requirement !== undefined) requirementStore?.setStatus(requirement.id, "completed");
+      }
 
       return result;
     } catch (error) {
@@ -471,14 +506,27 @@ export function buildParentAgentInstructions(
   base: string,
   mode: import("../agents/agent-runtime.js").AgentCollaborationMode,
   initialChildResult?: AgentRunResult,
+  executionConfirmed = false,
+  requirement?: import("../requirements/requirement.js").Requirement,
 ): string {
+  if (!executionConfirmed) {
+    const plan = requirement === undefined ? "当前尚未生成计划。" : `当前计划为 ${requirement.id} v${requirement.revision}：${requirement.planArtifact.path}。`;
+    return `${base}\n你必须遵循内置 clarify-before-execute 工作流：在父 Chat 中持续聊清一个完整需求，不得把每条用户消息当成新任务。确认前不得执行命令、修改业务文件、发布内容或创建子 Agent。需求完整时调用 prepare_requirement_plan 生成测试用例和 Markdown 计划，然后等待用户点击“确认执行”。${plan}`;
+  }
   if (mode === "off") {
     return `${base}\n当前 Chat 已关闭子 Agent。你必须独立完成本轮任务，不得创建或委派子 Agent。`;
   }
   const delivered = initialChildResult === undefined
     ? ""
     : `\nRuntime 已强制派发首个子 Agent并完成独立验收。Return 状态：${initialChildResult.status}。Return 摘要：${initialChildResult.summary}\n你必须以父 Agent身份检查这份 Return，结合原始用户需求给出最终答复；不要重复执行已委派的工作。若证据不足，可继续委派补充子任务。`;
-  return `${base}\n当前 Chat 已开启子 Agent。你是父 Agent和监工：实际执行工作必须委派给子 Agent完成；你负责跟踪进度、检查 Evidence、验收 Return、要求必要返工，并在全部结果可用后统一给用户最终答复。${delivered}`;
+  return `${base}\n当前 Chat 已开启子 Agent。你是父 Agent和监工：实际执行工作必须委派给子 Agent完成；每个任务只委派一个合适的执行 Agent，不要先创建只负责转派的 Agent，也不要显式委派 reviewer——Runtime 会在执行 Agent返回后自动创建一个独立 Reviewer。你负责跟踪进度、检查 Evidence、验收 Return、要求必要返工，并在全部结果可用后统一给用户最终答复。${delivered}`;
+}
+
+export function applyRequirementGateToTools(tools: string[], confirmed: boolean): string[] {
+  if (confirmed) return tools;
+  const blocked = ["run_agent", "run_command", "write_file", "read_shared_board", "publish_shared_result"];
+  if (tools.includes("*")) return ["*", ...blocked.map((tool) => `!${tool}`)];
+  return tools.filter((tool) => !blocked.includes(tool));
 }
 
 export function selectInitialChildProfile(

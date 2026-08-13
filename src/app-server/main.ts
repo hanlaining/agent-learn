@@ -58,8 +58,11 @@ import { AgentRegistry } from "../agents/agent-registry.js";
 import { AgentRunStore } from "../agents/agent-run-store.js";
 import { MultiAgentScheduler } from "../agents/multi-agent-scheduler.js";
 import { AgentRuntimeCoordinator } from "../agents/agent-runtime-coordinator.js";
+import { FixedSoftwareTeamCoordinator } from "../agents/fixed-software-team-coordinator.js";
 import { createRunAgentTool } from "../tools/run-agent-tool.js";
 import { createSharedBoardTools } from "../tools/shared-board-tools.js";
+import { createPrepareRequirementPlanTool } from "../tools/prepare-requirement-plan-tool.js";
+import { RequirementPlanWriter } from "../requirements/requirement-plan-writer.js";
 import type {
   RuntimeCapabilities,
   RuntimeModelCapability,
@@ -88,6 +91,7 @@ const {
   contextCheckpointStore,
   agentRunStore,
   agentRuntimeStore,
+  requirementStore,
 } = loadedRuntimeState;
 const threadConfigs = new Map(
   loadedRuntimeState.threadConfigs.map((config) => [config.threadId, config]),
@@ -98,7 +102,7 @@ const runtimeSessions = new Map(
 const persistRuntimeState = () => runtimePersistence.save(
   lifecycleStore, contextCheckpointStore, agentRunStore,
   [...threadConfigs.values()], agentRegistry?.list?.() ?? loadedRuntimeState.agentProfiles,
-  [...runtimeSessions.values()], agentRuntimeStore,
+  [...runtimeSessions.values()], agentRuntimeStore, requirementStore,
 );
 
 // 与当前 Codex 客户端的已验证配置对齐；仍可用 OPENAI_MODEL 覆盖。
@@ -151,10 +155,11 @@ const skillCatalogInstructions =
   skillLoader.createCatalogInstructions();
 const workspaceTools: AgentTool[] = [];
 const agentRegistry = new AgentRegistry(
-  loadedRuntimeState.agentProfiles.length === 0
-    ? undefined
-    : loadedRuntimeState.agentProfiles,
+  loadedRuntimeState.agentProfiles,
 );
+if (JSON.stringify(agentRegistry.list()) !== JSON.stringify(loadedRuntimeState.agentProfiles)) {
+  await persistRuntimeState();
+}
 const runtimeCoordinator = new AgentRuntimeCoordinator({
   store: agentRuntimeStore,
   persist: () => persistRuntimeState(),
@@ -242,6 +247,12 @@ const sharedToolRegistry = new ToolRegistry([
   ...workspaceTools,
   ...mcpTools,
   ...createSharedBoardTools(agentRuntimeStore, agentRunStore),
+  createPrepareRequirementPlanTool({
+    lifecycleStore,
+    requirementStore,
+    writer: new RequirementPlanWriter(process.env.AGENT_PLANS_PATH ?? join(defaultStateRoot, "god-agent", "plans")),
+    persist: () => persistRuntimeState(),
+  }),
 ]);
 const agentLoop =
   apiKey === undefined
@@ -285,6 +296,34 @@ const agentLoop =
         },
       });
 
+const fixedSoftwareTeamCoordinator = agentLoop === undefined ? undefined : new FixedSoftwareTeamCoordinator({
+  runStore: agentRunStore,
+  runtimeStore: agentRuntimeStore,
+  execute: async ({ threadId, profileId, prompt }) => {
+    const profile = agentRegistry.require(profileId);
+    const turn = lifecycleStore.createTurn(threadId);
+    lifecycleStore.appendItem(turn.id, "user_message", { text: prompt });
+    const result = await agentLoop.run(turn.id, {
+      model: profile.defaultModel,
+      reasoningEffort: profile.reasoningEffort,
+      instructions: `${profile.instructions}\n\n这是固定团队 ST-B2 的受控叶子流程。不得创建子 Agent、不得调用工具，只返回当前职责所需的简洁可验收内容。`,
+      allowedTools: [], allowedSkills: [],
+    });
+    const content = result.assistantMessage.content;
+    return { turnId: turn.id, summary: typeof content === "object" && content !== null && "text" in content && typeof content.text === "string" ? content.text : "固定团队阶段已完成" };
+  },
+  onRunUpdated: (runId) => {
+    const run = agentRunStore.get(runId); const root = run === undefined ? undefined : agentRunStore.getRoot(runId);
+    if (run !== undefined && root !== undefined) events.emit({ type: "agent/run_updated", threadId: root.threadId, turnId: root.turnId, run });
+  },
+  onCompleted: (jobId) => {
+    const requirementId = agentRuntimeStore.getJob(jobId)?.requirementId;
+    if (requirementId !== undefined) requirementStore.setStatus(requirementId, "completed");
+  },
+  persist: () => persistRuntimeState(),
+});
+fixedSoftwareTeamCoordinator?.recoverPersistedCheckpoints();
+
 if (agentLoop !== undefined) {
   multiAgentScheduler = new MultiAgentScheduler({
     registry: agentRegistry,
@@ -299,8 +338,15 @@ if (agentLoop !== undefined) {
         ...(config?.agentTeam === undefined ? {} : { teamConfig: config.agentTeam }),
       };
     },
-    prepare: (profile, task) => {
-      const thread = lifecycleStore.createThread();
+    prepare: (profile, task, parentRunId, taskId, attempt) => {
+      const parentRun = agentRunStore.get(parentRunId);
+      const reusableThreadId = parentRun === undefined ? undefined :
+        agentRunStore.findWorkerThread(parentRun.jobId, taskId);
+      const thread = reusableThreadId === undefined
+        ? lifecycleStore.createThread("agent_internal")
+        : lifecycleStore.getThread(reusableThreadId);
+      if (thread === undefined) throw new Error("Reusable Agent Thread is unavailable");
+      if (attempt > 1 && reusableThreadId === undefined) throw new Error("Rework Agent Thread is unavailable");
       const turn = lifecycleStore.createTurn(thread.id);
       lifecycleStore.appendItem(turn.id, "user_message", { text: task });
       return {
@@ -310,8 +356,12 @@ if (agentLoop !== undefined) {
           const result = await agentLoop.run(turn.id, {
             model: profile.defaultModel,
             reasoningEffort: profile.reasoningEffort,
-            instructions: `${profile.instructions}\n\n共享上下文规则：先调用 read_shared_board 读取当前 Job 已确认事实；产生可复用事实、来源、产物或测试结果时调用 publish_shared_result。不得共享隐藏推理、完整上下文、密钥、Token、Cookie 或环境变量。`,
-            allowedTools: intersectCapabilities(profile.allowedTools, agentRuntimeStore.getJob(agentRunStore.getByTurn(turn.id)?.jobId ?? "")?.configSnapshot.allowedTools),
+            instructions: profile.id === "reviewer"
+              ? `${profile.instructions}\n\n你是叶子审查 Agent。输入已经包含验收所需的任务、条件和 Worker 结论；不得调用任何工具，也不得创建子 Agent。只返回一个 JSON 对象：{\"verdict\":\"pass\"|\"fail\",\"severity\":null|\"P0\"|\"P1\"|\"P2\"|\"P3\",\"summary\":\"可验证的审查结论\"}。`
+              : `${profile.instructions}\n\n你是父 Agent 分派的叶子执行 Agent，不得再创建子 Agent。共享板是可选能力：仅在任务确实需要已有事实时读取，仅在产生可复用结果时发布；用户或任务明确要求不调用工具时不得调用。不得共享隐藏推理、完整上下文、密钥、Token、Cookie 或环境变量。`,
+            allowedTools: profile.id === "reviewer"
+              ? []
+              : [...intersectCapabilities(profile.allowedTools, agentRuntimeStore.getJob(agentRunStore.getByTurn(turn.id)?.jobId ?? "")?.configSnapshot.allowedTools), "!run_agent"],
             allowedSkills: intersectCapabilities(profile.allowedSkills, agentRuntimeStore.getJob(agentRunStore.getByTurn(turn.id)?.jobId ?? "")?.configSnapshot.allowedSkills),
           });
           const content = result.assistantMessage.content;
@@ -327,7 +377,7 @@ if (agentLoop !== undefined) {
       if (run !== undefined) events.emit({ type: "agent/run_updated", threadId, turnId, run });
     },
     persist: () => runtimePersistence.save(lifecycleStore, contextCheckpointStore,
-      agentRunStore, [...threadConfigs.values()], agentRegistry.list(), [...runtimeSessions.values()], agentRuntimeStore),
+      agentRunStore, [...threadConfigs.values()], agentRegistry.list(), [...runtimeSessions.values()], agentRuntimeStore, requirementStore),
   });
   sharedToolRegistry.register(createRunAgentTool(() => multiAgentScheduler!));
 }
@@ -367,9 +417,9 @@ registerAppServerHandlers(connection, {
   agentRegistry,
   threadConfigs,
   runtimeSessions,
+  requirementStore,
+  ...(fixedSoftwareTeamCoordinator === undefined ? {} : { fixedSoftwareTeamCoordinator }),
   ...(multiAgentScheduler === undefined ? {} : {
-    runInitialChildAgent: (request: import("../agents/multi-agent-scheduler.js").ChildAgentRequest) =>
-      multiAgentScheduler.runAgent(request),
     cancelChildAgentRuns: (turnId: string) =>
       multiAgentScheduler.cancelChildren(
         turnId,
@@ -384,6 +434,7 @@ registerAppServerHandlers(connection, {
     agentRegistry.list(),
     [...runtimeSessions.values()],
     agentRuntimeStore,
+    requirementStore,
   ),
   // 日志写 stderr，避免污染 stdout 上的 JSONL 协议数据。
   log: (message) => process.stderr.write(message),
@@ -402,20 +453,27 @@ if (loadedRuntimeState.recoveredTurnIds.length > 0) {
   );
 }
 
+agentRuntimeStore.reconcilePersistedJobs();
+await persistRuntimeState();
 const interruptedRuntime = agentRuntimeStore.recoverInterruptedWork();
 if (interruptedRuntime.lostTasks.length > 0 || interruptedRuntime.pendingReturns.length > 0) {
   await persistRuntimeState();
   process.stderr.write(`[app-server] recovered ${interruptedRuntime.lostTasks.length} lost Task lease(s) and ${interruptedRuntime.pendingReturns.length} pending Return(s)\n`);
 }
 
-if (agentLoop !== undefined && interruptedRuntime.pendingReturns.length > 0) {
+if (agentLoop !== undefined && interruptedRuntime.pendingReturns.some((item) => !item.idempotencyKey.includes(":fixed:"))) {
   void runtimeCoordinator.recoverPendingReturns(async (job, returns) => {
     const turn = lifecycleStore.createTurn(job.threadId);
-    lifecycleStore.appendItem(turn.id, "user_message", { text: `Runtime 重启恢复：以下子 Agent 结果已经持久化并等待你自动继续。请直接综合并完成原任务，不要询问用户是否继续。\n${returns.map((item) => `- ${item.result.status}: ${item.result.summary}`).join("\n")}` });
+    lifecycleStore.appendItem(turn.id, "runtime_message", { text: `Runtime 重启恢复：以下子 Agent 结果已经持久化并等待你自动继续。请直接综合并完成原任务，不要询问用户是否继续。\n${returns.map((item) => `- ${item.result.status}: ${item.result.summary}`).join("\n")}` });
     const profile = agentRegistry.require("orchestrator");
-    const result = await agentLoop.run(turn.id, { model: profile.defaultModel, reasoningEffort: profile.reasoningEffort, instructions: profile.instructions, allowedTools: profile.allowedTools });
+    const result = await agentLoop.run(turn.id, {
+      model: profile.defaultModel,
+      reasoningEffort: profile.reasoningEffort,
+      instructions: `${profile.instructions}\nRuntime 正在恢复已经持久化的 Return。只汇总这些结果，不得创建新任务或调用 run_agent。`,
+      allowedTools: ["*", "!run_agent"],
+    });
     await persistRuntimeState(); return result;
-  });
+  }, (item) => !item.idempotencyKey.includes(":fixed:"));
 }
 
 if (agentLoop === undefined) {

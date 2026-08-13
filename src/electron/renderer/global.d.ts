@@ -26,6 +26,10 @@ declare global {
         getSnapshot(): Promise<DesktopSnapshot>;
         createThread(): Promise<DesktopSnapshot>;
         selectThread(threadId: string): Promise<DesktopSnapshot>;
+        selectAgentThread(threadId?: string): Promise<DesktopSnapshot>;
+        confirmRequirement(): Promise<DesktopSendResult>;
+        advanceFixedProduct(expectedStage: import("../../agents/fixed-software-team-coordinator.js").FixedProductStage): Promise<DesktopSnapshot>;
+        openPlan(path: string): Promise<boolean>;
         sendMessage(text: string): Promise<DesktopSendResult>;
         cancelTurn(): Promise<boolean>;
         selectModel(model: string): Promise<DesktopSnapshot>;

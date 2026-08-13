@@ -3,6 +3,7 @@ const {
   app,
   BrowserWindow,
   ipcMain,
+  shell,
 } = require("electron");
 
 const GET_RUNTIME_STATUS_CHANNEL = "runtime:get-status";
@@ -11,6 +12,10 @@ const RUNTIME_STATUS_CHANGED_CHANNEL =
 const DESKTOP_GET_SNAPSHOT_CHANNEL = "desktop:get-snapshot";
 const DESKTOP_CREATE_THREAD_CHANNEL = "desktop:create-thread";
 const DESKTOP_SELECT_THREAD_CHANNEL = "desktop:select-thread";
+const DESKTOP_SELECT_AGENT_THREAD_CHANNEL = "desktop:select-agent-thread";
+const DESKTOP_CONFIRM_REQUIREMENT_CHANNEL = "desktop:confirm-requirement";
+const DESKTOP_ADVANCE_FIXED_PRODUCT_CHANNEL = "desktop:advance-fixed-product";
+const DESKTOP_OPEN_PLAN_CHANNEL = "desktop:open-plan";
 const DESKTOP_SEND_MESSAGE_CHANNEL = "desktop:send-message";
 const DESKTOP_CANCEL_TURN_CHANNEL = "desktop:cancel-turn";
 const DESKTOP_SELECT_MODEL_CHANNEL = "desktop:select-model";
@@ -201,6 +206,25 @@ ipcMain.handle(
     "无法切换任务，请稍后重试",
   ),
 );
+ipcMain.handle(DESKTOP_SELECT_AGENT_THREAD_CHANNEL, (_event, threadId) => desktopCall(
+  () => desktopController?.selectAgentThread(typeof threadId === "string" ? threadId : undefined),
+  "无法打开子 Agent 对话",
+));
+ipcMain.handle(DESKTOP_CONFIRM_REQUIREMENT_CHANNEL, () => desktopCall(
+  () => desktopController?.confirmRequirement(),
+  "无法确认并执行当前需求",
+));
+ipcMain.handle(DESKTOP_ADVANCE_FIXED_PRODUCT_CHANNEL, (_event, expectedStage) => desktopCall(() => {
+  const stages = ["ready_first_return", "first_return_ready", "rework", "second_return_ready", "lead_return_ready", "completed"];
+  if (typeof expectedStage !== "string" || !stages.includes(expectedStage)) throw new Error("Invalid fixed product stage");
+  return desktopController?.advanceFixedProduct(expectedStage);
+}, "无法推进产品双轮验收"));
+ipcMain.handle(DESKTOP_OPEN_PLAN_CHANNEL, async (_event, path) => {
+  if (typeof path !== "string" || !path.toLowerCase().endsWith(".md")) throw new Error("Invalid plan path");
+  const result = await shell.openPath(path);
+  if (result) throw new Error("无法打开计划文档");
+  return true;
+});
 
 ipcMain.handle(
   DESKTOP_RESPOND_PERMISSION_CHANNEL,

@@ -4,6 +4,23 @@ import { AgentRuntimeStore } from "../src/agents/agent-runtime-store.js";
 import { DEFAULT_AGENT_TEAM_CONFIG } from "../src/agents/agent-runtime.js";
 import { AgentRuntimeCoordinator } from "../src/agents/agent-runtime-coordinator.js";
 
+test("confirmed fixed-team Job without executable Tasks remains in planning", () => {
+  const store = new AgentRuntimeStore();
+  const job = store.createJob({ threadId: "chat-team", rootTurnId: "turn-team", rootRunId: "run-team", configSnapshot: DEFAULT_AGENT_TEAM_CONFIG });
+  store.setJobStatus(job.id, "failed");
+  assert.equal(store.reconcileJobStatus(job.id), "planning");
+  assert.equal(store.getJob(job.id)?.status, "planning");
+});
+
+test("persisted fixed-team Job without Tasks is reconciled after Runtime restart", () => {
+  const store = new AgentRuntimeStore();
+  const job = store.createJob({ threadId: "chat-team", rootTurnId: "turn-team", rootRunId: "run-team", configSnapshot: DEFAULT_AGENT_TEAM_CONFIG });
+  store.setJobStatus(job.id, "failed");
+  const restored = AgentRuntimeStore.fromSnapshot(store.exportSnapshot());
+  restored.reconcilePersistedJobs();
+  assert.equal(restored.getJob(job.id)?.status, "planning");
+});
+
 function fixture() {
   let tick = 0;
   const store = new AgentRuntimeStore(() => new Date(Date.UTC(2026, 7, 12, 0, 0, tick++)).toISOString());
@@ -90,4 +107,48 @@ test("启动恢复会释放过期 Task lease 并列出待投递 Return", () => {
     result: { status: "completed", summary: "ready", evidenceIds: [], boardEntryIds: [] }, idempotencyKey: `${job.id}:recover` });
   const recovered = store.recoverInterruptedWork("2026-08-12T01:00:00.000Z");
   assert.equal(recovered.lostTasks[0]?.status, "lost"); assert.equal(recovered.pendingReturns[0]?.id, envelope.id);
+});
+
+test("失败 Task 的 Return 即使已经消费，Job 也绝不能变成 completed", () => {
+  const { store, job, task } = fixture();
+  const failed = task("failed-worker");
+  store.setTaskStatus(failed.id, "failed");
+  const envelope = store.createReturn({ jobId: job.id, rootRunId: "run-root", parentRunId: "run-root", childRunId: failed.ownerRunId,
+    taskId: failed.id, sequence: 0, result: { status: "failed", summary: "worker failed", evidenceIds: [], boardEntryIds: [] },
+    idempotencyKey: `${job.id}:${failed.ownerRunId}` });
+  store.claimReturn(envelope.id); store.consumeReturn(envelope.id);
+
+  assert.equal(store.reconcileJobStatus(job.id), "failed");
+  assert.equal(store.getJob(job.id)?.status, "failed");
+});
+
+test("只有所有必需 Task 完成且存在独立 Review 通过证据时 Job 才 completed", () => {
+  const { store, job, task } = fixture(); const worker = task("verified-worker");
+  store.setTaskStatus(worker.id, "completed");
+  assert.equal(store.reconcileJobStatus(job.id), "failed");
+  store.addEvidence({ jobId: job.id, taskId: worker.id, runId: "review-1", kind: "review", summary: "accepted", producer: "reviewer", verdict: "passed" });
+  assert.equal(store.reconcileJobStatus(job.id), "completed");
+});
+
+test("重启恢复只消费失败 Return，不重新调用父 Agent或派发第二套任务", async () => {
+  const { store, job, task } = fixture(); const failed = task("recover-failed");
+  store.setTaskStatus(failed.id, "failed");
+  store.createReturn({ jobId: job.id, rootRunId: "run-root", parentRunId: "run-root", childRunId: failed.ownerRunId,
+    taskId: failed.id, sequence: 0, result: { status: "failed", summary: "failed once", evidenceIds: [], boardEntryIds: [] },
+    idempotencyKey: `${job.id}:${failed.ownerRunId}` });
+  let deliveries = 0;
+  const coordinator = new AgentRuntimeCoordinator({ store, retryDelayMs: () => 0 });
+  await coordinator.recoverPendingReturns(async () => { deliveries += 1; return "unexpected"; });
+
+  assert.equal(deliveries, 0);
+  assert.equal(store.listReturns(job.id)[0]?.status, "consumed");
+  assert.equal(store.getJob(job.id)?.status, "failed");
+});
+
+test("加载旧快照后会重新校正曾被错误标成 completed 的失败 Job", () => {
+  const { store, job, task } = fixture(); const failed = task("legacy-failed");
+  store.setTaskStatus(failed.id, "failed"); store.setJobStatus(job.id, "completed");
+  const restored = AgentRuntimeStore.fromSnapshot(store.exportSnapshot());
+  restored.reconcilePersistedJobs();
+  assert.equal(restored.getJob(job.id)?.status, "failed");
 });

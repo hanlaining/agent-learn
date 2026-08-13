@@ -9,6 +9,10 @@ const RUNTIME_STATUS_CHANGED_CHANNEL =
 const DESKTOP_GET_SNAPSHOT_CHANNEL = "desktop:get-snapshot";
 const DESKTOP_CREATE_THREAD_CHANNEL = "desktop:create-thread";
 const DESKTOP_SELECT_THREAD_CHANNEL = "desktop:select-thread";
+const DESKTOP_SELECT_AGENT_THREAD_CHANNEL = "desktop:select-agent-thread";
+const DESKTOP_CONFIRM_REQUIREMENT_CHANNEL = "desktop:confirm-requirement";
+const DESKTOP_ADVANCE_FIXED_PRODUCT_CHANNEL = "desktop:advance-fixed-product";
+const DESKTOP_OPEN_PLAN_CHANNEL = "desktop:open-plan";
 const DESKTOP_SEND_MESSAGE_CHANNEL = "desktop:send-message";
 const DESKTOP_CANCEL_TURN_CHANNEL = "desktop:cancel-turn";
 const DESKTOP_SELECT_MODEL_CHANNEL = "desktop:select-model";
@@ -154,6 +158,9 @@ function sanitizeSnapshot(value) {
     ...(typeof value.activeThreadId === "string"
       ? { activeThreadId: safeText(value.activeThreadId, 200) }
       : {}),
+    ...(typeof value.activeAgentThreadId === "string"
+      ? { activeAgentThreadId: safeText(value.activeAgentThreadId, 200) }
+      : {}),
     messages,
     capabilities: sanitizeCapabilities(value.capabilities),
     turnState: [
@@ -168,6 +175,7 @@ function sanitizeSnapshot(value) {
       : [],
     trash: Array.isArray(value.trash) ? value.trash.slice(0, 500).flatMap((thread) => isRecord(thread) && typeof thread.id === "string" && typeof thread.deletedAt === "string" && typeof thread.trashExpiresAt === "string" ? [{ id: safeText(thread.id, 200), title: safeText(thread.title, 160) || "未命名 Chat", deletedAt: safeText(thread.deletedAt, 80), trashExpiresAt: safeText(thread.trashExpiresAt, 80), ...(typeof thread.deleteBatchId === "string" ? { deleteBatchId: safeText(thread.deleteBatchId, 200) } : {}) }] : []) : [],
     ...(isRecord(value.agentRuntime) ? { agentRuntime: sanitizeAgentRuntime(value.agentRuntime) } : {}),
+    ...(isRecord(value.requirement) ? { requirement: JSON.parse(JSON.stringify(value.requirement)) } : {}),
   });
 }
 
@@ -180,6 +188,7 @@ function sanitizeAgentRuntime(value) {
     evidence: Array.isArray(value.evidence) ? value.evidence.slice(0, 500).map(clean) : [],
     board: Array.isArray(value.board) ? value.board.slice(0, 500).map(clean) : [],
     returns: Array.isArray(value.returns) ? value.returns.slice(0, 100).map(clean) : [],
+    ...(["ready_first_return", "first_return_ready", "rework", "second_return_ready", "lead_return_ready", "completed"].includes(value.fixedProductStage) ? { fixedProductStage: value.fixedProductStage } : {}),
   };
 }
 
@@ -209,6 +218,9 @@ function sanitizeAgentRun(value) {
     status: value.status,
     task: safeText(value.task, 8_000),
     depth: Math.max(0, value.depth),
+    ...(typeof value.safeError === "string"
+      ? { safeError: safeText(value.safeError, 1_000) }
+      : {}),
   }];
 }
 
@@ -648,6 +660,23 @@ contextBridge.exposeInMainWorld("godAgent", {
       return sanitizeSnapshot(
         await invoke(DESKTOP_SELECT_THREAD_CHANNEL, threadId),
       );
+    },
+    selectAgentThread: async (threadId) => sanitizeSnapshot(
+      await invoke(DESKTOP_SELECT_AGENT_THREAD_CHANNEL, threadId),
+    ),
+    confirmRequirement: async () => {
+      const value = await invoke(DESKTOP_CONFIRM_REQUIREMENT_CHANNEL);
+      if (!isRecord(value) || typeof value.turnId !== "string") throw new Error("确认执行返回无效结果");
+      return { turnId: safeText(value.turnId, 200) };
+    },
+    advanceFixedProduct: async (expectedStage) => {
+      const stages = ["ready_first_return", "first_return_ready", "rework", "second_return_ready", "lead_return_ready", "completed"];
+      if (typeof expectedStage !== "string" || !stages.includes(expectedStage)) throw new TypeError("Invalid fixed product stage");
+      return sanitizeSnapshot(await invoke(DESKTOP_ADVANCE_FIXED_PRODUCT_CHANNEL, expectedStage));
+    },
+    openPlan: async (path) => {
+      if (typeof path !== "string") throw new TypeError("Plan path must be a string");
+      return Boolean(await invoke(DESKTOP_OPEN_PLAN_CHANNEL, path));
     },
     sendMessage: async (text) => {
       if (typeof text !== "string") {

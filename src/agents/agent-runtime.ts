@@ -56,6 +56,8 @@ export interface AgentJob {
   status: AgentJobStatus;
   createdAt: string;
   completedAt?: string;
+  requirementId?: string;
+  requirementRevision?: number;
 }
 
 export type AgentTaskStatus =

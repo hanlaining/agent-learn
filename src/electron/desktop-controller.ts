@@ -49,6 +49,9 @@ export interface DesktopRuntimeClient {
   restoreThread?(threadId: string): Promise<Thread>;
   listTrash?(): Promise<Thread[]>;
   getAgentRuntime?(threadId: string): Promise<unknown>;
+  advanceFixedProduct?(threadId: string, expectedStage: import("../agents/fixed-software-team-coordinator.js").FixedProductStage): Promise<unknown>;
+  getRequirement?(threadId: string): Promise<import("../requirements/requirement.js").Requirement | undefined>;
+  confirmRequirement?(requirementId: string, revision: number, contentHash: string): Promise<import("../requirements/requirement.js").Requirement>;
   readThreadHistory(threadId: string): Promise<ThreadHistoryResult>;
   getCapabilities(): Promise<RuntimeCapabilities>;
   selectModel(model: string): Promise<RuntimeCapabilities>;
@@ -91,6 +94,7 @@ const DESKTOP_REASONING_EFFORTS = new Set<DesktopReasoningEffort>([
 export class DesktopController {
   private readonly listeners = new Set<DesktopEventListener>();
   private activeThreadId: string | undefined;
+  private activeAgentThreadId: string | undefined;
   private newThreadDraft = false;
   private readonly runsByThread = new Map<string, DesktopThreadRun>();
   private readonly threadByTurn = new Map<string, string>();
@@ -184,20 +188,25 @@ export class DesktopController {
       this.activeThreadId = sorted[0]?.id;
     }
 
-    const activeHistory = histories.find(
+    const parentHistory = histories.find(
       (history) => history.thread.id === this.activeThreadId,
     );
+    const activeHistory = this.activeAgentThreadId === undefined
+      ? parentHistory
+      : await this.runtime.readThreadHistory(this.activeAgentThreadId);
 
     const activeRun = this.activeThreadId === undefined
       ? undefined
       : this.runsByThread.get(this.activeThreadId);
     const agentRuntime = this.activeThreadId === undefined ? undefined : await this.runtime.getAgentRuntime?.(this.activeThreadId);
+    const requirement = this.activeThreadId === undefined ? undefined : await this.runtime.getRequirement?.(this.activeThreadId);
 
     return {
       threads: sorted,
       ...(this.activeThreadId === undefined
         ? {}
         : { activeThreadId: this.activeThreadId }),
+      ...(this.activeAgentThreadId === undefined ? {} : { activeAgentThreadId: this.activeAgentThreadId }),
       messages: activeHistory?.messages.map((message) => ({
         ...message,
       })) ?? [],
@@ -216,9 +225,11 @@ export class DesktopController {
             agentProfileId: run.agentProfileId,
             ...(run.parentRunId === undefined ? {} : { parentRunId: run.parentRunId }),
             status: run.status, task: run.task, depth: run.depth,
+            ...(run.result?.safeError === undefined ? {} : { safeError: run.result.safeError }),
           })),
       trash: trashThreads.map((thread) => ({ id: thread.id, title: thread.title ?? "未命名 Chat", deletedAt: thread.deletedAt!, trashExpiresAt: thread.trashExpiresAt!, ...(thread.deleteBatchId === undefined ? {} : { deleteBatchId: thread.deleteBatchId }) })),
       ...(agentRuntime === undefined ? {} : { agentRuntime: agentRuntime as import("./desktop-types.js").DesktopAgentRuntimeView }),
+      ...(requirement === undefined ? {} : { requirement }),
       ...(activeRun === undefined
         ? {}
         : { runtimeSession: cloneRuntimeSession(activeRun.session) }),
@@ -228,6 +239,7 @@ export class DesktopController {
   async createThread(): Promise<DesktopSnapshot> {
     // “新建任务”只进入本地草稿；第一条消息发送时才真正创建并持久化 Thread。
     this.activeThreadId = undefined;
+    this.activeAgentThreadId = undefined;
     this.newThreadDraft = true;
     this.draftConfig = { ...this.getDefaultConfig() };
     return this.getSnapshot();
@@ -328,8 +340,40 @@ export class DesktopController {
     }
 
     this.activeThreadId = threadId;
+    this.activeAgentThreadId = undefined;
     this.newThreadDraft = false;
     return this.getSnapshot();
+  }
+
+  async selectAgentThread(threadId?: string): Promise<DesktopSnapshot> {
+    if (threadId === undefined) {
+      this.activeAgentThreadId = undefined;
+      return this.getSnapshot();
+    }
+    if (this.activeThreadId === undefined) throw new Error("请先选择父 Chat");
+    const runs = await this.runtime.listAgentRuns(this.activeThreadId);
+    if (!runs.some((run) => run.parentRunId !== undefined && run.threadId === threadId)) {
+      throw new Error("该子 Agent 不属于当前 Chat");
+    }
+    this.activeAgentThreadId = threadId;
+    return this.getSnapshot();
+  }
+
+  async advanceFixedProduct(expectedStage: import("../agents/fixed-software-team-coordinator.js").FixedProductStage): Promise<DesktopSnapshot> {
+    if (this.activeThreadId === undefined || this.runtime.advanceFixedProduct === undefined) throw new Error("当前没有可推进的产品双轮验收");
+    await this.runtime.advanceFixedProduct(this.activeThreadId, expectedStage);
+    return this.getSnapshot();
+  }
+
+  async confirmRequirement(): Promise<DesktopSendResult> {
+    if (this.activeThreadId === undefined || this.runtime.confirmRequirement === undefined || this.runtime.getRequirement === undefined) {
+      throw new Error("当前没有可确认的需求计划");
+    }
+    const requirement = await this.runtime.getRequirement(this.activeThreadId);
+    if (requirement === undefined || requirement.status !== "planned") throw new Error("当前计划无需确认或尚未生成");
+    await this.runtime.confirmRequirement(requirement.id, requirement.revision, requirement.planArtifact.contentHash);
+    this.activeAgentThreadId = undefined;
+    return this.sendMessage(`确认执行 ${requirement.id} v${requirement.revision}，请严格按已确认计划执行并完成测试验收。`);
   }
 
   async sendMessage(input: string): Promise<DesktopSendResult> {
@@ -499,6 +543,7 @@ export class DesktopController {
           agentProfileId: event.run.agentProfileId,
           ...(event.run.parentRunId === undefined ? {} : { parentRunId: event.run.parentRunId }),
           status: event.run.status, task: event.run.task, depth: event.run.depth,
+          ...(event.run.result?.safeError === undefined ? {} : { safeError: event.run.result.safeError }),
         },
       });
       return;

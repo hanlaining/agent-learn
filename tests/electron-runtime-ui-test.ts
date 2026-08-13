@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 
 import type {
   DesktopEvent,
@@ -349,6 +351,84 @@ test("桌面快照恢复仍在运行的 RuntimeSession", () => {
   });
 
   assert.deepEqual(state.runtimeSession, runtimeSession);
+});
+
+test("父 Chat 接收失败子 Agent 更新并保留安全错误", () => {
+  const base = desktopReducer(INITIAL_DESKTOP_UI_STATE, {
+    type: "snapshot",
+    snapshot: {
+      threads: [], activeThreadId: "thread-parent", messages: [],
+      capabilities: { llm: true, models: [], webSearch: false, tools: [], skills: [], mcpServers: [] },
+      turnState: "failed",
+      agentConfig: { model: "gpt-5.6-sol", reasoningEffort: "high", agentProfileId: "orchestrator" },
+      agentRuns: [],
+    },
+  });
+  const state = desktopReducer(base, {
+    type: "event",
+    event: {
+      type: "agent/run_updated",
+      threadId: "thread-parent",
+      turnId: "turn-parent",
+      run: {
+        id: "run-child", jobId: "job-parent", rootRunId: "run-root",
+        attempt: 1, threadId: "thread-internal", turnId: "turn-child",
+        agentProfileId: "reviewer", parentRunId: "run-worker",
+        status: "failed", task: "独立验收", depth: 2,
+        safeError: "Reviewer configuration is unavailable",
+      },
+    },
+  });
+
+  assert.equal(state.snapshot?.agentRuns[0]?.agentProfileId, "reviewer");
+  assert.equal(state.snapshot?.agentRuns[0]?.safeError, "Reviewer configuration is unavailable");
+});
+
+test("固定软件团队 UI 展示 God、负责人、三角色和真实 Thread 返回入口", () => {
+  const source = readFileSync(new URL("../src/electron/renderer/App.tsx", import.meta.url), "utf8");
+  assert.match(source, /软件产品演示团队/);
+  assert.match(source, /软件团队负责人/);
+  assert.match(source, /产品角色 Agent/);
+  assert.match(source, /工程角色 Agent/);
+  assert.match(source, /测试角色 Agent/);
+  assert.match(source, /selectAgentThread\(run\?\.threadId\)/);
+  assert.match(source, /← 返回 God/);
+});
+
+test("产品双轮 Return 使用受控阶段按钮且返工状态不标红", () => {
+  const appSource = readFileSync(resolve("src/electron/renderer/App.tsx"), "utf8");
+  const cssSource = readFileSync(resolve("src/electron/renderer/styles.css"), "utf8");
+  const preloadSource = readFileSync(resolve("src/electron/preload.cjs"), "utf8");
+  assert.match(appSource, /产品生成第一轮 Return/);
+  assert.match(appSource, /原产品 Thread 返工（Attempt 2）/);
+  assert.match(appSource, /God 接收并单次汇总/);
+  assert.match(preloadSource, /desktop:advance-fixed-product/);
+  assert.match(cssSource, /fixed-product-advance/);
+  assert.doesNotMatch(cssSource, /rework[^}]*var\(--negative\)/s);
+});
+
+test("真实 Agent 对话提示仅在安全错误存在时使用错误色", () => {
+  const appSource = readFileSync(
+    resolve("src/electron/renderer/App.tsx"),
+    "utf8",
+  );
+  const styles = readFileSync(
+    resolve("src/electron/renderer/styles.css"),
+    "utf8",
+  );
+
+  assert.match(
+    appSource,
+    /run\.safeError === undefined \? "" : " is-error"/,
+  );
+  assert.match(
+    styles,
+    /\.history-agent-detail \{[^}]*color: var\(--faint-text\)/,
+  );
+  assert.match(
+    styles,
+    /\.history-agent-detail\.is-error \{ color: var\(--negative\)/,
+  );
 });
 
 function session(status: RuntimeSession["status"]): RuntimeSession {
