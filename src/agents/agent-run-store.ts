@@ -1,0 +1,100 @@
+import type { AgentRun, AgentRunResult, AgentRunSnapshot, AgentRunStatus } from "./agent-run.js";
+
+export class AgentRunStore {
+  private readonly runs = new Map<string, AgentRun>();
+  private readonly runByTurn = new Map<string, string>();
+  private readonly returnReceipts = new Set<string>();
+  private sequence = 0;
+
+  static fromSnapshot(value: AgentRunSnapshot | undefined | (Omit<AgentRunSnapshot, "version" | "runs"> & { version: 1; runs: Array<Omit<AgentRun, "jobId" | "rootRunId" | "attempt">> })): AgentRunStore {
+    const store = new AgentRunStore();
+    if (value === undefined) return store;
+    store.sequence = value.sequence;
+    value.runs.forEach((run) => {
+      const restored = structuredClone({
+        ...run,
+        jobId: "jobId" in run ? run.jobId : `job-${run.turnId}`,
+        rootRunId: "rootRunId" in run ? run.rootRunId : run.id,
+        attempt: "attempt" in run ? run.attempt : 1,
+      }) as AgentRun;
+      if (["queued", "running", "waiting_children", "resuming"].includes(restored.status)) {
+        restored.status = "cancelled";
+        restored.completedAt = new Date().toISOString();
+        restored.result = { runId: restored.id, status: "cancelled", summary: "Runtime 重启，旧 AgentRun 已安全中断" };
+      }
+      store.runs.set(restored.id, restored);
+      store.runByTurn.set(restored.turnId, restored.id);
+    });
+    value.returnReceipts.forEach((id) => store.returnReceipts.add(id));
+    return store;
+  }
+
+  create(input: Omit<AgentRun, "id" | "jobId" | "rootRunId" | "attempt" | "childRunIds" | "status" | "createdAt"> & { jobId?: string; rootRunId?: string; attempt?: number }): AgentRun {
+    this.sequence += 1;
+    const id = `agent-run-${this.sequence}`;
+    const parent = input.parentRunId === undefined ? undefined : this.require(input.parentRunId);
+    const jobId = input.jobId ?? parent?.jobId ?? `job-${input.turnId}`;
+    if (parent !== undefined && parent.jobId !== jobId) throw new Error("Cross-job AgentRun parent is forbidden");
+    const run: AgentRun = { ...input, id, jobId, rootRunId: input.rootRunId ?? parent?.rootRunId ?? id, attempt: input.attempt ?? 1, childRunIds: [], status: "queued", createdAt: new Date().toISOString() };
+    this.runs.set(run.id, run);
+    this.runByTurn.set(run.turnId, run.id);
+    if (run.parentRunId !== undefined) this.require(run.parentRunId).childRunIds.push(run.id);
+    return structuredClone(run);
+  }
+
+  ensureRoot(threadId: string, turnId: string, profileId = "orchestrator"): AgentRun {
+    const existing = this.getByTurn(turnId);
+    return existing ?? this.create({ jobId: `job-${turnId}`, threadId, turnId, agentProfileId: profileId, task: "主任务", depth: 0, attempt: 1 });
+  }
+
+  getByTurn(turnId: string): AgentRun | undefined {
+    const id = this.runByTurn.get(turnId);
+    return id === undefined ? undefined : structuredClone(this.require(id));
+  }
+  get(id: string): AgentRun | undefined { const run = this.runs.get(id); return run === undefined ? undefined : structuredClone(run); }
+  getRoot(id: string): AgentRun | undefined {
+    let run = this.runs.get(id);
+    const visited = new Set<string>();
+    while (run?.parentRunId !== undefined && !visited.has(run.id)) {
+      visited.add(run.id);
+      run = this.runs.get(run.parentRunId);
+    }
+    return run === undefined ? undefined : structuredClone(run);
+  }
+  list(): AgentRun[] { return [...this.runs.values()].map((run) => structuredClone(run)); }
+  listForJob(jobId: string): AgentRun[] { return this.list().filter((run) => run.jobId === jobId); }
+  isChildThread(threadId: string): boolean {
+    return [...this.runs.values()].some(
+      (run) => run.threadId === threadId && run.parentRunId !== undefined,
+    );
+  }
+  listForThread(threadId: string): AgentRun[] {
+    const runs = this.list();
+    const included = new Set(
+      runs.filter((run) => run.threadId === threadId).map((run) => run.id),
+    );
+    let changed = true;
+    while (changed) {
+      changed = false;
+      for (const run of runs) {
+        if (run.parentRunId !== undefined && included.has(run.parentRunId) && !included.has(run.id)) {
+          included.add(run.id);
+          changed = true;
+        }
+      }
+    }
+    return runs.filter((run) => included.has(run.id));
+  }
+
+  setStatus(id: string, status: AgentRunStatus): void { this.require(id).status = status; }
+  setTaskId(id: string, taskId: string): void { this.require(id).taskId = taskId; }
+  complete(id: string, result: AgentRunResult): void {
+    const run = this.require(id); run.status = result.status; run.result = structuredClone(result); run.completedAt = new Date().toISOString();
+  }
+  receiveReturn(result: AgentRunResult): boolean {
+    if (this.returnReceipts.has(result.runId)) return false;
+    this.returnReceipts.add(result.runId); return true;
+  }
+  exportSnapshot(): AgentRunSnapshot { return { version: 2, sequence: this.sequence, runs: this.list(), returnReceipts: [...this.returnReceipts] }; }
+  private require(id: string): AgentRun { const run = this.runs.get(id); if (run === undefined) throw new Error(`AgentRun not found: ${id}`); return run; }
+}

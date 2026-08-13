@@ -97,3 +97,22 @@ test("连接关闭时拒绝全部请求", async () => {
 
   assert.equal(requests.size, 0);
 });
+
+test("只拒绝指定请求并保留其他等待项", async () => {
+  const requests = new RequestMap();
+  const first = requests.create(1);
+  const second = requests.create(2);
+
+  assert.equal(
+    requests.reject(1, new Error("cancelled")),
+    true,
+  );
+  assert.equal(requests.size, 1);
+  assert.equal(
+    requests.handleResponse({ id: 2, result: "ok" }),
+    true,
+  );
+
+  await assert.rejects(first, /cancelled/);
+  assert.equal(await second, "ok");
+});

@@ -1,12 +1,20 @@
 {
-  "name": "agent-electron",
+  "name": "god-agent",
   "version": "1.0.0",
-  "description": "",
-  "main": "index.js",
+  "description": "浠?0 鍒?1 鎵嬪啓鐨勫崟 Agent Runtime 瀛︿範 CLI",
+  "main": "dist/electron-app/electron/main.cjs",
+  "bin": {
+    "god-agent": "bin/god-agent.js"
+  },
   "scripts": {
-    "test": "tsx --test tests/json-rpc-test.ts tests/jsonl-test.ts tests/request-map-test.ts tests/connection-test.ts tests/lifecycle-store-test.ts tests/app-server-handlers-test.ts tests/finance-summary-test.ts tests/openai-responses-test.ts tests/agent-loop-test.ts tests/agent-events-test.ts",
+    "test": "tsx --test tests/multi-agent-scheduler-test.ts tests/json-rpc-test.ts tests/jsonl-test.ts tests/request-map-test.ts tests/connection-test.ts tests/lifecycle-store-test.ts tests/runtime-state-snapshot-test.ts tests/json-file-runtime-persistence-test.ts tests/thread-history-test.ts tests/context-builder-test.ts tests/token-budget-test.ts tests/item-budget-test.ts tests/runtime-session-test.ts tests/context-compactor-test.ts tests/context-checkpoint-store-test.ts tests/tool-output-limiter-test.ts tests/skill-loader-test.ts tests/read-skill-tool-test.ts tests/tool-registry-test.ts tests/json-rpc-permission-gate-test.ts tests/cli-permission-handler-test.ts tests/cli-input-router-test.ts tests/cli-interrupt-handler-test.ts tests/cli-message-queue-test.ts tests/cli-options-test.ts tests/cli-smoke-test.ts tests/workspace-sandbox-test.ts tests/workspace-tools-test.ts tests/workspace-command-runner-test.ts tests/run-command-tool-test.ts tests/mcp-config-test.ts tests/stdio-mcp-client-test.ts tests/mcp-manager-test.ts tests/turn-cancel-test.ts tests/app-server-handlers-test.ts tests/finance-summary-test.ts tests/openai-responses-test.ts tests/agent-loop-test.ts tests/agent-events-test.ts tests/electron-app-server-client-test.ts tests/electron-desktop-controller-test.ts tests/electron-runtime-ui-test.ts",
+    "test:electron": "tsx --test tests/electron-app-server-client-test.ts tests/electron-desktop-controller-test.ts tests/electron-runtime-ui-test.ts",
     "dev": "tsx src/cli/main.ts",
-    "check": "tsc --noEmit"
+    "god-agent": "node bin/god-agent.js",
+    "check": "tsc --noEmit",
+    "electron:renderer:build": "vite build",
+    "electron:build": "tsc -p tsconfig.electron.json && node scripts/build-electron.mjs && npm run electron:renderer:build",
+    "electron:dev": "npm run electron:build && node scripts/start-electron.mjs"
   },
   "keywords": [],
   "author": "",
@@ -14,7 +22,18 @@
   "type": "module",
   "devDependencies": {
     "@types/node": "^26.1.2",
+    "@types/react": "^19.2.18",
+    "@types/react-dom": "^19.2.4",
+    "@vitejs/plugin-react": "^6.0.5",
+    "electron": "41.6.1",
     "tsx": "^4.23.1",
-    "typescript": "^7.0.2"
+    "typescript": "^7.0.2",
+    "vite": "^8.2.0"
+  },
+  "dependencies": {
+    "gpt-tokenizer": "^3.4.0",
+    "lucide-react": "^1.28.0",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8"
   }
 }

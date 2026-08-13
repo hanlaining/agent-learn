@@ -127,3 +127,39 @@ test("失败的 Turn 进入 failed 终态", () => {
     /Turn is not in progress/,
   );
 });
+
+test("取消的 Turn 进入 interrupted 终态", () => {
+  const store = createStore();
+  const thread = store.createThread();
+  const turn = store.createTurn(thread.id);
+
+  store.interruptTurn(turn.id);
+
+  assert.equal(turn.status, "interrupted");
+  assert.equal(
+    turn.completedAt,
+    "2026-08-01T09:00:00.000Z",
+  );
+  assert.throws(
+    () => store.appendItem(
+      turn.id,
+      "assistant_message",
+      { text: "不应写入" },
+    ),
+    /Turn is not in progress/,
+  );
+});
+
+test("超时的 Turn 进入 timed_out 终态", () => {
+  const store = createStore();
+  const thread = store.createThread();
+  const turn = store.createTurn(thread.id);
+
+  store.timeoutTurn(turn.id);
+
+  assert.equal(turn.status, "timed_out");
+  assert.equal(
+    turn.completedAt,
+    "2026-08-01T09:00:00.000Z",
+  );
+});

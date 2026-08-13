@@ -11,7 +11,8 @@ export type TurnStatus =
   | "in_progress"
   | "completed"
   | "failed"
-  | "interrupted";
+  | "interrupted"
+  | "timed_out";
 
 export type ItemType =
   | "user_message"
@@ -23,6 +24,11 @@ export interface Thread {
   id: ThreadId;
   status: ThreadStatus;
   createdAt: string;
+  lastActivityAt?: string;
+  title?: string;
+  deletedAt?: string;
+  trashExpiresAt?: string;
+  deleteBatchId?: string;
   turnIds: TurnId[];
 }
 
@@ -48,6 +54,14 @@ export interface LifecycleState {
   threads: Map<ThreadId, Thread>;
   turns: Map<TurnId, Turn>;
   items: Map<ItemId, Item>;
+}
+
+export interface ThreadDeleteBatch {
+  id: string;
+  threadIds: string[];
+  createdAt: string;
+  status: "completed" | "restored";
+  restoredAt?: string;
 }
 
 /**
@@ -78,6 +92,11 @@ export function isThread(value: unknown): value is Thread {
     (value.status === "active" ||
       value.status === "closed") &&
     typeof value.createdAt === "string" &&
+    (value.lastActivityAt === undefined || typeof value.lastActivityAt === "string") &&
+    (value.title === undefined || typeof value.title === "string") &&
+    (value.deletedAt === undefined || typeof value.deletedAt === "string") &&
+    (value.trashExpiresAt === undefined || typeof value.trashExpiresAt === "string") &&
+    (value.deleteBatchId === undefined || typeof value.deleteBatchId === "string") &&
     Array.isArray(value.turnIds) &&
     value.turnIds.every(
       (turnId) => typeof turnId === "string",
@@ -98,7 +117,8 @@ export function isTurn(value: unknown): value is Turn {
     value.status === "in_progress" ||
     value.status === "completed" ||
     value.status === "failed" ||
-    value.status === "interrupted";
+    value.status === "interrupted" ||
+    value.status === "timed_out";
 
   const validCompletedAt =
     value.completedAt === undefined ||
