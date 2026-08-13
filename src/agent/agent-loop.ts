@@ -258,6 +258,11 @@ export class AgentLoop {
       const itemBudget = this.itemBudget.assess(input);
       let checkpointMessages: LlmMessage[] | undefined;
       let compactedTokens: number | undefined;
+      // Tool 定义属于本次 Job/Turn 的能力快照。热刷新只能影响后续 run，
+      // 不能在同一次 Tool 循环的续轮中注入新 Skill 或新枚举值。
+      const toolDefinitions = this.toolRegistry.getDefinitions(
+        options.allowedTools,
+      );
 
       if (
         tokenBudget.shouldCompact ||
@@ -284,7 +289,7 @@ export class AgentLoop {
       let response = await this.requestModel(turnId, 0, {
         instructions: options.instructions ?? this.instructions,
         input,
-        tools: this.toolRegistry.getDefinitions(options.allowedTools),
+        tools: toolDefinitions,
         signal,
         ...(options.model === undefined ? {} : { model: options.model }),
         ...(options.reasoningEffort === undefined
@@ -489,7 +494,7 @@ export class AgentLoop {
             instructions: options.instructions ?? this.instructions,
             input: safeToolOutputs,
             previousResponseId: response.id,
-            tools: this.toolRegistry.getDefinitions(options.allowedTools),
+            tools: toolDefinitions,
             signal,
             ...(options.model === undefined ? {} : { model: options.model }),
             ...(options.reasoningEffort === undefined

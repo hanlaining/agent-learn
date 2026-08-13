@@ -495,6 +495,33 @@ button { color: inherit; }
 .runtime-state[data-state="failed"] i { background: var(--negative); }
 .runtime-state[data-state="connecting"] i { animation: status-pulse 1s ease-in-out infinite; }
 
+.skill-distill-control { position: relative; display: inline-flex; }
+.skill-distill-button { color: var(--muted-text); }
+.skill-distill-control[data-state="loading"] .skill-distill-button svg {
+  animation: status-spin .8s linear infinite;
+}
+.skill-distill-control[data-state="success"] .skill-distill-button { color: var(--positive); }
+.skill-distill-control[data-state="error"] .skill-distill-button { color: var(--negative); }
+.skill-distill-feedback {
+  position: absolute;
+  z-index: 50;
+  top: calc(100% + 8px);
+  right: 0;
+  width: max-content;
+  max-width: min(360px, 70vw);
+  padding: 8px 10px;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  background: var(--raised-background);
+  box-shadow: 0 10px 30px rgba(30, 30, 28, .14);
+  color: var(--main-text);
+  font-size: 10px;
+  line-height: 1.45;
+}
+.skill-distill-control[data-state="error"] .skill-distill-feedback { color: var(--negative); }
+
+@keyframes status-spin { to { transform: rotate(360deg); } }
+
 .conversation-scroll {
   position: relative;
   min-height: 0;

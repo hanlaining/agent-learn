@@ -44,6 +44,10 @@ import {
   type RuntimeFailureCode,
   type RuntimeStatus,
 } from "./runtime-status.js";
+import {
+  isDesktopSkillDistillResult,
+  type DesktopSkillDistillResult,
+} from "./desktop-types.js";
 
 export interface AppServerClientOptions {
   command: string;
@@ -180,6 +184,25 @@ export class AppServerClient {
 
     if (!isRuntimeCapabilities(value)) {
       throw new Error("Invalid runtime/capabilities response");
+    }
+
+    return value;
+  }
+
+  async distillThreadSkill(
+    threadId: string,
+  ): Promise<DesktopSkillDistillResult> {
+    if (threadId.trim().length === 0) {
+      throw new Error("Thread id is required");
+    }
+
+    const value = await this.sendRequest(
+      "skill/distill-thread",
+      { threadId },
+    );
+
+    if (!isDesktopSkillDistillResult(value)) {
+      throw new Error("Invalid skill/distill-thread response");
     }
 
     return value;

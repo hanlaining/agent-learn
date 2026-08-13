@@ -19,6 +19,9 @@ import type {
 import {
   InputItemBudgetExceededError,
 } from "../src/runtime/item-budget.js";
+import type {
+  DesktopSkillDistillResult,
+} from "../src/electron/desktop-types.js";
 
 test("DesktopController 恢复历史并生成确定性任务标题", async () => {
   const runtime = new FakeDesktopRuntime();
@@ -56,6 +59,86 @@ test("DesktopController 空闲时切换模型并刷新快照", async () => {
   const snapshot = await controller.selectModel("gpt-5.6-terra");
 
   assert.equal(snapshot.agentConfig.model, "gpt-5.6-terra");
+});
+
+test("DesktopController 只用活动 threadId 沉淀并刷新能力快照", async () => {
+  const runtime = new FakeDesktopRuntime();
+  const controller = new DesktopController(runtime);
+  await controller.getSnapshot();
+
+  const result = await controller.distillActiveThreadToSkill();
+
+  assert.equal(result.status, "created");
+  assert.equal(result.skill.name, "electron-chat-flow");
+  assert.equal(runtime.distillThreadSkillCount, 1);
+  assert.ok((await controller.getSnapshot()).capabilities.skills.some(
+    (skill) => skill.name === "electron-chat-flow",
+  ));
+});
+
+test("DesktopController 拒绝无活动 Chat 和运行中 Chat", async () => {
+  const runtime = new FakeDesktopRuntime();
+  const controller = new DesktopController(runtime);
+  await controller.getSnapshot();
+  await controller.createThread();
+  await assert.rejects(
+    () => controller.distillActiveThreadToSkill(),
+    /没有可沉淀/u,
+  );
+
+  const deferred = new DeferredDesktopRuntime();
+  const runningController = new DesktopController(deferred);
+  await runningController.getSnapshot();
+  const turn = runningController.sendMessage("保持运行并阻止沉淀");
+  await deferred.started;
+  await assert.rejects(
+    () => runningController.distillActiveThreadToSkill(),
+    /正在运行/u,
+  );
+  deferred.finish();
+  await turn;
+});
+
+test("DesktopController 并发沉淀幂等且不泄露 Runtime 原始错误", async () => {
+  class DeferredDistillRuntime extends FakeDesktopRuntime {
+    resolve!: (value: Awaited<ReturnType<FakeDesktopRuntime["distillThreadSkill"]>>) => void;
+    readonly result = new Promise<Awaited<ReturnType<FakeDesktopRuntime["distillThreadSkill"]>>>((resolve) => {
+      this.resolve = resolve;
+    });
+    override async distillThreadSkill() {
+      this.distillThreadSkillCount += 1;
+      return this.result;
+    }
+  }
+  const runtime = new DeferredDistillRuntime();
+  const controller = new DesktopController(runtime);
+  await controller.getSnapshot();
+  const first = controller.distillActiveThreadToSkill();
+  const second = controller.distillActiveThreadToSkill();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(runtime.distillThreadSkillCount, 1);
+  runtime.resolve({
+    status: "already_exists",
+    skill: { name: "electron-chat-flow", description: "沉淀 Electron Chat 流程" },
+    capabilities: await runtime.getCapabilities(),
+  });
+  assert.deepEqual(await Promise.all([first, second]), [await first, await first]);
+
+  class FailingDistillRuntime extends FakeDesktopRuntime {
+    override async distillThreadSkill(): Promise<never> {
+      throw new Error("Bearer private-secret-token from D:\\Users\\alice");
+    }
+  }
+  const failing = new DesktopController(new FailingDistillRuntime());
+  await failing.getSnapshot();
+  await assert.rejects(
+    () => failing.distillActiveThreadToSkill(),
+    (error) => {
+      assert.match((error as Error).message, /沉淀失败/u);
+      assert.doesNotMatch((error as Error).message, /private-secret|alice/u);
+      return true;
+    },
+  );
 });
 
 test("DesktopController atomically persists model settings", async () => {
@@ -341,6 +424,7 @@ test("取消和超时都会保留过程并结束全部运行状态", async () =>
 
 class FakeDesktopRuntime implements DesktopRuntimeClient {
   startThreadCount = 0;
+  distillThreadSkillCount = 0;
   readonly savedConfigs: import("../src/electron/desktop-types.js").DesktopAgentConfig[] = [];
   private readonly listeners = new Set<(event: AgentEvent) => void>();
 
@@ -404,6 +488,23 @@ class FakeDesktopRuntime implements DesktopRuntimeClient {
 
   async getCapabilities(): Promise<RuntimeCapabilities> {
     return this.capabilities;
+  }
+
+  async distillThreadSkill(threadId: string): Promise<DesktopSkillDistillResult> {
+    this.distillThreadSkillCount += 1;
+    assert.equal(threadId, this.thread.id);
+    this.capabilities.skills = [
+      ...this.capabilities.skills,
+      { name: "electron-chat-flow", description: "沉淀 Electron Chat 流程" },
+    ];
+    return {
+      status: "created" as const,
+      skill: {
+        name: "electron-chat-flow",
+        description: "沉淀 Electron Chat 流程",
+      },
+      capabilities: structuredClone(this.capabilities),
+    };
   }
 
   async listAgentRuns() { return []; }
@@ -568,6 +669,13 @@ class ParallelDesktopRuntime implements DesktopRuntimeClient {
   }
   async getCapabilities(): Promise<RuntimeCapabilities> {
     return { llm: true, currentModel: "gpt-5.6-sol", models: [], webSearch: false, tools: [], skills: [], mcpServers: [] };
+  }
+  async distillThreadSkill() {
+    return {
+      status: "created" as const,
+      skill: { name: "parallel-flow", description: "并行流程" },
+      capabilities: await this.getCapabilities(),
+    };
   }
   async listAgentRuns() { return []; }
   async getThreadConfig() { return undefined; }

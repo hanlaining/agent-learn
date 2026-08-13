@@ -47,6 +47,12 @@ import type {
   PersistedRuntimeSession,
   PersistedThreadConfig,
 } from "../runtime/json-file-runtime-persistence.js";
+import type { SkillWriteResult } from "../skills/skill-writer.js";
+import type { DistillableChatMessage } from "../skills/chat-skill-distiller.js";
+
+export interface DistillThreadSkillResult extends SkillWriteResult {
+  capabilities: RuntimeCapabilities;
+}
 
 export interface AppServerDependencies {
   lifecycleStore: LifecycleStore;
@@ -67,6 +73,11 @@ export interface AppServerDependencies {
   }) => Promise<AgentRunResult>;
   threadConfigs?: Map<string, PersistedThreadConfig>;
   runtimeSessions?: Map<string, PersistedRuntimeSession>;
+  distillThreadSkill?: (
+    messages: readonly DistillableChatMessage[],
+  ) => Promise<DistillThreadSkillResult>;
+  getSkillCatalogInstructions?: () => string;
+  getAvailableSkillNames?: () => string[];
 }
 
 /**
@@ -94,9 +105,16 @@ export function registerAppServerHandlers(
     runInitialChildAgent,
     threadConfigs = new Map(),
     runtimeSessions = new Map(),
+    distillThreadSkill,
+    getSkillCatalogInstructions = () => "",
+    getAvailableSkillNames = () => [],
   } = dependencies;
 
   let clientInitialized = false;
+  const activeSkillDistillations = new Map<
+    string,
+    Promise<DistillThreadSkillResult>
+  >();
 
   function requireInitialized(): void {
     if (!clientInitialized) {
@@ -191,6 +209,61 @@ export function registerAppServerHandlers(
       lifecycleStore,
       request.threadId,
     );
+  });
+  connection.onRequest("skill/distill-thread", async (params) => {
+    requireInitialized();
+
+    if (
+      !isRecord(params) ||
+      Object.keys(params).some((key) => key !== "threadId") ||
+      typeof params.threadId !== "string" ||
+      params.threadId.trim().length === 0
+    ) {
+      throw new Error("skill/distill-thread requires only a threadId");
+    }
+
+    if (distillThreadSkill === undefined) {
+      throw new Error("Skill distillation is unavailable");
+    }
+
+    const existing = activeSkillDistillations.get(params.threadId);
+
+    if (existing !== undefined) {
+      return existing;
+    }
+
+    const history = readThreadHistory(lifecycleStore, params.threadId);
+
+    if (
+      history.messages.length === 0 ||
+      history.messages.every((message) => message.text.trim().length === 0)
+    ) {
+      throw new Error("当前 Chat 中没有足够的可复用知识");
+    }
+
+    const hasRunningTurn = history.thread.turnIds.some(
+      (turnId) => lifecycleStore.getTurn(turnId)?.status === "in_progress",
+    );
+    const hasRunningJob = agentRuntimeStore?.listJobs(params.threadId).some(
+      (job) => !["completed", "partial", "failed", "cancelled"].includes(job.status),
+    ) === true;
+
+    if (hasRunningTurn || hasRunningJob) {
+      throw new Error("当前 Job 正在运行，暂时不能沉淀 Skill");
+    }
+
+    const request = distillThreadSkill(
+      history.messages.map(({ role, text }) => ({ role, text })),
+    );
+    activeSkillDistillations.set(params.threadId, request);
+
+    try {
+      return await request;
+    } finally {
+      if (activeSkillDistillations.get(params.threadId) === request) {
+        activeSkillDistillations.delete(params.threadId);
+      }
+    }
   });
   connection.onRequest("agent/runtime", (params) => {
     if (!isRecord(params) || typeof params.threadId !== "string") throw new Error("Invalid agent runtime request");
@@ -332,12 +405,19 @@ export function registerAppServerHandlers(
     const threadConfig = turnFact === undefined ? undefined : threadConfigs.get(turnFact.threadId);
     const profile = agentRegistry?.require(threadConfig?.agentProfileId ?? "orchestrator");
     const teamConfig = threadConfig?.agentTeam ?? DEFAULT_AGENT_TEAM_CONFIG;
+    const jobConfigSnapshot = {
+      ...teamConfig,
+      allowedSkills: snapshotAllowedSkills(
+        teamConfig.allowedSkills,
+        getAvailableSkillNames(),
+      ),
+    };
     const rootRun = turnFact === undefined
       ? undefined
       : agentRunStore?.ensureRoot(turnFact.threadId, request.turnId, profile?.id);
     const job = rootRun === undefined || turnFact === undefined ? undefined
       : agentRuntimeStore?.createJob({ threadId: turnFact.threadId, rootTurnId: request.turnId,
-          rootRunId: rootRun.rootRunId, configSnapshot: threadConfig?.agentTeam ?? DEFAULT_AGENT_TEAM_CONFIG });
+          rootRunId: rootRun.rootRunId, configSnapshot: jobConfigSnapshot });
     if (rootRun !== undefined) agentRunStore?.setStatus(rootRun.id, "running");
     if (job !== undefined) agentRuntimeStore?.setJobStatus(job.id, "running");
 
@@ -360,13 +440,16 @@ export function registerAppServerHandlers(
         ...(request.reasoningEffort === undefined
           ? {}
           : { reasoningEffort: request.reasoningEffort }),
-        ...(profile === undefined ? {} : { instructions: buildParentAgentInstructions(
-          profile.instructions,
-          teamConfig.mode,
-          initialChildResult,
-        ) }),
-        ...(profile === undefined ? {} : { allowedTools: applyAgentModeToTools(intersectCapabilities(profile.allowedTools, teamConfig.allowedTools), teamConfig.mode),
-          allowedSkills: intersectCapabilities(profile.allowedSkills, teamConfig.allowedSkills) }),
+        ...createJobInstructions(
+          profile === undefined ? "" : buildParentAgentInstructions(
+            profile.instructions,
+            teamConfig.mode,
+            initialChildResult,
+          ),
+          getSkillCatalogInstructions(),
+        ),
+        ...(profile === undefined ? {} : { allowedTools: applyAgentModeToTools(intersectCapabilities(profile.allowedTools, job?.configSnapshot.allowedTools ?? teamConfig.allowedTools), teamConfig.mode),
+          allowedSkills: intersectCapabilities(profile.allowedSkills, job?.configSnapshot.allowedSkills ?? jobConfigSnapshot.allowedSkills) }),
       });
 
       log(
@@ -458,6 +541,32 @@ function intersectCapabilities(left: readonly string[], right: readonly string[]
   if (left.includes("*")) return [...actualRight];
   if (actualRight.includes("*")) return [...left];
   return left.filter((item) => actualRight.includes(item));
+}
+
+function createJobInstructions(
+  base: string,
+  skillCatalog: string,
+): { instructions?: string } {
+  const parts = [base.trim(), skillCatalog.trim()].filter(
+    (part) => part.length > 0,
+  );
+
+  return parts.length === 0
+    ? {}
+    : { instructions: parts.join("\n\n") };
+}
+
+export function snapshotAllowedSkills(
+  configured: readonly string[] | undefined,
+  available: readonly string[],
+): string[] {
+  const allowed = configured ?? ["*"];
+
+  if (allowed.includes("*")) {
+    return [...available];
+  }
+
+  return allowed.filter((name) => available.includes(name));
 }
 
 export function applyAgentModeToTools(tools: string[], mode: import("../agents/agent-runtime.js").AgentCollaborationMode): string[] {

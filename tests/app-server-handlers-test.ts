@@ -5,6 +5,7 @@ import {
   applyAgentModeToTools,
   buildParentAgentInstructions,
   selectInitialChildProfile,
+  snapshotAllowedSkills,
   registerAppServerHandlers,
 } from "../src/app-server/handlers.js";
 import {
@@ -39,6 +40,12 @@ import {
   isRuntimeCapabilities,
   type RuntimeCapabilities,
 } from "../src/app-server/runtime-capabilities.js";
+import type {
+  DistillableChatMessage,
+} from "../src/skills/chat-skill-distiller.js";
+import type {
+  DistillThreadSkillResult,
+} from "../src/app-server/handlers.js";
 
 function createTestAppServer(options: {
   saveState?: () => void | Promise<void>;
@@ -48,6 +55,9 @@ function createTestAppServer(options: {
   runInitialChildAgent?: (request: { parentTurnId: string; profileId: string; task: string }) => Promise<AgentRunResult>;
   threadConfigs?: Map<string, PersistedThreadConfig>;
   agentRegistry?: AgentRegistry;
+  distillThreadSkill?: (
+    messages: readonly DistillableChatMessage[],
+  ) => Promise<DistillThreadSkillResult>;
 } = {}) {
   const clientToServer: string[] = [];
   const serverToClient: string[] = [];
@@ -97,6 +107,9 @@ function createTestAppServer(options: {
     ...(options.agentRegistry === undefined
       ? {}
       : { agentRegistry: options.agentRegistry }),
+    ...(options.distillThreadSkill === undefined
+      ? {}
+      : { distillThreadSkill: options.distillThreadSkill }),
   });
 
   // 测试中手动搬运 JSONL，模拟真实的 Client ↔ App Server 双向通道。
@@ -110,6 +123,7 @@ function createTestAppServer(options: {
     server,
     store,
     clientToServer,
+    serverToClient,
     flushClientRequest,
   };
 }
@@ -138,6 +152,8 @@ test("子 Agent 开关控制委派工具和父 Agent 监工合同", () => {
   assert.equal(selectInitialChildProfile("修复项目代码", ["coder", "researcher"]), "coder");
   assert.equal(selectInitialChildProfile("查询今年政策", ["coder", "researcher"]), "researcher");
   assert.equal(selectInitialChildProfile("分析这个问题", ["investigator", "coder"]), "investigator");
+  assert.deepEqual(snapshotAllowedSkills(["*"], ["one", "two"]), ["one", "two"]);
+  assert.deepEqual(snapshotAllowedSkills(["two", "missing"], ["one", "two"]), ["two"]);
 });
 
 test("开启子 Agent 后在父 Agent 汇总前强制派发首个执行 Agent", async () => {
@@ -209,6 +225,126 @@ async function completeHandshake(
     app.clientToServer.shift()!,
   );
 }
+
+test("skill/distill-thread 只接受 threadId 并读取服务端真实历史", async () => {
+  const received: DistillableChatMessage[][] = [];
+  const capabilities: RuntimeCapabilities = {
+    llm: true,
+    models: [],
+    webSearch: false,
+    tools: [],
+    skills: [{ name: "runtime-recovery", description: "恢复 Runtime" }],
+    mcpServers: [],
+  };
+  const app = createTestAppServer({
+    distillThreadSkill: async (messages) => {
+      received.push([...messages]);
+      return {
+        status: "created",
+        skill: { name: "runtime-recovery", description: "恢复 Runtime" },
+        capabilities,
+      };
+    },
+  });
+  await completeHandshake(app);
+  const thread = app.store.createThread();
+  const turn = app.store.createTurn(thread.id);
+  app.store.appendItem(turn.id, "user_message", { text: "请整理一套可重复执行的 Runtime 恢复流程。" });
+  app.store.appendItem(turn.id, "assistant_message", { text: "最终流程：先检查服务，再验证连接和历史恢复。" });
+  app.store.completeTurn(turn.id);
+
+  const request = app.client.sendRequest("skill/distill-thread", {
+    threadId: thread.id,
+  });
+  await app.flushClientRequest();
+
+  assert.deepEqual(await request, {
+    status: "created",
+    skill: { name: "runtime-recovery", description: "恢复 Runtime" },
+    capabilities,
+  });
+  assert.deepEqual(received, [[
+    { role: "user", text: "请整理一套可重复执行的 Runtime 恢复流程。" },
+    { role: "assistant", text: "最终流程：先检查服务，再验证连接和历史恢复。" },
+  ]]);
+
+  const invalid = app.client.sendRequest("skill/distill-thread", {
+    threadId: thread.id,
+    messages: [{ role: "user", text: "伪造内容" }],
+  });
+  await app.flushClientRequest();
+  await assert.rejects(invalid, /requires only a threadId/u);
+});
+
+test("空 Chat 和运行中 Chat 在 App Server 边界被拒绝", async () => {
+  const app = createTestAppServer({
+    distillThreadSkill: async () => {
+      throw new Error("不应调用提炼服务");
+    },
+  });
+  await completeHandshake(app);
+  const emptyThread = app.store.createThread();
+
+  const emptyRequest = app.client.sendRequest("skill/distill-thread", {
+    threadId: emptyThread.id,
+  });
+  await app.flushClientRequest();
+  await assert.rejects(emptyRequest, /没有足够/u);
+
+  const runningThread = app.store.createThread();
+  const runningTurn = app.store.createTurn(runningThread.id);
+  app.store.appendItem(runningTurn.id, "user_message", {
+    text: "这是一段足够长且可复用的流程说明，但当前 Job 仍在运行。",
+  });
+  const runningRequest = app.client.sendRequest("skill/distill-thread", {
+    threadId: runningThread.id,
+  });
+  await app.flushClientRequest();
+  await assert.rejects(runningRequest, /正在运行/u);
+});
+
+test("同一 thread 的并发沉淀复用同一个服务端请求", async () => {
+  let calls = 0;
+  let resolveDistillation!: (value: DistillThreadSkillResult) => void;
+  const deferred = new Promise<DistillThreadSkillResult>((resolve) => {
+    resolveDistillation = resolve;
+  });
+  const app = createTestAppServer({
+    distillThreadSkill: async () => {
+      calls += 1;
+      return deferred;
+    },
+  });
+  await completeHandshake(app);
+  const thread = app.store.createThread();
+  const turn = app.store.createTurn(thread.id);
+  app.store.appendItem(turn.id, "user_message", {
+    text: "请沉淀这套经过验证、可以重复执行的长流程和完成标准。",
+  });
+  app.store.completeTurn(turn.id);
+
+  const first = app.client.sendRequest("skill/distill-thread", { threadId: thread.id });
+  const second = app.client.sendRequest("skill/distill-thread", { threadId: thread.id });
+  const firstReceive = app.server.receive(app.clientToServer.shift()!);
+  await new Promise((resolve) => setImmediate(resolve));
+  const secondReceive = app.server.receive(app.clientToServer.shift()!);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(calls, 1);
+
+  const result: DistillThreadSkillResult = {
+    status: "created",
+    skill: { name: "safe-flow", description: "安全流程" },
+    capabilities: {
+      llm: true, models: [], webSearch: false, tools: [],
+      skills: [{ name: "safe-flow", description: "安全流程" }], mcpServers: [],
+    },
+  };
+  resolveDistillation(result);
+  await Promise.all([firstReceive, secondReceive]);
+  await app.client.receive(app.serverToClient.shift()!);
+  await app.client.receive(app.serverToClient.shift()!);
+  assert.deepEqual(await Promise.all([first, second]), [result, result]);
+});
 
 test("握手后可以通过 thread/start 创建 Thread", async () => {
   const app = createTestAppServer();

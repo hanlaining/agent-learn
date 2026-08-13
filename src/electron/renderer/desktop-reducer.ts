@@ -6,6 +6,9 @@ import type {
 import type {
   RuntimeSession,
 } from "../../runtime/runtime-session.js";
+import type {
+  RuntimeCapabilities,
+} from "../../app-server/runtime-capabilities.js";
 
 export interface DesktopUiState {
   snapshot?: DesktopSnapshot;
@@ -19,6 +22,7 @@ export interface DesktopUiState {
 export type DesktopUiAction =
   | { type: "snapshot"; snapshot: DesktopSnapshot }
   | { type: "event"; event: DesktopEvent }
+  | { type: "capabilities"; capabilities: RuntimeCapabilities }
   | { type: "error"; message: string }
   | { type: "clear-error" };
 
@@ -54,6 +58,18 @@ export function desktopReducer(
   if (action.type === "clear-error") {
     const { error: _error, ...next } = state;
     return next;
+  }
+
+  if (action.type === "capabilities") {
+    return state.snapshot === undefined
+      ? state
+      : {
+          ...state,
+          snapshot: {
+            ...state.snapshot,
+            capabilities: action.capabilities,
+          },
+        };
   }
 
   if (state.snapshot === undefined) {

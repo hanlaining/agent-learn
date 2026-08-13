@@ -11,6 +11,7 @@ const DESKTOP_CREATE_THREAD_CHANNEL = "desktop:create-thread";
 const DESKTOP_SELECT_THREAD_CHANNEL = "desktop:select-thread";
 const DESKTOP_SEND_MESSAGE_CHANNEL = "desktop:send-message";
 const DESKTOP_CANCEL_TURN_CHANNEL = "desktop:cancel-turn";
+const DESKTOP_DISTILL_THREAD_SKILL_CHANNEL = "desktop:distill-thread-skill";
 const DESKTOP_SELECT_MODEL_CHANNEL = "desktop:select-model";
 const DESKTOP_SELECT_REASONING_CHANNEL = "desktop:select-reasoning";
 const DESKTOP_SELECT_MODEL_SETTINGS_CHANNEL = "desktop:select-model-settings";
@@ -329,6 +330,29 @@ function sanitizeCapabilities(value) {
       maxDepth: Number.isInteger(value.multiAgent.maxDepth) ? value.multiAgent.maxDepth : 1,
       maxChildrenPerRun: Number.isInteger(value.multiAgent.maxChildrenPerRun) ? value.multiAgent.maxChildrenPerRun : 1,
     } } : {}),
+  });
+}
+
+function sanitizeSkillDistillResult(value) {
+  if (
+    !isRecord(value) ||
+    (value.status !== "created" && value.status !== "already_exists") ||
+    !isRecord(value.skill) ||
+    typeof value.skill.name !== "string" ||
+    !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(value.skill.name) ||
+    value.skill.name.length > 64 ||
+    typeof value.skill.description !== "string"
+  ) {
+    throw new Error("沉淀操作返回无效结果");
+  }
+
+  return Object.freeze({
+    status: value.status,
+    skill: Object.freeze({
+      name: safeText(value.skill.name, 64),
+      description: safeText(value.skill.description, 500),
+    }),
+    capabilities: sanitizeCapabilities(value.capabilities),
   });
 }
 
@@ -661,6 +685,9 @@ contextBridge.exposeInMainWorld("godAgent", {
     },
     cancelTurn: async () =>
       Boolean(await invoke(DESKTOP_CANCEL_TURN_CHANNEL)),
+    distillThreadToSkill: async () => sanitizeSkillDistillResult(
+      await invoke(DESKTOP_DISTILL_THREAD_SKILL_CHANNEL),
+    ),
     selectModel: async (model) => {
       if (typeof model !== "string") throw new TypeError("Model must be a string");
       return sanitizeSnapshot(await invoke(DESKTOP_SELECT_MODEL_CHANNEL, model));

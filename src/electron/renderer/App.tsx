@@ -8,7 +8,6 @@ import {
   CircleDashed,
   FileCode2,
   Globe2,
-  Menu,
   MoreHorizontal,
   MessageSquare,
   PanelLeftClose,
@@ -55,6 +54,11 @@ import {
   coalesceDesktopEvents,
   isNearBottom,
 } from "./runtime-ui.js";
+import {
+  canDistillCurrentChat,
+  chatSkillUiReducer,
+  INITIAL_CHAT_SKILL_UI_STATE,
+} from "./chat-skill-ui.js";
 
 type InspectorTab = "changes" | "activity" | "terminal" | "extensions";
 
@@ -84,6 +88,10 @@ export function App() {
     desktopReducer,
     INITIAL_DESKTOP_UI_STATE,
   );
+  const [chatSkillUi, dispatchChatSkillUi] = useReducer(
+    chatSkillUiReducer,
+    INITIAL_CHAT_SKILL_UI_STATE,
+  );
   const [input, setInput] = useState("");
   const draftsRef = useRef(new Map<string, string>());
   const [historyQuery, setHistoryQuery] = useState("");
@@ -107,6 +115,7 @@ export function App() {
   const autoFollowRef = useRef(true);
   const pendingEventsRef = useRef<DesktopEvent[]>([]);
   const eventFrameRef = useRef<number | undefined>(undefined);
+  const chatSkillResetRef = useRef<number | undefined>(undefined);
 
   useEffect(() => {
     const removeRuntime = window.godAgent.runtime.onStatusChange(setRuntime);
@@ -134,6 +143,9 @@ export function App() {
       removePermission();
       if (eventFrameRef.current !== undefined) {
         window.cancelAnimationFrame(eventFrameRef.current);
+      }
+      if (chatSkillResetRef.current !== undefined) {
+        window.clearTimeout(chatSkillResetRef.current);
       }
     };
   }, []);
@@ -193,6 +205,11 @@ export function App() {
     setModelMenuOpen(false);
     setModelMenuView("simple");
     setHistoryMenu(undefined);
+    if (chatSkillResetRef.current !== undefined) {
+      window.clearTimeout(chatSkillResetRef.current);
+      chatSkillResetRef.current = undefined;
+    }
+    dispatchChatSkillUi({ type: "reset" });
   }, [ui.runtimeSession?.turnId, ui.snapshot?.activeThreadId]);
 
   useEffect(() => {
@@ -226,6 +243,13 @@ export function App() {
   const isRunning = RUNNING_STATES.has(
     ui.snapshot?.turnState ?? "idle",
   );
+  const canDistillChat = canDistillCurrentChat({
+    connected: runtime.state === "connected",
+    hasActiveThread: ui.snapshot?.activeThreadId !== undefined,
+    messageCount: ui.snapshot?.messages.length ?? 0,
+    jobRunning: isRunning,
+    phase: chatSkillUi.phase,
+  });
   const threads = useMemo(() => {
     const query = historyQuery.trim().toLocaleLowerCase();
     return (ui.snapshot?.threads ?? []).filter((thread) =>
@@ -266,6 +290,32 @@ export function App() {
       await window.godAgent.desktop.sendMessage(text);
     } catch (error) {
       dispatch({ type: "error", message: readError(error) });
+    }
+  }
+
+  async function distillCurrentChat() {
+    if (!canDistillChat) {
+      return;
+    }
+
+    dispatchChatSkillUi({ type: "start" });
+
+    try {
+      const result = await window.godAgent.desktop.distillThreadToSkill();
+      dispatch({ type: "capabilities", capabilities: result.capabilities });
+      dispatchChatSkillUi({ type: "succeed", skillName: result.skill.name });
+      if (chatSkillResetRef.current !== undefined) {
+        window.clearTimeout(chatSkillResetRef.current);
+      }
+      chatSkillResetRef.current = window.setTimeout(() => {
+        dispatchChatSkillUi({ type: "reset" });
+        chatSkillResetRef.current = undefined;
+      }, 4_000);
+    } catch (error) {
+      dispatchChatSkillUi({
+        type: "fail",
+        message: readError(error),
+      });
     }
   }
 
@@ -467,7 +517,34 @@ export function App() {
                   <PanelRightOpen />
                 </button>
               )}
-              <button className="icon-button" type="button" aria-label="更多任务操作"><Menu /></button>
+              <div className="skill-distill-control" data-state={chatSkillUi.phase}>
+                <button
+                  className="icon-button skill-distill-button"
+                  type="button"
+                  aria-label="沉淀当前 Chat 为 Skill"
+                  title="沉淀当前 Chat 为 Skill"
+                  disabled={!canDistillChat}
+                  onClick={() => void distillCurrentChat()}
+                >
+                  {chatSkillUi.phase === "loading"
+                    ? <CircleDashed />
+                    : chatSkillUi.phase === "success"
+                      ? <CircleCheck />
+                      : chatSkillUi.phase === "error"
+                        ? <X />
+                        : <Sparkles />}
+                </button>
+                {chatSkillUi.phase === "success" && (
+                  <div className="skill-distill-feedback" role="status">
+                    已沉淀为 Skill：{chatSkillUi.skillName}
+                  </div>
+                )}
+                {chatSkillUi.phase === "error" && (
+                  <div className="skill-distill-feedback" role="alert">
+                    {chatSkillUi.message}
+                  </div>
+                )}
+              </div>
             </div>
           </header>
 

@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { readFile } from "node:fs/promises";
 
 import type {
   DesktopEvent,
@@ -27,6 +28,72 @@ import {
   desktopReducer,
   INITIAL_DESKTOP_UI_STATE,
 } from "../src/electron/renderer/desktop-reducer.js";
+import {
+  canDistillCurrentChat,
+  chatSkillUiReducer,
+  INITIAL_CHAT_SKILL_UI_STATE,
+} from "../src/electron/renderer/chat-skill-ui.js";
+
+test("Electron Main 与 Preload 只暴露沉淀白名单通道且 Renderer 不提交正文", async () => {
+  const [mainSource, preloadSource] = await Promise.all([
+    readFile(new URL("../src/electron/main.cjs", import.meta.url), "utf8"),
+    readFile(new URL("../src/electron/preload.cjs", import.meta.url), "utf8"),
+  ]);
+
+  assert.match(mainSource, /desktop:distill-thread-skill/u);
+  assert.match(mainSource, /distillActiveThreadToSkill\(\)/u);
+  assert.match(preloadSource, /distillThreadToSkill:\s*async\s*\(\)/u);
+  assert.match(preloadSource, /sanitizeSkillDistillResult/u);
+  assert.doesNotMatch(
+    preloadSource,
+    /distillThreadToSkill:\s*async\s*\([^)]*(?:threadId|messages|history|path|model)/u,
+  );
+});
+
+test("沉淀按钮状态覆盖 idle、loading、success、error 并防止重复点击", () => {
+  const loading = chatSkillUiReducer(INITIAL_CHAT_SKILL_UI_STATE, { type: "start" });
+  assert.deepEqual(loading, { phase: "loading" });
+  assert.equal(chatSkillUiReducer(loading, { type: "start" }), loading);
+  const success = chatSkillUiReducer(loading, {
+    type: "succeed",
+    skillName: "runtime-recovery",
+  });
+  assert.deepEqual(success, { phase: "success", skillName: "runtime-recovery" });
+  const error = chatSkillUiReducer(loading, {
+    type: "fail",
+    message: "沉淀失败，请重试",
+  });
+  assert.deepEqual(error, { phase: "error", message: "沉淀失败，请重试" });
+  assert.deepEqual(chatSkillUiReducer(error, { type: "reset" }), { phase: "idle" });
+
+  const base = {
+    connected: true,
+    hasActiveThread: true,
+    messageCount: 2,
+    jobRunning: false,
+  };
+  assert.equal(canDistillCurrentChat({ ...base, phase: "idle" }), true);
+  assert.equal(canDistillCurrentChat({ ...base, phase: "error" }), true);
+  assert.equal(canDistillCurrentChat({ ...base, phase: "loading" }), false);
+  assert.equal(canDistillCurrentChat({ ...base, phase: "success" }), false);
+  assert.equal(canDistillCurrentChat({ ...base, phase: "idle", messageCount: 0 }), false);
+  assert.equal(canDistillCurrentChat({ ...base, phase: "idle", hasActiveThread: false }), false);
+  assert.equal(canDistillCurrentChat({ ...base, phase: "idle", jobRunning: true }), false);
+});
+
+test("Chat 顶部原三横杠位置替换为 Sparkles 沉淀入口且工作区检查保留", async () => {
+  const source = await readFile(
+    new URL("../src/electron/renderer/App.tsx", import.meta.url),
+    "utf8",
+  );
+
+  assert.doesNotMatch(source, /aria-label="更多任务操作"/u);
+  assert.match(source, /aria-label="沉淀当前 Chat 为 Skill"/u);
+  assert.match(source, /<Sparkles\s*\/>/u);
+  assert.match(source, /distillThreadToSkill\(\)/u);
+  assert.match(source, /已沉淀为 Skill：\{chatSkillUi\.skillName\}/u);
+  assert.match(source, /工作区检查/u);
+});
 
 test("安全 Markdown 支持常用块并把原始 HTML 保留为文本", () => {
   const blocks = parseSafeMarkdown([

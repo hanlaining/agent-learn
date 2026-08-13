@@ -8,6 +8,31 @@ import {
   AppServerClient,
   resolveToolPermissionRequest,
 } from "../src/electron/app-server-client.js";
+import {
+  isDesktopSkillDistillResult,
+} from "../src/electron/desktop-types.js";
+
+test("Electron Client 的沉淀响应校验拒绝非法结构", () => {
+  assert.equal(isDesktopSkillDistillResult({
+    status: "created",
+    skill: { name: "safe-skill", description: "安全 Skill" },
+    capabilities: {
+      llm: true, models: [], webSearch: false, tools: [], skills: [], mcpServers: [],
+    },
+  }), true);
+  assert.equal(isDesktopSkillDistillResult({
+    status: "created",
+    skill: { name: "safe-skill", description: "安全 Skill", secret: "private" },
+    capabilities: { llm: true },
+  }), false);
+  assert.equal(isDesktopSkillDistillResult({
+    status: "overwritten",
+    skill: { name: "safe-skill", description: "安全 Skill" },
+    capabilities: {
+      llm: true, models: [], webSearch: false, tools: [], skills: [], mcpServers: [],
+    },
+  }), false);
+});
 
 test("Electron Client 把合法权限请求交给 UI 并回传允许", async () => {
   const seen: unknown[] = [];

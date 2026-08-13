@@ -19,6 +19,8 @@ export interface AgentToolExecutionContext {
 
 export interface AgentTool {
   definition: LlmToolDefinition;
+  /** 动态 Tool 可在运行时刷新后变为可用；不可用时不进入模型定义。 */
+  isAvailable?: () => boolean;
   /** 默认需要审批；只读且已由 Runtime 预授权的内部 Tool 可以关闭。 */
   requiresPermission?: boolean;
   riskLevel?: ToolRiskLevel;
@@ -58,13 +60,18 @@ export class ToolRegistry {
   }
 
   getDefinitions(allowedNames: readonly string[] = ["*"]): LlmToolDefinition[] {
-    return [...this.tools.values()].filter((tool) => isAllowed(tool.definition.name, allowedNames)).map(
+    return [...this.tools.values()].filter((tool) =>
+      tool.isAvailable?.() !== false &&
+      isAllowed(tool.definition.name, allowedNames),
+    ).map(
       (tool) => tool.definition,
     );
   }
 
   isAllowed(name: string, allowedNames: readonly string[] = ["*"]): boolean {
-    return this.tools.has(name) && isAllowed(name, allowedNames);
+    const tool = this.tools.get(name);
+    return tool !== undefined && tool.isAvailable?.() !== false &&
+      isAllowed(name, allowedNames);
   }
 
   getPermissionDescription(
@@ -131,7 +138,7 @@ export class ToolRegistry {
   private requireTool(name: string): AgentTool {
     const tool = this.tools.get(name);
 
-    if (tool === undefined) {
+    if (tool === undefined || tool.isAvailable?.() === false) {
       throw new Error(`Unknown tool: ${name}`);
     }
 

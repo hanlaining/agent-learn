@@ -171,6 +171,37 @@ export interface DesktopSendResult {
   turnId: string;
 }
 
+export interface DesktopSkillDistillResult {
+  status: "created" | "already_exists";
+  skill: {
+    name: string;
+    description: string;
+  };
+  capabilities: RuntimeCapabilities;
+}
+
+export function isDesktopSkillDistillResult(
+  value: unknown,
+): value is DesktopSkillDistillResult {
+  return (
+    isRecord(value) &&
+    Object.keys(value).every((key) =>
+      ["status", "skill", "capabilities"].includes(key),
+    ) &&
+    (value.status === "created" || value.status === "already_exists") &&
+    isRecord(value.skill) &&
+    Object.keys(value.skill).every((key) =>
+      ["name", "description"].includes(key),
+    ) &&
+    typeof value.skill.name === "string" &&
+    /^[a-z0-9]+(?:-[a-z0-9]+)*$/u.test(value.skill.name) &&
+    value.skill.name.length <= 64 &&
+    typeof value.skill.description === "string" &&
+    [...value.skill.description].length <= 500 &&
+    isRuntimeCapabilitiesLike(value.capabilities)
+  );
+}
+
 export interface DesktopPermissionRequest {
   turnId: string;
   threadId?: string;

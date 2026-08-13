@@ -36,6 +36,7 @@ import type {
   DesktopAgentConfig,
   DesktopModelSettings,
   DesktopReasoningEffort,
+  DesktopSkillDistillResult,
   DesktopThreadSummary,
   DesktopTurnState,
 } from "./desktop-types.js";
@@ -51,6 +52,7 @@ export interface DesktopRuntimeClient {
   getAgentRuntime?(threadId: string): Promise<unknown>;
   readThreadHistory(threadId: string): Promise<ThreadHistoryResult>;
   getCapabilities(): Promise<RuntimeCapabilities>;
+  distillThreadSkill(threadId: string): Promise<DesktopSkillDistillResult>;
   selectModel(model: string): Promise<RuntimeCapabilities>;
   startTurn(threadId: string, input: string): Promise<TurnStartResult>;
   runTurn(
@@ -101,6 +103,10 @@ export class DesktopController {
   private capabilitiesLoaded = false;
   private persistentStateLoaded = false;
   private readonly removeAgentListener: () => void;
+  private readonly skillDistillations = new Map<
+    string,
+    Promise<DesktopSkillDistillResult>
+  >();
 
   constructor(private readonly runtime: DesktopRuntimeClient) {
     this.removeAgentListener = runtime.onAgentEvent((event) => {
@@ -330,6 +336,61 @@ export class DesktopController {
     this.activeThreadId = threadId;
     this.newThreadDraft = false;
     return this.getSnapshot();
+  }
+
+  async distillActiveThreadToSkill(): Promise<DesktopSkillDistillResult> {
+    const threadId = this.activeThreadId;
+
+    if (threadId === undefined || this.newThreadDraft) {
+      throw new Error("当前没有可沉淀的 Chat");
+    }
+
+    if (isRunningState(this.runsByThread.get(threadId)?.state ?? "idle")) {
+      throw new Error("当前 Job 正在运行，暂时不能沉淀 Skill");
+    }
+
+    const existing = this.skillDistillations.get(threadId);
+
+    if (existing !== undefined) {
+      return existing;
+    }
+
+    const request = this.distillThreadToSkill(threadId);
+    this.skillDistillations.set(threadId, request);
+
+    try {
+      return await request;
+    } finally {
+      if (this.skillDistillations.get(threadId) === request) {
+        this.skillDistillations.delete(threadId);
+      }
+    }
+  }
+
+  private async distillThreadToSkill(
+    threadId: string,
+  ): Promise<DesktopSkillDistillResult> {
+    const history = await this.runtime.readThreadHistory(threadId);
+
+    if (
+      history.messages.length === 0 ||
+      history.messages.every((message) => message.text.trim().length === 0)
+    ) {
+      throw new Error("当前 Chat 中没有足够的可复用知识");
+    }
+
+    try {
+      const result = await this.runtime.distillThreadSkill(threadId);
+      this.capabilities = cloneCapabilities(result.capabilities);
+      this.capabilitiesLoaded = true;
+      return {
+        status: result.status,
+        skill: { ...result.skill },
+        capabilities: cloneCapabilities(result.capabilities),
+      };
+    } catch {
+      throw new Error("沉淀失败，请检查 Chat 是否包含可复用知识后重试");
+    }
   }
 
   async sendMessage(input: string): Promise<DesktopSendResult> {

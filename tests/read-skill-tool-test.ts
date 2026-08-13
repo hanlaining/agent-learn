@@ -66,3 +66,30 @@ test("read_skill 只按已发现名称返回完整说明", async (t) => {
     /Unknown Skill/,
   );
 });
+
+test("动态 read_skill 在无 Skill 时不暴露，刷新后自动可用", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "read-skill-dynamic-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  let loader = await SkillLoader.create({ roots: [root] });
+  const registry = new ToolRegistry([
+    createReadSkillTool(() => loader),
+  ]);
+
+  assert.deepEqual(registry.getDefinitions(), []);
+  assert.equal(registry.isAllowed("read_skill"), false);
+
+  const directory = join(root, "hot-skill");
+  await mkdir(directory);
+  await writeFile(join(directory, "SKILL.md"), [
+    "---",
+    "name: hot-skill",
+    "description: 热刷新 Skill",
+    "---",
+    "",
+    "执行热刷新流程。",
+  ].join("\n"), "utf8");
+  loader = await SkillLoader.create({ roots: [root] });
+
+  assert.equal(registry.getDefinitions()[0]?.name, "read_skill");
+  assert.equal(registry.isAllowed("read_skill"), true);
+});

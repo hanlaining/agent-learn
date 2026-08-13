@@ -12,32 +12,38 @@ export const READ_SKILL_TOOL_NAME = "read_skill";
  * Skill 根目录已经由用户配置并由 Loader 校验，因此按名称读取不再重复审批。
  */
 export function createReadSkillTool(
-  loader: SkillLoader,
+  loaderOrProvider: SkillLoader | (() => SkillLoader),
 ): AgentTool {
-  const skillNames = loader.list().map((skill) => skill.name);
+  const getLoader = typeof loaderOrProvider === "function"
+    ? loaderOrProvider
+    : () => loaderOrProvider;
+  const initialSkillNames = getLoader().list().map((skill) => skill.name);
 
-  if (skillNames.length === 0) {
+  if (typeof loaderOrProvider !== "function" && initialSkillNames.length === 0) {
     throw new Error("read_skill requires at least one Skill");
   }
 
   return {
+    isAvailable: () => getLoader().list().length > 0,
     requiresPermission: false,
     riskLevel: "read",
-    definition: {
-      name: READ_SKILL_TOOL_NAME,
-      description:
-        "读取一个已发现 Skill 的完整说明。只有任务匹配 Skill 时才调用。",
-      parameters: strictObjectSchema({
-        name: {
-          type: "string",
-          enum: skillNames,
-          description: "要读取的 Skill 名称。",
-        },
-      }),
+    get definition() {
+      return {
+        name: READ_SKILL_TOOL_NAME,
+        description:
+          "读取一个已发现 Skill 的完整说明。只有任务匹配 Skill 时才调用。",
+        parameters: strictObjectSchema({
+          name: {
+            type: "string",
+            enum: getLoader().list().map((skill) => skill.name),
+            description: "要读取的 Skill 名称。",
+          },
+        }),
+      };
     },
     execute(argumentsJson) {
       const name = parseReadSkillArguments(argumentsJson);
-      const skill = loader.read(name);
+      const skill = getLoader().read(name);
 
       return {
         result: skill,

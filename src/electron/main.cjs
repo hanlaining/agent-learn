@@ -13,6 +13,7 @@ const DESKTOP_CREATE_THREAD_CHANNEL = "desktop:create-thread";
 const DESKTOP_SELECT_THREAD_CHANNEL = "desktop:select-thread";
 const DESKTOP_SEND_MESSAGE_CHANNEL = "desktop:send-message";
 const DESKTOP_CANCEL_TURN_CHANNEL = "desktop:cancel-turn";
+const DESKTOP_DISTILL_THREAD_SKILL_CHANNEL = "desktop:distill-thread-skill";
 const DESKTOP_SELECT_MODEL_CHANNEL = "desktop:select-model";
 const DESKTOP_SELECT_REASONING_CHANNEL = "desktop:select-reasoning";
 const DESKTOP_SELECT_MODEL_SETTINGS_CHANNEL = "desktop:select-model-settings";
@@ -248,6 +249,13 @@ ipcMain.handle(DESKTOP_CANCEL_TURN_CHANNEL, () =>
       return desktopController?.cancelTurn();
     },
     "无法停止当前任务，请稍后重试",
+  ),
+);
+
+ipcMain.handle(DESKTOP_DISTILL_THREAD_SKILL_CHANNEL, () =>
+  desktopCall(
+    () => desktopController?.distillActiveThreadToSkill(),
+    "沉淀失败，请检查 Chat 是否包含可复用知识后重试",
   ),
 );
 

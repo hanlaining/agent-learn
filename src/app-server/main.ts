@@ -32,9 +32,7 @@ import {
 import {
   WorkspaceCommandRunner,
 } from "../sandbox/workspace-command-runner.js";
-import {
-  SkillLoader,
-} from "../skills/skill-loader.js";
+import { SkillRuntime } from "../skills/skill-runtime.js";
 import {
   financeMonthlySummaryAgentTool,
 } from "../tools/finance-monthly-summary-tool.js";
@@ -143,12 +141,12 @@ const configuredSkillRoots =
     .map((path) => path.trim())
     .filter((path) => path.length > 0) ??
   [join(workspacePath, "skills")];
-const skillLoader = await SkillLoader.create({
+const writableSkillRoot = configuredSkillRoots[0] ?? join(workspacePath, "skills");
+const skillRuntime = await SkillRuntime.create({
   roots: configuredSkillRoots,
+  writableRoot: writableSkillRoot,
   allowMissingRoots: true,
 });
-const skillCatalogInstructions =
-  skillLoader.createCatalogInstructions();
 const workspaceTools: AgentTool[] = [];
 const agentRegistry = new AgentRegistry(
   loadedRuntimeState.agentProfiles.length === 0
@@ -189,9 +187,7 @@ if (apiKey !== undefined) {
     createRunCommandTool(commandRunner),
   );
 
-  if (skillLoader.list().length > 0) {
-    workspaceTools.push(createReadSkillTool(skillLoader));
-  }
+  workspaceTools.push(createReadSkillTool(() => skillRuntime.getLoader()));
 }
 
 // MCP Server 只从用户指定的静态配置启动；没有模型时不创建无消费者的子进程。
@@ -249,9 +245,9 @@ const agentLoop =
     : new AgentLoop({
         lifecycleStore,
         events,
-        ...(skillCatalogInstructions.length === 0
+        ...(skillRuntime.createCatalogInstructions().length === 0
           ? {}
-          : { additionalInstructions: skillCatalogInstructions }),
+          : { additionalInstructions: skillRuntime.createCatalogInstructions() }),
         // Tool 真正执行前，通过同一条双向 JSON-RPC 连接向 CLI 请求审批。
         permissionGate: new JsonRpcPermissionGate(connection, {
           resolveAccessMode: (request) => {
@@ -310,7 +306,11 @@ if (agentLoop !== undefined) {
           const result = await agentLoop.run(turn.id, {
             model: profile.defaultModel,
             reasoningEffort: profile.reasoningEffort,
-            instructions: `${profile.instructions}\n\n共享上下文规则：先调用 read_shared_board 读取当前 Job 已确认事实；产生可复用事实、来源、产物或测试结果时调用 publish_shared_result。不得共享隐藏推理、完整上下文、密钥、Token、Cookie 或环境变量。`,
+            instructions: [
+              profile.instructions,
+              "共享上下文规则：先调用 read_shared_board 读取当前 Job 已确认事实；产生可复用事实、来源、产物或测试结果时调用 publish_shared_result。不得共享隐藏推理、完整上下文、密钥、Token、Cookie 或环境变量。",
+              skillRuntime.createCatalogInstructions(),
+            ].filter((part) => part.length > 0).join("\n\n"),
             allowedTools: intersectCapabilities(profile.allowedTools, agentRuntimeStore.getJob(agentRunStore.getByTurn(turn.id)?.jobId ?? "")?.configSnapshot.allowedTools),
             allowedSkills: intersectCapabilities(profile.allowedSkills, agentRuntimeStore.getJob(agentRunStore.getByTurn(turn.id)?.jobId ?? "")?.configSnapshot.allowedSkills),
           });
@@ -345,7 +345,7 @@ const runtimeCapabilities: RuntimeCapabilities = {
     ...toToolCapabilities(workspaceTools, "workspace"),
     ...toToolCapabilities(mcpTools, "mcp"),
   ],
-  skills: skillLoader.list(),
+  skills: skillRuntime.list(),
   mcpServers: mcpStatuses,
   agents: agentRegistry.list().map(({ id, name, description }) => ({ id, name, description })),
   ...(multiAgentScheduler === undefined ? {} : {
@@ -367,6 +367,19 @@ registerAppServerHandlers(connection, {
   agentRegistry,
   threadConfigs,
   runtimeSessions,
+  getSkillCatalogInstructions: () => skillRuntime.createCatalogInstructions(),
+  getAvailableSkillNames: () => skillRuntime.list().map((skill) => skill.name),
+  ...(llmProvider === undefined ? {} : {
+    distillThreadSkill: async (messages) => {
+      const result = await skillRuntime.distillThread(llmProvider, messages);
+      runtimeCapabilities.skills = skillRuntime.list();
+
+      return {
+        ...result,
+        capabilities: runtimeCapabilities,
+      };
+    },
+  }),
   ...(multiAgentScheduler === undefined ? {} : {
     runInitialChildAgent: (request: import("../agents/multi-agent-scheduler.js").ChildAgentRequest) =>
       multiAgentScheduler.runAgent(request),
@@ -413,7 +426,14 @@ if (agentLoop !== undefined && interruptedRuntime.pendingReturns.length > 0) {
     const turn = lifecycleStore.createTurn(job.threadId);
     lifecycleStore.appendItem(turn.id, "user_message", { text: `Runtime 重启恢复：以下子 Agent 结果已经持久化并等待你自动继续。请直接综合并完成原任务，不要询问用户是否继续。\n${returns.map((item) => `- ${item.result.status}: ${item.result.summary}`).join("\n")}` });
     const profile = agentRegistry.require("orchestrator");
-    const result = await agentLoop.run(turn.id, { model: profile.defaultModel, reasoningEffort: profile.reasoningEffort, instructions: profile.instructions, allowedTools: profile.allowedTools });
+    const result = await agentLoop.run(turn.id, {
+      model: profile.defaultModel,
+      reasoningEffort: profile.reasoningEffort,
+      instructions: [profile.instructions, skillRuntime.createCatalogInstructions()]
+        .filter((part) => part.length > 0).join("\n\n"),
+      allowedTools: profile.allowedTools,
+      allowedSkills: skillRuntime.list().map((skill) => skill.name),
+    });
     await persistRuntimeState(); return result;
   });
 }
@@ -424,9 +444,9 @@ if (agentLoop === undefined) {
   );
 }
 
-if (skillLoader.list().length > 0) {
+if (skillRuntime.list().length > 0) {
   process.stderr.write(
-    `[app-server] loaded ${skillLoader.list().length} skill(s)\n`,
+    `[app-server] loaded ${skillRuntime.list().length} skill(s)\n`,
   );
 }
 

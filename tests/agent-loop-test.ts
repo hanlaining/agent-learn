@@ -209,6 +209,58 @@ test("Agent Loop 完成 Model → Tool → Model", async () => {
   }
 });
 
+test("Agent Loop 在 run 开始时冻结 Tool 定义快照", async () => {
+  const { store, turn } = createTurnWithUserMessage();
+  let names = ["initial-skill"];
+  const dynamicTool: AgentTool = {
+    get definition() {
+      return {
+        name: "read_skill",
+        description: "读取 Skill",
+        parameters: {
+          type: "object",
+          properties: { name: { type: "string", enum: [...names] } },
+          required: ["name"],
+          additionalProperties: false,
+        },
+      };
+    },
+    requiresPermission: false,
+    execute() {
+      names = ["initial-skill", "new-skill"];
+      return { result: {}, modelOutput: {} };
+    },
+  };
+  const llm = new ScriptedLlmProvider([
+    {
+      id: "response-tool",
+      text: "",
+      functionCalls: [{
+        callId: "read-1",
+        name: "read_skill",
+        arguments: '{"name":"initial-skill"}',
+      }],
+    },
+    { id: "response-final", text: "完成", functionCalls: [] },
+  ]);
+  const loop = new AgentLoop({
+    lifecycleStore: store,
+    llm,
+    toolRegistry: new ToolRegistry([dynamicTool]),
+  });
+
+  await loop.run(turn.id, { allowedSkills: ["initial-skill"] });
+
+  assert.equal(llm.requests.length, 2);
+  assert.deepEqual(llm.requests[0]?.tools, llm.requests[1]?.tools);
+  assert.deepEqual(
+    (llm.requests[1]?.tools[0]?.parameters as {
+      properties: { name: { enum: string[] } };
+    }).properties.name.enum,
+    ["initial-skill"],
+  );
+});
+
 test("Tool 前公开排查文本归类为 Commentary，最终回答只归类一次", async () => {
   const { store, turn } = createTurnWithUserMessage();
   const llm = new ScriptedLlmProvider([

@@ -9,6 +9,7 @@ import type {
   DesktopSendResult,
   DesktopSnapshot,
   DesktopReasoningEffort,
+  DesktopSkillDistillResult,
 } from "../desktop-types.js";
 
 declare module "*.css";
@@ -28,6 +29,7 @@ declare global {
         selectThread(threadId: string): Promise<DesktopSnapshot>;
         sendMessage(text: string): Promise<DesktopSendResult>;
         cancelTurn(): Promise<boolean>;
+        distillThreadToSkill(): Promise<DesktopSkillDistillResult>;
         selectModel(model: string): Promise<DesktopSnapshot>;
         selectReasoningEffort(effort: DesktopReasoningEffort): Promise<DesktopSnapshot>;
         selectModelSettings(settings: DesktopModelSettings): Promise<DesktopSnapshot>;
