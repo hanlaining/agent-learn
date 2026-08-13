@@ -2,6 +2,8 @@
 
 从 0 到 1 手写的 Codex-like 单 Agent Runtime 学习项目，当前已经完成 CLI 产品化、Skill Loader，以及 MCP stdio Tool 的 Agent / CLI 完整主链路。
 
+> “Codex-like”仅表示本学习项目借鉴了 Codex 等公开可见的产品概念和交互思路，不表示复制其专有源码，也不表示本项目由 OpenAI 开发、审核或认可。原创边界、第三方引用和 Codex 辅助使用情况见[《原创、借鉴、引用与 AI 辅助说明》](./原创借鉴与引用说明.md)。
+
 ## 当前能力
 
 ```text
@@ -70,3 +72,5 @@ API Key、Token、本机状态文件和敏感配置不得提交到仓库。
 - [MCP 收尾与 Electron 启动交接](./docs/工作交接-2026-08-04-MCP收尾与Electron启动.md)
 - [继续实现 Electron 单 Agent 桌面端 Prompt](./docs/PROMPT-继续实现Electron单Agent桌面端.md)
 - [Electron 真实 Thinking 与 Activity 分层展示方案](./docs/Electron-真实Thinking与Activity分层展示方案.md)
+
+如发现遗漏署名、引用不当或权利冲突，请通过本仓库 GitHub Issues 联系维护者；核实后将及时补充出处、修订或移除相关内容。
