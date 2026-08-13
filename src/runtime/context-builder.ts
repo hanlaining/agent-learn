@@ -242,5 +242,7 @@ function readTextContent(
     return undefined;
   }
 
-  return item.content.text;
+  return "modelText" in item.content && typeof item.content.modelText === "string"
+    ? item.content.modelText
+    : item.content.text;
 }

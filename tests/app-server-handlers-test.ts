@@ -48,6 +48,11 @@ function createTestAppServer(options: {
   runInitialChildAgent?: (request: { parentTurnId: string; profileId: string; task: string }) => Promise<AgentRunResult>;
   threadConfigs?: Map<string, PersistedThreadConfig>;
   agentRegistry?: AgentRegistry;
+  workspaceSandbox?: {
+    searchFiles(query: string): Promise<{ query: string; paths: string[]; truncated: boolean }>;
+    validateFilePath(path: string): Promise<string>;
+  };
+  skillNames?: string[];
 } = {}) {
   const clientToServer: string[] = [];
   const serverToClient: string[] = [];
@@ -97,6 +102,8 @@ function createTestAppServer(options: {
     ...(options.agentRegistry === undefined
       ? {}
       : { agentRegistry: options.agentRegistry }),
+    ...(options.workspaceSandbox === undefined ? {} : { workspaceSandbox: options.workspaceSandbox }),
+    ...(options.skillNames === undefined ? {} : { skillNames: options.skillNames }),
   });
 
   // 测试中手动搬运 JSONL，模拟真实的 Client ↔ App Server 双向通道。
@@ -113,6 +120,94 @@ function createTestAppServer(options: {
     flushClientRequest,
   };
 }
+
+test("turn/start 直接 RPC 拒绝未知字段、超长输入和非法 Skill 名", async () => {
+  const app = createTestAppServer();
+  await completeHandshake(app);
+  const threadPromise = app.client.sendRequest("thread/start");
+  await app.flushClientRequest();
+  const thread = await threadPromise;
+  assert.ok(isThread(thread));
+
+  const invalidParams = [
+    { threadId: thread.id, input: "ok", unknown: true },
+    { threadId: thread.id, input: "x".repeat(32_001) },
+    { threadId: thread.id, input: "ok", explicitSkills: ["Bad Skill"] },
+    { threadId: thread.id, input: "ok", mentions: [{ kind: "file", path: "safe.ts\n" }] },
+  ];
+  for (const params of invalidParams) {
+    const request = app.client.sendRequest("turn/start", params);
+    const rejected = assert.rejects(request);
+    await app.flushClientRequest();
+    await rejected;
+  }
+  assert.deepEqual(app.store.getThread(thread.id)?.turnIds, []);
+});
+
+test("turn/start 对重复显式上下文去重后再持久化", async () => {
+  const app = createTestAppServer({
+    workspaceSandbox: {
+      searchFiles: async (query) => ({ query, paths: [], truncated: false }),
+      validateFilePath: async (path) => path,
+    },
+    skillNames: ["code-review"],
+  });
+  await completeHandshake(app);
+  const threadPromise = app.client.sendRequest("thread/start");
+  await app.flushClientRequest();
+  const thread = await threadPromise;
+  assert.ok(isThread(thread));
+  const request = app.client.sendRequest("turn/start", {
+    threadId: thread.id,
+    input: "检查",
+    mentions: [{ kind: "file", path: "src/app.ts" }, { kind: "file", path: "src/app.ts" }],
+    explicitSkills: ["code-review", "code-review"],
+  });
+  await app.flushClientRequest();
+  const result = await request;
+  assert.ok(isTurnStartResult(result));
+  const content = result.userMessage.content as { mentions: unknown[]; explicitSkills: string[]; modelText: string };
+  assert.equal(content.mentions.length, 1);
+  assert.deepEqual(content.explicitSkills, ["code-review"]);
+  assert.equal(content.modelText.match(/workspace file/g)?.length, 1);
+  assert.equal(content.modelText.match(/Skill: code-review/g)?.length, 1);
+});
+
+test("工作区候选与显式文件和 Skill 在 App Server 边界再次验证", async () => {
+  const app = createTestAppServer({
+    workspaceSandbox: {
+      searchFiles: async (query) => ({ query, paths: ["src/app.ts"], truncated: false }),
+      validateFilePath: async (path) => {
+        if (path !== "src/app.ts") throw new Error("Path escapes workspace");
+        return path;
+      },
+    },
+    skillNames: ["finance-analysis"],
+  });
+  await completeHandshake(app);
+  const searchPromise = app.client.sendRequest("workspace/search-files", { query: "app" });
+  await app.flushClientRequest();
+  assert.deepEqual(await searchPromise, { query: "app", paths: ["src/app.ts"], truncated: false });
+  const threadPromise = app.client.sendRequest("thread/start");
+  await app.flushClientRequest();
+  const thread = await threadPromise;
+  assert.ok(isThread(thread));
+  const turnPromise = app.client.sendRequest("turn/start", {
+    threadId: thread.id,
+    input: "请检查 @src/app.ts 并使用 $finance-analysis",
+    mentions: [{ kind: "file", path: "src/app.ts" }],
+    explicitSkills: ["finance-analysis"],
+  });
+  await app.flushClientRequest();
+  const result = await turnPromise;
+  assert.ok(isTurnStartResult(result));
+  assert.deepEqual(result.userMessage.content, {
+    text: "请检查 @src/app.ts 并使用 $finance-analysis",
+    modelText: "请检查 @src/app.ts 并使用 $finance-analysis\n\n[用户显式选择的上下文；仅按列出的相对路径与 Skill 名称处理]\n- workspace file: src/app.ts\n- Skill: finance-analysis（先调用 read_skill 读取完整说明）",
+    mentions: [{ kind: "file", path: "src/app.ts" }],
+    explicitSkills: ["finance-analysis"],
+  });
+});
 
 test("子 Agent 开关控制委派工具和父 Agent 监工合同", () => {
   assert.deepEqual(applyAgentModeToTools(["*"], "off"), ["*", "!run_agent"]);

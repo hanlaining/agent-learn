@@ -41,6 +41,18 @@ export interface DesktopMessage {
   createdAt: string;
 }
 
+export interface DesktopMessageInput {
+  text: string;
+  mentions?: Array<{ kind: "file"; path: string }>;
+  explicitSkills?: string[];
+}
+
+export interface DesktopWorkspaceSearchResult {
+  query: string;
+  paths: string[];
+  truncated: boolean;
+}
+
 export type DesktopTurnState =
   | "idle"
   | "starting"
@@ -188,6 +200,29 @@ export interface DesktopPermissionRequest {
 export type DesktopPermissionDecision =
   | { decision: "allow"; scope: "once" | "session" }
   | { decision: "deny" };
+
+export function isDesktopMessageInput(value: unknown): value is DesktopMessageInput {
+  if (!isRecord(value) || typeof value.text !== "string") return false;
+  const keys = Object.keys(value);
+  if (keys.some((key) => !["text", "mentions", "explicitSkills"].includes(key))) return false;
+  return (value.mentions === undefined || (
+    Array.isArray(value.mentions) && value.mentions.length <= 20 && value.mentions.every((mention) =>
+      isRecord(mention) && mention.kind === "file" && typeof mention.path === "string" &&
+      Object.keys(mention).every((key) => key === "kind" || key === "path")
+    )
+  )) && (value.explicitSkills === undefined || (
+    Array.isArray(value.explicitSkills) && value.explicitSkills.length <= 20 &&
+    value.explicitSkills.every((name) => typeof name === "string")
+  ));
+}
+
+export function isDesktopWorkspaceSearchResult(
+  value: unknown,
+): value is DesktopWorkspaceSearchResult {
+  return isRecord(value) && typeof value.query === "string" &&
+    Array.isArray(value.paths) && value.paths.every((path) => typeof path === "string") &&
+    typeof value.truncated === "boolean";
+}
 
 export function isDesktopSnapshot(
   value: unknown,

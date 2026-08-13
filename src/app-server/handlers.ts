@@ -42,6 +42,7 @@ import type { AgentRunStore } from "../agents/agent-run-store.js";
 import type { AgentRunResult } from "../agents/agent-run.js";
 import type { AgentRuntimeStore } from "../agents/agent-runtime-store.js";
 import type { AgentRegistry } from "../agents/agent-registry.js";
+import type { WorkspaceSandbox } from "../sandbox/workspace-sandbox.js";
 import { DEFAULT_AGENT_TEAM_CONFIG, normalizeAgentTeamConfig } from "../agents/agent-runtime.js";
 import type {
   PersistedRuntimeSession,
@@ -67,6 +68,8 @@ export interface AppServerDependencies {
   }) => Promise<AgentRunResult>;
   threadConfigs?: Map<string, PersistedThreadConfig>;
   runtimeSessions?: Map<string, PersistedRuntimeSession>;
+  workspaceSandbox?: Pick<WorkspaceSandbox, "searchFiles" | "validateFilePath">;
+  skillNames?: readonly string[];
 }
 
 /**
@@ -94,6 +97,8 @@ export function registerAppServerHandlers(
     runInitialChildAgent,
     threadConfigs = new Map(),
     runtimeSessions = new Map(),
+    workspaceSandbox,
+    skillNames = [],
   } = dependencies;
 
   let clientInitialized = false;
@@ -207,6 +212,15 @@ export function registerAppServerHandlers(
     return cloneRuntimeCapabilities(runtimeCapabilities);
   });
 
+  connection.onRequest("workspace/search-files", async (params) => {
+    requireInitialized();
+    if (workspaceSandbox === undefined || !isRecord(params) ||
+      typeof params.query !== "string") {
+      throw new Error("Invalid workspace file search");
+    }
+    return workspaceSandbox.searchFiles(params.query, { maxResults: 20, maxDepth: 6 });
+  });
+
   connection.onRequest("agent-run/list", (params) => {
     requireInitialized();
     const threadId = isRecord(params) && typeof params.threadId === "string"
@@ -284,6 +298,18 @@ export function registerAppServerHandlers(
     const request = parseTurnStartParams(params);
 
     // 第二道边界：Store 验证 Thread 存在且仍然 active。
+    const uniqueMentions = [...new Map(request.mentions.map((mention) => [mention.path, mention])).values()];
+    const validatedMentions = await Promise.all(uniqueMentions.map(async (mention) => ({
+      kind: "file" as const,
+      path: await requireWorkspaceSandbox(workspaceSandbox).validateFilePath(mention.path),
+    })));
+    const knownSkillNames = new Set(skillNames);
+    const explicitSkills = [...new Set(request.explicitSkills)];
+    if (explicitSkills.some((name) => !knownSkillNames.has(name))) {
+      throw new Error("turn/start contains an unavailable Skill");
+    }
+    const modelText = appendExplicitContext(request.input, validatedMentions, explicitSkills);
+
     const turn = lifecycleStore.createTurn(
       request.threadId,
     );
@@ -294,6 +320,9 @@ export function registerAppServerHandlers(
       "user_message",
       {
         text: request.input,
+        ...(modelText === request.input ? {} : { modelText }),
+        ...(validatedMentions.length === 0 ? {} : { mentions: validatedMentions }),
+        ...(explicitSkills.length === 0 ? {} : { explicitSkills }),
       },
     );
 
@@ -451,6 +480,28 @@ export function registerAppServerHandlers(
       return summary;
     },
   );
+}
+
+function requireWorkspaceSandbox(
+  sandbox: AppServerDependencies["workspaceSandbox"],
+): NonNullable<AppServerDependencies["workspaceSandbox"]> {
+  if (sandbox === undefined) throw new Error("Workspace file mentions are unavailable");
+  return sandbox;
+}
+
+function appendExplicitContext(
+  text: string,
+  mentions: Array<{ kind: "file"; path: string }>,
+  explicitSkills: string[],
+): string {
+  if (mentions.length === 0 && explicitSkills.length === 0) return text;
+  return [
+    text,
+    "",
+    "[用户显式选择的上下文；仅按列出的相对路径与 Skill 名称处理]",
+    ...mentions.map((mention) => `- workspace file: ${mention.path}`),
+    ...explicitSkills.map((name) => `- Skill: ${name}（先调用 read_skill 读取完整说明）`),
+  ].join("\n");
 }
 
 function intersectCapabilities(left: readonly string[], right: readonly string[] | undefined): string[] {

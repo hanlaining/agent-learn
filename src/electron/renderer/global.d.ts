@@ -3,12 +3,14 @@ import type {
 } from "../runtime-status.js";
 import type {
   DesktopEvent,
+  DesktopMessageInput,
   DesktopPermissionDecision,
   DesktopPermissionRequest,
   DesktopModelSettings,
   DesktopSendResult,
   DesktopSnapshot,
   DesktopReasoningEffort,
+  DesktopWorkspaceSearchResult,
 } from "../desktop-types.js";
 
 declare module "*.css";
@@ -26,7 +28,8 @@ declare global {
         getSnapshot(): Promise<DesktopSnapshot>;
         createThread(): Promise<DesktopSnapshot>;
         selectThread(threadId: string): Promise<DesktopSnapshot>;
-        sendMessage(text: string): Promise<DesktopSendResult>;
+        sendMessage(input: DesktopMessageInput): Promise<DesktopSendResult>;
+        searchWorkspaceFiles(query: string): Promise<DesktopWorkspaceSearchResult>;
         cancelTurn(): Promise<boolean>;
         selectModel(model: string): Promise<DesktopSnapshot>;
         selectReasoningEffort(effort: DesktopReasoningEffort): Promise<DesktopSnapshot>;

@@ -44,6 +44,11 @@ import {
   type RuntimeFailureCode,
   type RuntimeStatus,
 } from "./runtime-status.js";
+import {
+  isDesktopWorkspaceSearchResult,
+  type DesktopMessageInput,
+  type DesktopWorkspaceSearchResult,
+} from "./desktop-types.js";
 
 export interface AppServerClientOptions {
   command: string;
@@ -185,6 +190,14 @@ export class AppServerClient {
     return value;
   }
 
+  async searchWorkspaceFiles(query: string): Promise<DesktopWorkspaceSearchResult> {
+    const value = await this.sendRequest("workspace/search-files", { query });
+    if (!isDesktopWorkspaceSearchResult(value)) {
+      throw new Error("Invalid workspace/search-files response");
+    }
+    return value;
+  }
+
   async listAgentRuns(threadId?: string): Promise<import("../agents/agent-run.js").AgentRun[]> {
     const value = await this.sendRequest("agent-run/list", threadId === undefined ? {} : { threadId });
     if (!Array.isArray(value)) throw new Error("Invalid agent-run/list response");
@@ -244,10 +257,11 @@ export class AppServerClient {
   async startTurn(
     threadId: string,
     input: string,
+    context: Omit<DesktopMessageInput, "text"> = {},
   ): Promise<TurnStartResult> {
     const value = await this.sendRequest(
       "turn/start",
-      { threadId, input },
+      { threadId, input, ...context },
     );
 
     if (!isTurnStartResult(value)) {

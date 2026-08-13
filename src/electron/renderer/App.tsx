@@ -10,6 +10,7 @@ import {
   Globe2,
   Menu,
   MoreHorizontal,
+  Command,
   MessageSquare,
   PanelLeftClose,
   PanelLeftOpen,
@@ -55,6 +56,22 @@ import {
   coalesceDesktopEvents,
   isNearBottom,
 } from "./runtime-ui.js";
+import { DESKTOP_COMMAND_REGISTRY } from "../../shortcuts/builtins.js";
+import { CommandPalette } from "./CommandPalette.js";
+import { ComposerSuggestions } from "./ComposerSuggestions.js";
+import {
+  findLatestAssistantOutput,
+  resolveDesktopShortcut,
+  type CommandPaletteItem,
+} from "./command-palette.js";
+import {
+  createComposerMessageInput,
+  filterComposerSuggestions,
+  findComposerToken,
+  moveComposerSelection,
+  replaceComposerToken,
+  type ComposerSuggestion,
+} from "./composer-suggestions.js";
 
 type InspectorTab = "changes" | "activity" | "terminal" | "extensions";
 
@@ -85,9 +102,18 @@ export function App() {
     INITIAL_DESKTOP_UI_STATE,
   );
   const [input, setInput] = useState("");
+  const [composerCursor, setComposerCursor] = useState(0);
+  const [composerSelectedIndex, setComposerSelectedIndex] = useState(0);
+  const [dismissedComposerToken, setDismissedComposerToken] = useState<string>();
+  const [workspacePaths, setWorkspacePaths] = useState<string[]>([]);
+  const [workspaceSearchLoading, setWorkspaceSearchLoading] = useState(false);
+  const [selectedFiles, setSelectedFiles] = useState<string[]>([]);
+  const [selectedSkills, setSelectedSkills] = useState<string[]>([]);
   const draftsRef = useRef(new Map<string, string>());
   const [historyQuery, setHistoryQuery] = useState("");
   const [showHistorySearch, setShowHistorySearch] = useState(false);
+  const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
+  const [shortcutNotice, setShortcutNotice] = useState<string>();
   const [agentSwitchOpen, setAgentSwitchOpen] = useState(false);
   const [permissionMenuOpen, setPermissionMenuOpen] = useState(false);
   const [modelMenuOpen, setModelMenuOpen] = useState(false);
@@ -104,6 +130,8 @@ export function App() {
   const [showJumpToBottom, setShowJumpToBottom] = useState(false);
   const [permissionRequest, setPermissionRequest] = useState<DesktopPermissionRequest>();
   const timelineRef = useRef<HTMLDivElement>(null);
+  const historySearchRef = useRef<HTMLInputElement>(null);
+  const composerRef = useRef<HTMLTextAreaElement>(null);
   const autoFollowRef = useRef(true);
   const pendingEventsRef = useRef<DesktopEvent[]>([]);
   const eventFrameRef = useRef<number | undefined>(undefined);
@@ -196,7 +224,7 @@ export function App() {
   }, [ui.runtimeSession?.turnId, ui.snapshot?.activeThreadId]);
 
   useEffect(() => {
-    if (!agentSwitchOpen && !permissionMenuOpen && !modelMenuOpen && historyMenu === undefined) return;
+    if (!agentSwitchOpen && !permissionMenuOpen && !modelMenuOpen && historyMenu === undefined && !commandPaletteOpen) return;
 
     const closeOnEscape = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
@@ -205,6 +233,7 @@ export function App() {
         setModelMenuOpen(false);
         setModelMenuView("simple");
         setHistoryMenu(undefined);
+        setCommandPaletteOpen(false);
       }
     };
 
@@ -212,7 +241,7 @@ export function App() {
     return () => {
       window.removeEventListener("keydown", closeOnEscape);
     };
-  }, [agentSwitchOpen, permissionMenuOpen, modelMenuOpen, historyMenu]);
+  }, [agentSwitchOpen, permissionMenuOpen, modelMenuOpen, historyMenu, commandPaletteOpen]);
 
   function jumpToBottom() {
     autoFollowRef.current = true;
@@ -263,7 +292,11 @@ export function App() {
     setInput("");
     dispatch({ type: "clear-error" });
     try {
-      await window.godAgent.desktop.sendMessage(text);
+      await window.godAgent.desktop.sendMessage(
+        createComposerMessageInput(text, selectedFiles, selectedSkills),
+      );
+      setSelectedFiles([]);
+      setSelectedSkills([]);
     } catch (error) {
       dispatch({ type: "error", message: readError(error) });
     }
@@ -285,6 +318,175 @@ export function App() {
   const activeAgentCount = ui.snapshot?.agentRuns.filter((run) =>
     ["queued", "running", "waiting_children", "resuming"].includes(run.status),
   ).length ?? 0;
+  const latestAssistantOutput = findLatestAssistantOutput(
+    ui.snapshot?.messages ?? [],
+    ui.runtimeSession,
+  );
+  const commandPaletteItems = useMemo<CommandPaletteItem[]>(() =>
+    DESKTOP_COMMAND_REGISTRY.list().map((action) => {
+      if (action.id === "settings.keymap") {
+        return { action, enabled: false, disabledReason: "阶段 D 开放个性化键位" };
+      }
+      if (action.id === "output.copyLatest" && latestAssistantOutput === undefined) {
+        return { action, enabled: false, disabledReason: "当前还没有可复制的完整回答" };
+      }
+      if (action.id === "session.model" && (capabilities?.models.length ?? 0) === 0) {
+        return { action, enabled: false, disabledReason: "当前没有可用模型" };
+      }
+      if (action.id === "skill.pick" && (capabilities?.skills.length ?? 0) === 0) {
+        return { action, enabled: false, disabledReason: "当前没有已发现的 Skill" };
+      }
+      if (runtime.state !== "connected" && action.id !== "composer.commandPalette") {
+        return { action, enabled: false, disabledReason: "Runtime 尚未连接" };
+      }
+      return { action, enabled: true };
+    }),
+  [capabilities?.models.length, capabilities?.skills.length, latestAssistantOutput, runtime.state]);
+  const rawComposerToken = useMemo(
+    () => findComposerToken(input, composerCursor),
+    [composerCursor, input],
+  );
+  const rawComposerTokenKey = rawComposerToken === undefined
+    ? undefined
+    : `${rawComposerToken.start}:${rawComposerToken.trigger}:${rawComposerToken.query}`;
+  const composerToken = rawComposerTokenKey === dismissedComposerToken
+    ? undefined
+    : rawComposerToken;
+  const composerSuggestions = useMemo<ComposerSuggestion[]>(() => {
+    if (composerToken === undefined) return [];
+    const source: ComposerSuggestion[] = composerToken.kind === "slash"
+      ? commandPaletteItems
+        .filter((item) => item.action.slashCommand !== undefined)
+        .map((item) => ({
+          id: item.action.id, kind: "slash", value: item.action.slashCommand!,
+          label: item.action.label, description: item.action.description,
+          disabled: !item.enabled, ...(item.disabledReason === undefined ? {} : { disabledReason: item.disabledReason }),
+        }))
+      : composerToken.kind === "skill"
+        ? (capabilities?.skills ?? []).map((skill) => ({
+          id: `skill:${skill.name}`, kind: "skill", value: `$${skill.name}`,
+          label: skill.name, description: skill.description,
+        }))
+        : workspacePaths.map((path) => ({
+          id: `file:${path}`, kind: "file", value: `@${path}`,
+          label: path, description: "当前工作区文件",
+        }));
+    return filterComposerSuggestions(source, composerToken.query);
+  }, [capabilities?.skills, commandPaletteItems, composerToken, workspacePaths]);
+
+  useEffect(() => {
+    setComposerSelectedIndex(0);
+    if (composerToken?.kind !== "file") {
+      setWorkspacePaths([]);
+      setWorkspaceSearchLoading(false);
+      return;
+    }
+    let active = true;
+    setWorkspaceSearchLoading(true);
+    const timer = window.setTimeout(() => {
+      void window.godAgent.desktop.searchWorkspaceFiles(composerToken.query)
+        .then((result) => { if (active) setWorkspacePaths(result.paths); })
+        .catch(() => { if (active) setWorkspacePaths([]); })
+        .finally(() => { if (active) setWorkspaceSearchLoading(false); });
+    }, 120);
+    return () => { active = false; window.clearTimeout(timer); };
+  }, [composerToken?.kind, composerToken?.query]);
+
+  function selectComposerSuggestion(item: ComposerSuggestion) {
+    if (item.disabled || composerToken === undefined) return;
+    if (item.kind === "slash") {
+      setInput(`${input.slice(0, composerToken.start)}${input.slice(composerToken.end)}`.trimStart());
+      runDesktopAction(item.id);
+      return;
+    }
+    const replacement = replaceComposerToken(input, composerToken, item.value);
+    setInput(replacement.text);
+    setComposerCursor(replacement.cursor);
+    if (item.kind === "file") setSelectedFiles((value) => [...new Set([...value, item.value.slice(1)])]);
+    if (item.kind === "skill") setSelectedSkills((value) => [...new Set([...value, item.value.slice(1)])]);
+    window.requestAnimationFrame(() => {
+      composerRef.current?.focus();
+      composerRef.current?.setSelectionRange(replacement.cursor, replacement.cursor);
+    });
+  }
+
+  function openCommandPalette() {
+    setAgentSwitchOpen(false);
+    setPermissionMenuOpen(false);
+    setModelMenuOpen(false);
+    setHistoryMenu(undefined);
+    setCommandPaletteOpen(true);
+  }
+
+  function openHistorySearch() {
+    setCommandPaletteOpen(false);
+    setLeftOpen(true);
+    setShowHistorySearch(true);
+    window.requestAnimationFrame(() => historySearchRef.current?.focus());
+  }
+
+  async function copyLatestAssistantOutput() {
+    if (latestAssistantOutput === undefined) return;
+    try {
+      await navigator.clipboard.writeText(latestAssistantOutput);
+      setShortcutNotice("已复制最近一次完整回答");
+    } catch {
+      setShortcutNotice("复制失败，请检查系统剪贴板权限");
+    }
+  }
+
+  function runDesktopAction(actionId: string) {
+    setCommandPaletteOpen(false);
+    setShortcutNotice(undefined);
+    switch (actionId) {
+      case "composer.commandPalette":
+      case "app.help":
+        openCommandPalette();
+        break;
+      case "chat.search":
+        openHistorySearch();
+        break;
+      case "chat.new":
+        void replaceSnapshot(window.godAgent.desktop.createThread());
+        break;
+      case "output.copyLatest":
+        void copyLatestAssistantOutput();
+        break;
+      case "session.status":
+        setRightOpen(true);
+        setInspectorTab("activity");
+        break;
+      case "session.model":
+        setModelMenuView(activePowerIndex < 0 ? "advanced" : "simple");
+        setModelMenuOpen(true);
+        break;
+      case "session.permissions":
+        setPermissionMenuOpen(true);
+        break;
+      case "skill.pick":
+        setRightOpen(true);
+        setInspectorTab("extensions");
+        break;
+    }
+  }
+
+  useEffect(() => {
+    const handleShortcut = (event: KeyboardEvent) => {
+      const actionId = resolveDesktopShortcut(event);
+      if (actionId === undefined) return;
+      event.preventDefault();
+      const item = commandPaletteItems.find(
+        (candidate) => candidate.action.id === actionId,
+      );
+      if (item?.enabled !== true) {
+        setShortcutNotice(item?.disabledReason ?? "当前无法执行此快捷操作");
+        return;
+      }
+      runDesktopAction(actionId);
+    };
+    window.addEventListener("keydown", handleShortcut);
+    return () => window.removeEventListener("keydown", handleShortcut);
+  }, [commandPaletteItems]);
 
   return (
     <div
@@ -326,6 +528,7 @@ export function App() {
             <div className="history-search">
               <Search />
               <input
+                ref={historySearchRef}
                 value={historyQuery}
                 placeholder="搜索任务"
                 onChange={(event) => setHistoryQuery(event.target.value)}
@@ -458,6 +661,9 @@ export function App() {
               <span>{ui.snapshot?.agentConfig.model ?? "Runtime"} · {ui.snapshot?.agentConfig.reasoningEffort ?? "high"}</span>
             </div>
             <div className="workspace-actions">
+              <button className="command-palette-trigger" type="button" onClick={openCommandPalette}>
+                <Command /><span>命令</span><kbd>Ctrl + Shift + P</kbd>
+              </button>
               <span className="runtime-state" data-state={runtime.state}>
                 <i />
                 <span>{runtime.message}</span>
@@ -550,20 +756,53 @@ export function App() {
           </div>
 
           <footer className="composer-area">
+            {shortcutNotice !== undefined && <div className="shortcut-notice" role="status">{shortcutNotice}</div>}
             {ui.error !== undefined && <div className="safe-error">{ui.error}</div>}
             <div className="composer">
               <textarea
+                ref={composerRef}
                 value={input}
                 placeholder="输入任务，Shift+Enter 换行"
                 disabled={runtime.state !== "connected"}
-                onChange={(event) => setInput(event.target.value)}
+                onChange={(event) => { setInput(event.target.value); setComposerCursor(event.target.selectionStart); setDismissedComposerToken(undefined); }}
+                onClick={(event) => { setComposerCursor(event.currentTarget.selectionStart); setDismissedComposerToken(undefined); }}
+                onKeyUp={(event) => setComposerCursor(event.currentTarget.selectionStart)}
                 onKeyDown={(event) => {
+                  if (!event.nativeEvent.isComposing && composerToken !== undefined) {
+                    if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+                      event.preventDefault();
+                      setComposerSelectedIndex((value) => moveComposerSelection(value, event.key === "ArrowDown" ? 1 : -1, composerSuggestions.length));
+                      return;
+                    }
+                    if ((event.key === "Enter" || event.key === "Tab") && !event.shiftKey) {
+                      const suggestion = composerSuggestions[composerSelectedIndex];
+                      if (suggestion !== undefined && !suggestion.disabled) {
+                        event.preventDefault();
+                        selectComposerSuggestion(suggestion);
+                        return;
+                      }
+                    }
+                    if (event.key === "Escape") {
+                      event.preventDefault();
+                      setDismissedComposerToken(rawComposerTokenKey);
+                      return;
+                    }
+                  }
                   if (event.key === "Enter" && !event.shiftKey) {
                     event.preventDefault();
                     void sendMessage();
                   }
                 }}
               />
+              {composerToken !== undefined && (
+                <ComposerSuggestions
+                  items={composerSuggestions}
+                  selectedIndex={composerSelectedIndex}
+                  loading={composerToken.kind === "file" && workspaceSearchLoading}
+                  onHover={setComposerSelectedIndex}
+                  onSelect={selectComposerSuggestion}
+                />
+              )}
               <div className="composer-toolbar">
                 <div>
                   <button className="icon-button" type="button" aria-label="添加上下文" disabled><Plus /></button>
@@ -714,6 +953,13 @@ export function App() {
           </div>
         </aside>
       </div>
+      {commandPaletteOpen && (
+        <CommandPalette
+          items={commandPaletteItems}
+          onClose={() => setCommandPaletteOpen(false)}
+          onRun={runDesktopAction}
+        />
+      )}
       {permissionRequest !== undefined && (
         <div className="permission-backdrop" role="presentation">
           <section className="permission-dialog" role="dialog" aria-modal="true" aria-labelledby="permission-title">
