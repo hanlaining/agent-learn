@@ -402,6 +402,8 @@ test("产品双轮 Return 使用受控阶段按钮且返工状态不标红", () 
   assert.match(appSource, /产品生成第一轮 Return/);
   assert.match(appSource, /原产品 Thread 返工（Attempt 2）/);
   assert.match(appSource, /God 接收并单次汇总/);
+  assert.match(appSource, /工程角色实现项目/);
+  assert.match(appSource, /测试角色独立验收/);
   assert.match(preloadSource, /desktop:advance-fixed-product/);
   assert.match(cssSource, /fixed-product-advance/);
   assert.doesNotMatch(cssSource, /rework[^}]*var\(--negative\)/s);
@@ -429,6 +431,102 @@ test("真实 Agent 对话提示仅在安全错误存在时使用错误色", () =
     styles,
     /\.history-agent-detail\.is-error \{ color: var\(--negative\)/,
   );
+});
+
+test("可恢复 Runtime 错误使用琥珀色而不是红色", () => {
+  const timeline = readFileSync(resolve("src/electron/renderer/RuntimeTimeline.tsx"), "utf8");
+  const styles = readFileSync(resolve("src/electron/renderer/styles.css"), "utf8");
+  assert.match(timeline, /data-retryable=\{item\.retryable\}/);
+  assert.match(styles, /\.runtime-error\[data-retryable="true"\]/);
+  assert.match(styles, /color: #8a5a12/);
+});
+
+test("三栏支持小手拖拽、联动边界、宽度记忆与双击复位", () => {
+  const app = readFileSync(resolve("src/electron/renderer/App.tsx"), "utf8");
+  const styles = readFileSync(resolve("src/electron/renderer/styles.css"), "utf8");
+  assert.match(app, /className="left-sidebar-resizer pane-resizer"/);
+  assert.match(app, /className="right-inspector-resizer pane-resizer"/);
+  assert.match(app, /role="separator"/);
+  assert.match(app, /onPointerDown=\{startLeftSidebarResize\}/);
+  assert.match(app, /onPointerDown=\{startRightInspectorResize\}/);
+  assert.match(app, /onDoubleClick=\{resetThreePaneWidths\}/);
+  assert.match(app, /god-agent:left-sidebar-width/);
+  assert.match(app, /god-agent:right-workbench-width/);
+  assert.match(app, /visibleRightInspectorWidth = clamp/);
+  assert.match(app, /MIN_WORKSPACE_WIDTH/);
+  assert.match(app, /window\.addEventListener\("resize", updateViewportWidth\)/);
+  assert.match(styles, /\.pane-resizer \{[\s\S]*?cursor: grab/);
+  assert.match(styles, /cursor: grabbing/);
+  assert.match(styles, /var\(--left-sidebar-width, 236px\)/);
+  assert.match(styles, /var\(--right-inspector-width, 520px\)/);
+});
+
+test("右侧浏览器使用 Codex 风格多标签、真实地址栏与隔离网页区域", () => {
+  const app = readFileSync(resolve("src/electron/renderer/App.tsx"), "utf8");
+  const styles = readFileSync(resolve("src/electron/renderer/styles.css"), "utf8");
+  const main = readFileSync(resolve("src/electron/main.cjs"), "utf8");
+  const browserManager = readFileSync(resolve("src/electron/browser-manager.cjs"), "utf8");
+  assert.match(app, /className="browser-tab-strip"/);
+  assert.match(app, /className="browser-tabs"/);
+  assert.match(app, /className="browser-navigation"/);
+  assert.match(app, /className="browser-address"/);
+  assert.match(app, /aria-label="地址栏"/);
+  assert.match(app, /aria-label="新建标签页"/);
+  assert.match(app, /aria-label="后退"/);
+  assert.match(app, /aria-label="前进"/);
+  assert.match(app, /activeTab\.isLoading \? "停止加载" : "刷新"/);
+  assert.match(app, /aria-label="外部打开"/);
+  assert.match(app, /className="browser-surface"/);
+  assert.doesNotMatch(app, /<iframe/);
+  assert.match(main, /WebContentsView/);
+  assert.match(browserManager, /sandbox: true/);
+  assert.match(browserManager, /contextIsolation: true/);
+  assert.match(browserManager, /nodeIntegration: false/);
+  assert.match(browserManager, /setWindowOpenHandler/);
+  assert.match(browserManager, /before-input-event/);
+  assert.match(app, /browser\.onCommand/);
+  assert.match(styles, /\.browser-workbench \{[\s\S]*grid-template-rows: 40px 40px minmax\(0, 1fr\)/);
+  assert.doesNotMatch(styles, /\.right-inspector \{[^}]*position: absolute/s);
+});
+
+test("中间工作区内容按自身容器安全换行且不撑破三栏", () => {
+  const styles = readFileSync(resolve("src/electron/renderer/styles.css"), "utf8");
+  assert.match(styles, /\.main-workspace \{[\s\S]*container-name: workspace;[\s\S]*container-type: inline-size;/);
+  assert.match(styles, /\.message > div,[\s\S]*\.safe-markdown \{ min-width: 0; max-width: 100%; \}/);
+  assert.match(styles, /\.message-copy \{[\s\S]*overflow-wrap: anywhere;[\s\S]*word-break: break-word;/);
+  assert.match(styles, /\.runtime-timeline \{[\s\S]*max-width: calc\(100% - 31px\)/);
+  assert.match(styles, /\.safe-markdown table \{ display: block; max-width: 100%; overflow-x: auto; \}/);
+  assert.match(styles, /@container workspace \(max-width: 560px\) \{[\s\S]*\.runtime-summary \{ flex-wrap: wrap;/);
+  assert.match(styles, /\.agent-acceptance-summary > div \{ grid-template-columns: repeat\(2, minmax\(0, 1fr\)\)/);
+});
+
+test("输入工具栏与左栏按各自容器切换紧凑模式", () => {
+  const app = readFileSync(resolve("src/electron/renderer/App.tsx"), "utf8");
+  const styles = readFileSync(resolve("src/electron/renderer/styles.css"), "utf8");
+  assert.match(app, /const MIN_LEFT_SIDEBAR_WIDTH = 108/);
+  assert.match(app, /className="control-label-short">权限</);
+  assert.match(app, /className="control-label-short">模型</);
+  assert.match(app, /className="control-label-short">子 Agent</);
+  assert.match(styles, /\.left-sidebar \{[\s\S]*container-name: sidebar;[\s\S]*container-type: inline-size;/);
+  assert.match(styles, /\.composer-toolbar \{[\s\S]*flex-wrap: wrap;/);
+  assert.match(styles, /@container sidebar \(max-width: 210px\)/);
+  assert.match(styles, /@container sidebar \(max-width: 140px\)/);
+});
+
+test("右侧浏览器按容器降级且三栏不再组合出横向最小宽度", () => {
+  const app = readFileSync(resolve("src/electron/renderer/App.tsx"), "utf8");
+  const styles = readFileSync(resolve("src/electron/renderer/styles.css"), "utf8");
+  assert.match(app, /const MIN_RIGHT_INSPECTOR_WIDTH = 240/);
+  assert.match(app, /const MIN_WORKSPACE_WIDTH = 280/);
+  assert.match(app, /className="browser-history-action"/);
+  assert.match(app, /className="browser-secondary-action"/);
+  assert.match(styles, /\.right-inspector \{[\s\S]*container-name: inspector;[\s\S]*container-type: inline-size;/);
+  assert.match(styles, /grid-template-columns: minmax\(0, var\(--left-sidebar-width, 236px\)\) minmax\(0, 1fr\) minmax\(0, var\(--right-inspector-width, 520px\)\)/);
+  assert.match(styles, /\.browser-tabs \{[\s\S]*overflow-x: auto;/);
+  assert.match(styles, /\.browser-surface \{ width: 100%; height: 100%; min-width: 0;/);
+  assert.match(styles, /\.browser-address input \{ width: 100%; min-width: 0;/);
+  assert.match(styles, /@container inspector \(max-width: 300px\)/);
+  assert.doesNotMatch(styles, /@media \(max-width: 900px\)[\s\S]*\.desktop-layout \{ min-width:/);
 });
 
 function session(status: RuntimeSession["status"]): RuntimeSession {

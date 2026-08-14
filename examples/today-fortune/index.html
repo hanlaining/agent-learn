@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>今日运势签</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <main class="shell">
+    <header>
+      <span class="seal">签</span>
+      <p>东方灵感 · 轻松一刻</p>
+      <h1>今日运势签</h1>
+      <p class="lead">静心一瞬，为今天抽取一份温柔提示。</p>
+    </header>
+    <section class="card form-card" aria-labelledby="fortune-form-title">
+      <h2 id="fortune-form-title">写下你的称呼</h2>
+      <label class="name-field"><span>昵称</span><input id="nickname" maxlength="24" autocomplete="off" placeholder="例如：小满"></label>
+      <p id="nameHint" class="hint" aria-live="polite"></p>
+      <fieldset>
+        <legend>选择今天想问的主题</legend>
+        <div class="topics">
+          <label><input type="radio" name="topic" value="事业" checked><span>事业<small>方向与行动</small></span></label>
+          <label><input type="radio" name="topic" value="感情"><span>感情<small>关系与表达</small></span></label>
+          <label><input type="radio" name="topic" value="财运"><span>财运<small>节奏与取舍</small></span></label>
+        </div>
+      </fieldset>
+      <button id="drawButton" class="draw" type="button"><span>抽取今日签</span></button>
+      <p class="entertainment">签文仅供娱乐与自我启发，不构成现实决策建议。</p>
+    </section>
+    <section id="result" class="card result" hidden aria-live="polite">
+      <div id="loading" class="loading" hidden><span></span><p>正在为你静心抽签…</p></div>
+      <div id="fortuneContent" hidden>
+        <div class="result-head"><div><p id="resultMeta"></p><h2 id="level"></h2></div><span id="topicBadge"></span></div>
+        <blockquote id="verse"></blockquote>
+        <div class="reading"><h3>白话解签</h3><p id="meaning"></p></div>
+        <div class="advice"><h3>今日行动</h3><ol id="actions"></ol></div>
+        <button id="redrawButton" class="secondary" type="button">重新抽签</button>
+      </div>
+    </section>
+  </main>
+  <script src="app.js" defer></script>
+</body>
+</html>

@@ -1,12 +1,15 @@
 import {
   Activity,
   ArrowDown,
+  ArrowLeft,
+  ArrowRight,
   Bot,
   ChevronDown,
   ChevronRight,
   CircleCheck,
   CircleDashed,
   FileCode2,
+  ExternalLink,
   Globe2,
   Menu,
   MoreHorizontal,
@@ -16,6 +19,7 @@ import {
   PanelRightClose,
   PanelRightOpen,
   Plus,
+  RotateCw,
   Search,
   Settings,
   Shield,
@@ -28,11 +32,16 @@ import {
   Plug,
 } from "lucide-react";
 import {
+  useCallback,
   useEffect,
   useMemo,
   useReducer,
   useRef,
   useState,
+} from "react";
+import type {
+  CSSProperties,
+  PointerEvent as ReactPointerEvent,
 } from "react";
 
 import type {
@@ -46,6 +55,7 @@ import type {
 import type {
   RuntimeCapabilities,
 } from "../../app-server/runtime-capabilities.js";
+import type { BrowserState } from "./global.js";
 import {
   desktopReducer,
   INITIAL_DESKTOP_UI_STATE,
@@ -56,7 +66,15 @@ import {
   isNearBottom,
 } from "./runtime-ui.js";
 
-type InspectorTab = "changes" | "activity" | "terminal" | "extensions";
+type InspectorTab = "changes" | "activity" | "terminal" | "browser" | "extensions";
+
+const DEFAULT_LEFT_SIDEBAR_WIDTH = 236;
+const MIN_LEFT_SIDEBAR_WIDTH = 108;
+const MAX_LEFT_SIDEBAR_WIDTH = 360;
+const DEFAULT_RIGHT_INSPECTOR_WIDTH = 520;
+const MIN_RIGHT_INSPECTOR_WIDTH = 240;
+const MAX_RIGHT_INSPECTOR_WIDTH = 760;
+const MIN_WORKSPACE_WIDTH = 280;
 
 const RUNNING_STATES = new Set([
   "starting",
@@ -103,13 +121,92 @@ export function App() {
   );
   const [leftOpen, setLeftOpen] = useStoredBoolean("god-agent:left-open", true);
   const [rightOpen, setRightOpen] = useStoredBoolean("god-agent:right-open", true);
+  const [leftSidebarWidth, setLeftSidebarWidth] = useStoredNumber(
+    "god-agent:left-sidebar-width",
+    DEFAULT_LEFT_SIDEBAR_WIDTH,
+  );
+  const [rightInspectorWidth, setRightInspectorWidth] = useStoredNumber(
+    "god-agent:right-workbench-width",
+    DEFAULT_RIGHT_INSPECTOR_WIDTH,
+  );
+  const [sidebarResizing, setSidebarResizing] = useState(false);
+  const [inspectorResizing, setInspectorResizing] = useState(false);
   const [inspectorTab, setInspectorTab] = useState<InspectorTab>("activity");
+  const [preview, setPreview] = useState<{ state: "stopped" } | { state: "running"; url: string }>({ state: "stopped" });
+  const [previewBusy, setPreviewBusy] = useState(false);
+  const [browserState, setBrowserState] = useState<BrowserState>();
   const [showJumpToBottom, setShowJumpToBottom] = useState(false);
   const [permissionRequest, setPermissionRequest] = useState<DesktopPermissionRequest>();
+  const [viewportWidth, setViewportWidth] = useState(() => window.innerWidth);
   const timelineRef = useRef<HTMLDivElement>(null);
   const autoFollowRef = useRef(true);
   const pendingEventsRef = useRef<DesktopEvent[]>([]);
   const eventFrameRef = useRef<number | undefined>(undefined);
+
+  useEffect(() => {
+    const updateViewportWidth = () => setViewportWidth(window.innerWidth);
+    window.addEventListener("resize", updateViewportWidth);
+    return () => window.removeEventListener("resize", updateViewportWidth);
+  }, []);
+
+  const resizeLeftSidebar = useCallback((clientX: number) => {
+    const rightWidth = rightOpen ? clamp(rightInspectorWidth, MIN_RIGHT_INSPECTOR_WIDTH, MAX_RIGHT_INSPECTOR_WIDTH) : 0;
+    const maxWidth = Math.max(MIN_LEFT_SIDEBAR_WIDTH, Math.min(
+      MAX_LEFT_SIDEBAR_WIDTH,
+      window.innerWidth - rightWidth - MIN_WORKSPACE_WIDTH,
+    ));
+    setLeftSidebarWidth(clamp(clientX, MIN_LEFT_SIDEBAR_WIDTH, maxWidth));
+  }, [rightInspectorWidth, rightOpen, setLeftSidebarWidth]);
+
+  const resizeRightInspector = useCallback((clientX: number) => {
+    const leftWidth = leftOpen ? clamp(leftSidebarWidth, MIN_LEFT_SIDEBAR_WIDTH, MAX_LEFT_SIDEBAR_WIDTH) : 0;
+    const maxWidth = Math.max(MIN_RIGHT_INSPECTOR_WIDTH, Math.min(
+      MAX_RIGHT_INSPECTOR_WIDTH,
+      window.innerWidth - leftWidth - MIN_WORKSPACE_WIDTH,
+    ));
+    setRightInspectorWidth(clamp(
+      window.innerWidth - clientX,
+      MIN_RIGHT_INSPECTOR_WIDTH,
+      maxWidth,
+    ));
+  }, [leftOpen, leftSidebarWidth, setRightInspectorWidth]);
+
+  function startLeftSidebarResize(event: ReactPointerEvent<HTMLDivElement>) {
+    if (event.button !== 0) return;
+    event.currentTarget.setPointerCapture(event.pointerId);
+    setSidebarResizing(true);
+    resizeLeftSidebar(event.clientX);
+  }
+
+  function finishLeftSidebarResize(event: ReactPointerEvent<HTMLDivElement>) {
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+    setSidebarResizing(false);
+  }
+
+  function startRightInspectorResize(event: ReactPointerEvent<HTMLDivElement>) {
+    if (event.button !== 0) return;
+    event.currentTarget.setPointerCapture(event.pointerId);
+    setInspectorResizing(true);
+    resizeRightInspector(event.clientX);
+  }
+
+  function finishRightInspectorResize(event: ReactPointerEvent<HTMLDivElement>) {
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+    setInspectorResizing(false);
+  }
+
+  function resetRightInspectorWidth() {
+    setRightInspectorWidth(DEFAULT_RIGHT_INSPECTOR_WIDTH);
+  }
+
+  function resetThreePaneWidths() {
+    setLeftSidebarWidth(DEFAULT_LEFT_SIDEBAR_WIDTH);
+    setRightInspectorWidth(DEFAULT_RIGHT_INSPECTOR_WIDTH);
+  }
 
   useEffect(() => {
     const removeRuntime = window.godAgent.runtime.onStatusChange(setRuntime);
@@ -140,6 +237,30 @@ export function App() {
       }
     };
   }, []);
+
+  useEffect(() => {
+    void window.godAgent.preview.getStatus().then(setPreview).catch(() => setPreview({ state: "stopped" }));
+  }, []);
+
+  useEffect(() => {
+    const removeBrowser = window.godAgent.browser.onStateChange(setBrowserState);
+    void window.godAgent.browser.getState().then(setBrowserState);
+    return removeBrowser;
+  }, []);
+
+  useEffect(() => {
+    if (ui.snapshot?.agentRuntime?.fixedProductStage !== "completed" || preview.state === "running" || previewBusy) return;
+    setPreviewBusy(true);
+    void window.godAgent.preview.start()
+      .then(async (status) => {
+        setPreview(status);
+        setRightOpen(true);
+        setInspectorTab("browser");
+        if (status.state === "running") setBrowserState(await window.godAgent.browser.createTab(status.url));
+      })
+      .catch(() => setPreview({ state: "stopped" }))
+      .finally(() => setPreviewBusy(false));
+  }, [ui.snapshot?.agentRuntime?.fixedProductStage, preview.state, previewBusy, setRightOpen]);
 
   async function answerPermission(
     decision: "allow" | "deny",
@@ -288,15 +409,59 @@ export function App() {
   const activeAgentCount = ui.snapshot?.agentRuns.filter((run) =>
     ["queued", "running", "waiting_children", "resuming"].includes(run.status),
   ).length ?? 0;
+  const visibleLeftSidebarWidth = leftOpen
+    ? clamp(
+        leftSidebarWidth,
+        MIN_LEFT_SIDEBAR_WIDTH,
+        Math.max(MIN_LEFT_SIDEBAR_WIDTH, Math.min(MAX_LEFT_SIDEBAR_WIDTH, viewportWidth - (rightOpen ? MIN_RIGHT_INSPECTOR_WIDTH : 0) - MIN_WORKSPACE_WIDTH)),
+      )
+    : 0;
+  const rightInspectorMaxWidth = getRightInspectorMaxWidth(
+    viewportWidth,
+    visibleLeftSidebarWidth,
+  );
+  const visibleRightInspectorWidth = clamp(
+    rightInspectorWidth,
+    MIN_RIGHT_INSPECTOR_WIDTH,
+    rightInspectorMaxWidth,
+  );
 
   return (
     <div
       className="desktop-app"
       data-left-open={leftOpen}
       data-right-open={rightOpen}
+      data-pane-resizing={sidebarResizing || inspectorResizing}
+      style={{
+        "--left-sidebar-width": `${visibleLeftSidebarWidth}px`,
+        "--right-inspector-width": `${visibleRightInspectorWidth}px`,
+      } as CSSProperties}
     >
       <div className="desktop-layout">
         <aside className="left-sidebar" aria-hidden={!leftOpen}>
+          <div
+            className="left-sidebar-resizer pane-resizer"
+            role="separator"
+            aria-label="调整任务栏宽度"
+            aria-orientation="vertical"
+            aria-valuemin={MIN_LEFT_SIDEBAR_WIDTH}
+            aria-valuemax={MAX_LEFT_SIDEBAR_WIDTH}
+            aria-valuenow={visibleLeftSidebarWidth}
+            tabIndex={leftOpen ? 0 : -1}
+            title="按住左右拖动，双击恢复三栏默认宽度"
+            onPointerDown={startLeftSidebarResize}
+            onPointerMove={(event) => {
+              if (sidebarResizing && event.currentTarget.hasPointerCapture(event.pointerId)) resizeLeftSidebar(event.clientX);
+            }}
+            onPointerUp={finishLeftSidebarResize}
+            onPointerCancel={finishLeftSidebarResize}
+            onDoubleClick={resetThreePaneWidths}
+            onKeyDown={(event) => {
+              if (event.key === "ArrowLeft") { event.preventDefault(); setLeftSidebarWidth(Math.max(visibleLeftSidebarWidth - 12, MIN_LEFT_SIDEBAR_WIDTH)); }
+              if (event.key === "ArrowRight") { event.preventDefault(); setLeftSidebarWidth(Math.min(visibleLeftSidebarWidth + 12, MAX_LEFT_SIDEBAR_WIDTH)); }
+              if (event.key === "Home") resetThreePaneWidths();
+            }}
+          />
           <div className="sidebar-actions">
             <button
               className="new-task-button"
@@ -611,11 +776,12 @@ export function App() {
                     <button
                       className={`model-select permission-mode-button${ui.snapshot?.agentConfig.agentTeam?.accessMode === "full_access" ? " is-full-access" : ""}`}
                       type="button"
+                      aria-label={`权限模式：${formatAccessMode(ui.snapshot?.agentConfig.agentTeam?.accessMode)}`}
                       aria-haspopup="menu"
                       aria-expanded={permissionMenuOpen}
                       onClick={() => { setAgentSwitchOpen(false); setModelMenuOpen(false); setPermissionMenuOpen(!permissionMenuOpen); }}
                     >
-                      <Shield />{formatAccessMode(ui.snapshot?.agentConfig.agentTeam?.accessMode)}<ChevronDown />
+                      <Shield /><span className="control-label"><span className="control-label-long">{formatAccessMode(ui.snapshot?.agentConfig.agentTeam?.accessMode)}</span><span className="control-label-short">权限</span></span><ChevronDown />
                     </button>
                     {permissionMenuOpen && <section className="agent-switch-menu permission-mode-menu" role="menu" aria-label="权限模式">
                       <header><strong>权限模式</strong><small>保存到当前 Chat，发送后冻结到本次 Job</small></header>
@@ -635,6 +801,7 @@ export function App() {
                     <button
                       className="model-select model-settings-button"
                       type="button"
+                      aria-label={`模型与推理：${formatModelName(activeModelSettings?.model)} · ${formatReasoningEffort(activeModelSettings?.reasoningEffort)}`}
                       aria-haspopup="menu"
                       aria-expanded={modelMenuOpen}
                       disabled={(capabilities?.models.length ?? 0) === 0}
@@ -645,7 +812,7 @@ export function App() {
                         setModelMenuOpen(!modelMenuOpen);
                       }}
                     >
-                      {formatModelName(activeModelSettings?.model)} · {formatReasoningEffort(activeModelSettings?.reasoningEffort)}<ChevronDown />
+                      <span className="control-label"><span className="control-label-long">{formatModelName(activeModelSettings?.model)} · {formatReasoningEffort(activeModelSettings?.reasoningEffort)}</span><span className="control-label-short">模型</span></span><ChevronDown />
                     </button>
                     {modelMenuOpen && <section className="model-settings-menu" role="menu" aria-label="模型与推理">
                       {modelMenuView === "simple" ? <>
@@ -693,11 +860,12 @@ export function App() {
                     <button
                       className="model-select agent-switch-button"
                       type="button"
+                      aria-label={`子 Agent：${ui.snapshot?.agentConfig.agentTeam?.mode === "off" ? "关闭" : "开启"}`}
                       aria-haspopup="menu"
                       aria-expanded={agentSwitchOpen}
                       onClick={() => { setPermissionMenuOpen(false); setModelMenuOpen(false); setAgentSwitchOpen(!agentSwitchOpen); }}
                     >
-                      子 Agent：{ui.snapshot?.agentConfig.agentTeam?.mode === "off" ? "关闭" : "开启"}<ChevronDown />
+                      <span className="control-label"><span className="control-label-long">子 Agent：{ui.snapshot?.agentConfig.agentTeam?.mode === "off" ? "关闭" : "开启"}</span><span className="control-label-short">子 Agent</span></span><ChevronDown />
                     </button>
                     {agentSwitchOpen && <section className="agent-switch-menu" role="menu" aria-label="子 Agent 开关">
                       <button type="button" role="menuitemradio" aria-checked={ui.snapshot?.agentConfig.agentTeam?.mode !== "off"} onClick={() => { setAgentSwitchOpen(false); void replaceSnapshot(window.godAgent.desktop.updateAgentTeam({ mode: "auto" })); }}><i /> <span><strong>开启</strong><small>子 Agent 执行，父 Agent 监工验收</small></span></button>
@@ -720,6 +888,37 @@ export function App() {
         </main>
 
         <aside className="right-inspector" aria-hidden={!rightOpen}>
+          <div
+            className="right-inspector-resizer pane-resizer"
+            role="separator"
+            aria-label="调整工作区检查器宽度"
+            aria-orientation="vertical"
+            aria-valuemin={MIN_RIGHT_INSPECTOR_WIDTH}
+            aria-valuemax={rightInspectorMaxWidth}
+            aria-valuenow={visibleRightInspectorWidth}
+            tabIndex={rightOpen ? 0 : -1}
+            title="按住左右拖动，双击恢复默认宽度"
+            onPointerDown={startRightInspectorResize}
+            onPointerMove={(event) => {
+              if (inspectorResizing && event.currentTarget.hasPointerCapture(event.pointerId)) {
+                resizeRightInspector(event.clientX);
+              }
+            }}
+            onPointerUp={finishRightInspectorResize}
+            onPointerCancel={finishRightInspectorResize}
+            onDoubleClick={resetThreePaneWidths}
+            onKeyDown={(event) => {
+              if (event.key === "ArrowLeft") {
+                event.preventDefault();
+                setRightInspectorWidth(Math.min(visibleRightInspectorWidth + 12, rightInspectorMaxWidth));
+              }
+              if (event.key === "ArrowRight") {
+                event.preventDefault();
+                setRightInspectorWidth(Math.max(visibleRightInspectorWidth - 12, MIN_RIGHT_INSPECTOR_WIDTH));
+              }
+              if (event.key === "Home") resetRightInspectorWidth();
+            }}
+          />
           <header className="inspector-header">
             <strong>工作区检查器</strong>
             <button className="icon-button" type="button" aria-label="收起右侧栏" onClick={() => setRightOpen(false)}>
@@ -730,6 +929,7 @@ export function App() {
             <InspectorTabButton id="changes" current={inspectorTab} setCurrent={setInspectorTab}>变更</InspectorTabButton>
             <InspectorTabButton id="activity" current={inspectorTab} setCurrent={setInspectorTab}>活动</InspectorTabButton>
             <InspectorTabButton id="terminal" current={inspectorTab} setCurrent={setInspectorTab}>终端</InspectorTabButton>
+            <InspectorTabButton id="browser" current={inspectorTab} setCurrent={setInspectorTab}>浏览器</InspectorTabButton>
             <InspectorTabButton id="extensions" current={inspectorTab} setCurrent={setInspectorTab}>扩展</InspectorTabButton>
           </div>
           <div className="inspector-content">
@@ -747,6 +947,27 @@ export function App() {
                       </div>
                     ))}
               </div>
+            )}
+            {inspectorTab === "browser" && (
+              <BrowserPanel
+                browserState={browserState}
+                setBrowserState={setBrowserState}
+                preview={preview}
+                busy={previewBusy}
+                suspended={permissionRequest !== undefined || sidebarResizing || inspectorResizing}
+                openLocal={() => {
+                  setPreviewBusy(true);
+                  const start = preview.state === "running"
+                    ? Promise.resolve(preview)
+                    : window.godAgent.preview.start();
+                  void start
+                    .then(async (status) => {
+                      setPreview(status);
+                      if (status.state === "running") setBrowserState(await window.godAgent.browser.createTab(status.url));
+                    })
+                    .finally(() => setPreviewBusy(false));
+                }}
+              />
             )}
             {inspectorTab === "extensions" && (
               <ExtensionsPanel capabilities={capabilities} />
@@ -821,7 +1042,7 @@ function AgentRunTree({ runs, runtime, selectedId, select, advance }: { runs: im
           </div>
           <p>{formatSupervisorMessage(runtime?.job?.status, childRuns)}</p>
           {runtime?.fixedProductStage !== undefined && runtime.fixedProductStage !== "completed" && <button className="fixed-product-advance" type="button" onClick={() => void advance(runtime.fixedProductStage!)}>{formatFixedProductAction(runtime.fixedProductStage)}</button>}
-          {runtime?.fixedProductStage === "completed" && <p className="fixed-product-complete">产品双轮 Return 已完成，负责人已向 God 单次汇总。</p>}
+          {runtime?.fixedProductStage === "completed" && <p className="fixed-product-complete">产品、工程和测试已完成，负责人已向 God 单次汇总。</p>}
         </section>
         <ul className="agent-child-list">{roots.flatMap((root) => children.get(root.id) ?? []).map(renderRun)}</ul>
         {childRuns.length === 0 && <p className="agent-empty-children">父 Agent 正在分析需求，尚未派出子 Agent。</p>}
@@ -942,8 +1163,12 @@ function formatFixedProductAction(stage: import("../../agents/fixed-software-tea
   if (stage === "first_return_ready") return "2. 负责人验收并驳回";
   if (stage === "rework") return "3. 原产品 Thread 返工（Attempt 2）";
   if (stage === "second_return_ready") return "4. 负责人通过并 Return God";
-  if (stage === "lead_return_ready") return "5. God 接收并单次汇总";
-  return "产品双轮 Return 已完成";
+  if (stage === "engineering_ready") return "5. 工程角色实现项目";
+  if (stage === "engineering_return_ready") return "6. 负责人接收工程 Return";
+  if (stage === "quality_ready") return "7. 测试角色独立验收";
+  if (stage === "quality_return_ready") return "8. 负责人接收测试 Return";
+  if (stage === "lead_return_ready") return "9. God 接收并单次汇总";
+  return "完整项目闭环已完成";
 }
 
 function formatThreadState(state: import("../desktop-types.js").DesktopTurnState): string {
@@ -1010,6 +1235,152 @@ function ExtensionsPanel(props: { capabilities: RuntimeCapabilities | undefined 
   );
 }
 
+function BrowserPanel(props: {
+  browserState: BrowserState | undefined;
+  setBrowserState: (state: BrowserState) => void;
+  preview: { state: "stopped" } | { state: "running"; url: string };
+  busy: boolean;
+  suspended: boolean;
+  openLocal: () => void;
+}) {
+  const [address, setAddress] = useState("");
+  const [actionError, setActionError] = useState<string>();
+  const surfaceRef = useRef<HTMLDivElement>(null);
+  const addressRef = useRef<HTMLInputElement>(null);
+  const addressFocusedRef = useRef(false);
+  const activeTab = props.browserState?.tabs.find((tab) => tab.id === props.browserState?.activeTabId);
+
+  useEffect(() => {
+    if (!addressFocusedRef.current) setAddress(activeTab?.url ?? "");
+  }, [activeTab?.id, activeTab?.url]);
+
+  useEffect(() => window.godAgent.browser.onCommand(() => {
+    window.requestAnimationFrame(() => {
+      addressRef.current?.focus();
+      addressRef.current?.select();
+    });
+  }), []);
+
+  useEffect(() => {
+    const surface = surfaceRef.current;
+    if (surface === null) return;
+    let frame: number | undefined;
+    const publishBounds = () => {
+      frame = undefined;
+      const rect = surface.getBoundingClientRect();
+      window.godAgent.browser.setBounds({
+        x: rect.x,
+        y: rect.y,
+        width: rect.width,
+        height: rect.height,
+        visible: !props.suspended && rect.width > 0 && rect.height > 0,
+      });
+    };
+    const scheduleBounds = () => {
+      if (frame === undefined) frame = window.requestAnimationFrame(publishBounds);
+    };
+    const observer = new ResizeObserver(scheduleBounds);
+    observer.observe(surface);
+    window.addEventListener("resize", scheduleBounds);
+    scheduleBounds();
+    return () => {
+      observer.disconnect();
+      window.removeEventListener("resize", scheduleBounds);
+      if (frame !== undefined) window.cancelAnimationFrame(frame);
+      window.godAgent.browser.setBounds({ x: 0, y: 0, width: 0, height: 0, visible: false });
+    };
+  }, [activeTab !== undefined, props.suspended]);
+
+  const apply = (operation: Promise<BrowserState>) => {
+    setActionError(undefined);
+    void operation.then(props.setBrowserState).catch((error: unknown) => setActionError(readError(error)));
+  };
+
+  if (props.browserState === undefined || activeTab === undefined) {
+    return <div className="browser-workbench"><div className="browser-loading-state"><CircleDashed /><span>正在启动浏览器…</span></div></div>;
+  }
+
+  const createTab = () => {
+    setActionError(undefined);
+    void window.godAgent.browser.createTab()
+      .then((state) => {
+        props.setBrowserState(state);
+        window.requestAnimationFrame(() => addressRef.current?.focus());
+      })
+      .catch((error: unknown) => setActionError(readError(error)));
+  };
+
+  return <div className="browser-workbench">
+    <div className="browser-tab-strip">
+      <div className="browser-tabs" role="tablist" aria-label="网页标签">
+        {props.browserState.tabs.map((tab) => (
+          <div
+            className={`browser-tab${tab.id === props.browserState?.activeTabId ? " is-active" : ""}`}
+            role="tab"
+            tabIndex={0}
+            aria-selected={tab.id === props.browserState?.activeTabId}
+            key={tab.id}
+            title={tab.title}
+            onClick={() => apply(window.godAgent.browser.activateTab(tab.id))}
+            onKeyDown={(event) => {
+              if (event.key === "Enter" || event.key === " ") {
+                event.preventDefault();
+                apply(window.godAgent.browser.activateTab(tab.id));
+              }
+            }}
+          >
+            {tab.faviconUrl
+              ? <img src={tab.faviconUrl} alt="" referrerPolicy="no-referrer" />
+              : <Globe2 className={tab.isLoading ? "is-loading" : ""} />}
+            <span>{tab.title}</span>
+            <span
+              className="browser-tab-close"
+              role="button"
+              tabIndex={0}
+              aria-label={`关闭 ${tab.title}`}
+              onClick={(event) => { event.stopPropagation(); apply(window.godAgent.browser.closeTab(tab.id)); }}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" || event.key === " ") {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  apply(window.godAgent.browser.closeTab(tab.id));
+                }
+              }}
+            ><X /></span>
+          </div>
+        ))}
+      </div>
+      <button className="browser-new-tab-action" type="button" aria-label="新建标签页" onClick={createTab}><Plus /></button>
+    </div>
+    <div className="browser-navigation">
+      <button className="browser-history-action" type="button" disabled={!activeTab.canGoBack} onClick={() => apply(window.godAgent.browser.goBack(activeTab.id))} aria-label="后退"><ArrowLeft /></button>
+      <button className="browser-history-action" type="button" disabled={!activeTab.canGoForward} onClick={() => apply(window.godAgent.browser.goForward(activeTab.id))} aria-label="前进"><ArrowRight /></button>
+      <button type="button" onClick={() => apply(activeTab.isLoading ? window.godAgent.browser.stop(activeTab.id) : window.godAgent.browser.reload(activeTab.id))} aria-label={activeTab.isLoading ? "停止加载" : "刷新"}>{activeTab.isLoading ? <X /> : <RotateCw />}</button>
+      <form className="browser-address" data-error={Boolean(activeTab.error || actionError)} onSubmit={(event) => {
+        event.preventDefault();
+        apply(window.godAgent.browser.navigate(activeTab.id, address));
+        addressRef.current?.blur();
+      }}>
+        <Globe2 />
+        <input
+          ref={addressRef}
+          value={address}
+          aria-label="地址栏"
+          placeholder="搜索或输入网址"
+          title={activeTab.error ?? actionError ?? activeTab.url}
+          onChange={(event) => setAddress(event.target.value)}
+          onFocus={(event) => { addressFocusedRef.current = true; event.currentTarget.select(); }}
+          onBlur={() => { addressFocusedRef.current = false; setAddress(activeTab.url); }}
+          spellCheck={false}
+        />
+      </form>
+      <button className="browser-local-action browser-secondary-action" type="button" disabled={props.busy} onClick={props.openLocal} title="在新标签打开今日运势签"><Sparkles /><span>{props.preview.state === "running" ? "本地" : "启动"}</span></button>
+      <button className="browser-secondary-action" type="button" disabled={!activeTab.url} onClick={() => void window.godAgent.browser.openExternal(activeTab.id)} aria-label="外部打开"><ExternalLink /></button>
+    </div>
+    <div className="browser-surface" ref={surfaceRef} aria-label="网页内容" />
+  </div>;
+}
+
 function ExtensionRow(props: { icon: React.ReactNode; title: string; meta: string; enabled: boolean }) {
   return <div className="extension-row"><span className="extension-icon">{props.icon}</span><span><strong>{props.title}</strong><small>{props.meta}</small></span><i data-enabled={props.enabled}>{props.enabled ? "在线" : "关闭"}</i></div>;
 }
@@ -1027,11 +1398,36 @@ function useStoredBoolean(key: string, fallback: boolean) {
     const stored = localStorage.getItem(key);
     return stored === null ? fallback : stored === "true";
   });
-  const update = (next: boolean) => {
+  const update = useCallback((next: boolean) => {
     localStorage.setItem(key, String(next));
     setValue(next);
-  };
+  }, [key]);
   return [value, update] as const;
+}
+
+function useStoredNumber(key: string, fallback: number) {
+  const [value, setValue] = useState(() => {
+    const stored = Number(localStorage.getItem(key));
+    return Number.isFinite(stored) && stored > 0 ? stored : fallback;
+  });
+  const update = useCallback((next: number) => {
+    const rounded = Math.round(next);
+    localStorage.setItem(key, String(rounded));
+    setValue(rounded);
+  }, [key]);
+  return [value, update] as const;
+}
+
+function getRightInspectorMaxWidth(viewportWidth: number, leftWidth: number) {
+  const workspaceSafeWidth = viewportWidth - leftWidth - MIN_WORKSPACE_WIDTH;
+  return Math.max(
+    MIN_RIGHT_INSPECTOR_WIDTH,
+    Math.min(MAX_RIGHT_INSPECTOR_WIDTH, workspaceSafeWidth),
+  );
+}
+
+function clamp(value: number, minimum: number, maximum: number) {
+  return Math.min(maximum, Math.max(minimum, value));
 }
 
 function groupThreads(threads: DesktopThreadSummary[]) {
