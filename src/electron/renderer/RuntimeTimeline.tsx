@@ -150,7 +150,7 @@ export function RuntimeTimeline({ session }: { session: RuntimeSession }) {
 
             if (item.kind === "error") {
               return (
-                <div className="runtime-error" key={item.id}>
+                <div className="runtime-error" data-retryable={item.retryable} key={item.id}>
                   <CircleAlert />
                   <span><strong>{item.title}</strong>{item.safeMessage}</span>
                 </div>
