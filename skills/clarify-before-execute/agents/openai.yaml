@@ -1,0 +1,6 @@
+interface:
+  display_name: "需求确认后执行"
+  short_description: "先澄清完整需求并生成测试计划，用户确认后才执行实际工作"
+  default_prompt: "Use $clarify-before-execute to clarify this requirement and prepare an executable plan before making changes."
+policy:
+  allow_implicit_invocation: true

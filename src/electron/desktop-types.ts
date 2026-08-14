@@ -83,6 +83,7 @@ export interface DesktopActivity {
 export interface DesktopSnapshot {
   threads: DesktopThreadSummary[];
   activeThreadId?: string;
+  activeAgentThreadId?: string;
   messages: DesktopMessage[];
   capabilities: RuntimeCapabilities;
   turnState: DesktopTurnState;
@@ -91,6 +92,7 @@ export interface DesktopSnapshot {
   agentRuns: DesktopAgentRun[];
   trash?: DesktopTrashThread[];
   agentRuntime?: DesktopAgentRuntimeView;
+  requirement?: import("../requirements/requirement.js").Requirement;
 }
 
 export interface DesktopTrashThread { id: string; title: string; deletedAt: string; trashExpiresAt: string; deleteBatchId?: string; }
@@ -101,6 +103,7 @@ export interface DesktopAgentRuntimeView {
   evidence: import("../agents/agent-runtime.js").AgentEvidence[];
   board: import("../agents/agent-runtime.js").SharedBoardEntry[];
   returns: import("../agents/agent-runtime.js").AgentReturnEnvelope[];
+  fixedProductStage?: import("../agents/fixed-software-team-coordinator.js").FixedProductStage;
 }
 
 export interface DesktopAgentRun {
@@ -116,6 +119,7 @@ export interface DesktopAgentRun {
   status: "queued" | "running" | "waiting_children" | "resuming" | "completed" | "failed" | "cancelled" | "timed_out";
   task: string;
   depth: number;
+  safeError?: string;
 }
 
 export type DesktopEvent =
@@ -233,6 +237,7 @@ export function isDesktopSnapshot(
     value.threads.every(isDesktopThreadSummary) &&
     (value.activeThreadId === undefined ||
       typeof value.activeThreadId === "string") &&
+    (value.activeAgentThreadId === undefined || typeof value.activeAgentThreadId === "string") &&
     Array.isArray(value.messages) &&
     value.messages.every(isDesktopMessage) &&
     isRuntimeCapabilitiesLike(value.capabilities) &&
@@ -359,7 +364,8 @@ function isDesktopAgentRun(value: unknown): value is DesktopAgentRun {
     (value.parentRunId === undefined || typeof value.parentRunId === "string") &&
     ["queued", "running", "waiting_children", "resuming", "completed", "failed", "cancelled", "timed_out"]
       .includes(String(value.status)) && typeof value.task === "string" &&
-    Number.isInteger(value.depth) && (value.depth as number) >= 0;
+    Number.isInteger(value.depth) && (value.depth as number) >= 0 &&
+    (value.safeError === undefined || typeof value.safeError === "string");
 }
 
 function isReasoningEffort(value: unknown): value is DesktopReasoningEffort {

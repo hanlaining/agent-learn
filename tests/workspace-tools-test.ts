@@ -102,3 +102,13 @@ test("Workspace Tool 拒绝非法 JSON 参数", async (t) => {
     /read_file arguments must be valid JSON/,
   );
 });
+
+test("write_file 只能在 Workspace 内写入 UTF-8 文本", async (t) => {
+  const registry = await createRegistry(t);
+  const execution = await registry.execute("write_file", JSON.stringify({ path: "result.txt", text: "done" }));
+  assert.deepEqual(execution.result, { path: "result.txt", sizeBytes: 4 });
+  assert.deepEqual((await registry.execute("read_file", '{"path":"result.txt"}')).result, {
+    path: "result.txt", text: "done", sizeBytes: 4,
+  });
+  await assert.rejects(() => registry.execute("write_file", JSON.stringify({ path: "../outside.txt", text: "no" })), /Path escapes workspace/);
+});

@@ -6,6 +6,7 @@ import {
   type ItemId,
   type ItemType,
   type Thread,
+  type ThreadKind,
   type ThreadDeleteBatch,
   type ThreadId,
   type Turn,
@@ -80,7 +81,9 @@ export class LifecycleStore {
     }
 
     for (const item of snapshot.items) {
-      store.items.set(item.id, cloneItem(item));
+      const restored = cloneItem(item);
+      if (isLegacyRuntimeRecoveryMessage(restored)) restored.type = "runtime_message";
+      store.items.set(restored.id, restored);
     }
     for (const batch of snapshot.deleteBatches ?? []) store.deleteBatches.set(batch.id, structuredClone(batch));
 
@@ -98,10 +101,11 @@ export class LifecycleStore {
     };
   }
 
-  createThread(): Thread {
+  createThread(kind: ThreadKind = "user_chat"): Thread {
     const thread: Thread = {
       id: this.createId("thread"),
       status: "active",
+      kind,
       createdAt: this.now(),
       lastActivityAt: this.now(),
       turnIds: [],
@@ -332,6 +336,12 @@ export class LifecycleStore {
 
     return turn;
   }
+}
+
+function isLegacyRuntimeRecoveryMessage(item: Item): boolean {
+  return item.type === "user_message" && typeof item.content === "object" && item.content !== null &&
+    "text" in item.content && typeof item.content.text === "string" &&
+    item.content.text.startsWith("Runtime 重启恢复：以下子 Agent 结果已经持久化");
 }
 
 function parseLifecycleSnapshot(

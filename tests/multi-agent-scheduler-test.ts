@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import "./agent-runtime-store-test.js";
 import "./tool-schema-test.js";
+import "./agent-registry-test.js";
 
 import { AgentRegistry } from "../src/agents/agent-registry.js";
 import { AgentRunStore } from "../src/agents/agent-run-store.js";
@@ -10,6 +11,7 @@ import { AgentRuntimeStore } from "../src/agents/agent-runtime-store.js";
 import { DEFAULT_AGENT_TEAM_CONFIG } from "../src/agents/agent-runtime.js";
 import { AgentLoop } from "../src/agent/agent-loop.js";
 import { AgentRuntimeCoordinator } from "../src/agents/agent-runtime-coordinator.js";
+import { ensureFixedSoftwareTeam } from "../src/agents/fixed-software-team.js";
 import { LifecycleStore } from "../src/runtime/lifecycle-store.js";
 import { createRunAgentTool } from "../src/tools/run-agent-tool.js";
 import { ToolRegistry } from "../src/tools/tool-registry.js";
@@ -150,6 +152,92 @@ test("DAG Dispatcher 等待硬依赖，自动 Reviewer 通过后才创建 Return
   assert.equal(runtimeStore.listReturns("job-turn-root").filter((item) => item.taskId === secondTask.id).length, 1);
 });
 
+test("Reviewer 创建和完成事件都路由到根 Chat", async () => {
+  const store = new AgentRunStore();
+  const runtimeStore = new AgentRuntimeStore();
+  const updates: Array<{ threadId: string; turnId: string; profile: string; status: string }> = [];
+  let sequence = 0;
+  const scheduler = new MultiAgentScheduler({
+    registry: new AgentRegistry(), store, runtimeStore, enableAutomaticReview: true,
+    resolveParent: () => ({ threadId: "thread-root" }),
+    prepare: (profile) => ({
+      threadId: `thread-internal-${++sequence}`,
+      turnId: `turn-internal-${sequence}`,
+      execute: async () => profile.id === "reviewer" ? "PASS 已验收" : "worker result",
+    }),
+    onRunUpdated: (threadId, turnId, runId) => {
+      const run = store.get(runId)!;
+      if (run.agentProfileId === "reviewer") updates.push({ threadId, turnId, profile: run.agentProfileId, status: run.status });
+    },
+  });
+
+  await scheduler.runAgent({ parentTurnId: "turn-root", profileId: "investigator", task: "检查" });
+
+  assert.deepEqual(updates, [
+    { threadId: "thread-root", turnId: "turn-root", profile: "reviewer", status: "running" },
+    { threadId: "thread-root", turnId: "turn-root", profile: "reviewer", status: "completed" },
+  ]);
+});
+
+test("Reviewer 执行异常时关闭 Run 和 Task，不留下运行中节点", async () => {
+  const store = new AgentRunStore();
+  const runtimeStore = new AgentRuntimeStore();
+  let sequence = 0;
+  const scheduler = new MultiAgentScheduler({
+    registry: new AgentRegistry(), store, runtimeStore, enableAutomaticReview: true,
+    resolveParent: () => ({ threadId: "thread-root" }),
+    prepare: (profile) => ({
+      threadId: `thread-internal-${++sequence}`,
+      turnId: `turn-internal-${sequence}`,
+      execute: async () => {
+        if (profile.id === "reviewer") throw new Error("Reviewer provider failed");
+        return "worker result";
+      },
+    }),
+  });
+
+  const result = await scheduler.runAgent({ parentTurnId: "turn-root", profileId: "investigator", task: "检查" });
+  const reviewer = store.listForJob("job-turn-root").find((run) => run.agentProfileId === "reviewer")!;
+  const reviewerTask = runtimeStore.listTasks("job-turn-root").find((task) => task.profileId === "reviewer")!;
+
+  assert.equal(result.status, "failed");
+  assert.equal(reviewer.status, "failed");
+  assert.equal(reviewer.result?.safeError, "Reviewer provider failed");
+  assert.equal(reviewerTask.status, "failed");
+});
+
+test("Reviewer 拒绝时 Worker Run 保持 completed，失败只归属 Review和Task", async () => {
+  const store = new AgentRunStore(); const runtimeStore = new AgentRuntimeStore(); let sequence = 0;
+  const scheduler = new MultiAgentScheduler({ registry: new AgentRegistry(), store, runtimeStore, enableAutomaticReview: true,
+    resolveParent: () => ({ threadId: "thread-root" }),
+    prepare: (profile) => ({ threadId: `thread-${++sequence}`, turnId: `turn-${sequence}`,
+      execute: async () => profile.id === "reviewer"
+        ? JSON.stringify({ verdict: "fail", severity: "P3", summary: "evidence is incomplete" })
+        : "worker output" }) });
+
+  const result = await scheduler.runAgent({ parentTurnId: "turn-root", profileId: "tester", task: "verify reviewer attribution" });
+  const runs = store.listForJob("job-turn-root"); const worker = runs.find((run) => run.agentProfileId === "tester")!;
+  const reviewer = runs.find((run) => run.agentProfileId === "reviewer")!;
+  assert.equal(result.status, "failed");
+  assert.equal(worker.status, "completed");
+  assert.equal(reviewer.status, "failed");
+  assert.equal(runtimeStore.listTasks("job-turn-root").find((task) => task.profileId === "tester")?.status, "failed");
+});
+
+test("Reviewer JSON pass 合同不依赖 PASS 文本前缀", async () => {
+  const store = new AgentRunStore(); const runtimeStore = new AgentRuntimeStore(); let sequence = 0;
+  const scheduler = new MultiAgentScheduler({ registry: new AgentRegistry(), store, runtimeStore, enableAutomaticReview: true,
+    resolveParent: () => ({ threadId: "thread-root" }),
+    prepare: (profile) => ({ threadId: `thread-${++sequence}`, turnId: `turn-${sequence}`,
+      execute: async () => profile.id === "reviewer"
+        ? JSON.stringify({ verdict: "pass", severity: null, summary: "three tips verified" })
+        : "three tips" }) });
+
+  const result = await scheduler.runAgent({ parentTurnId: "turn-root", profileId: "tester", task: "return three tips" });
+  assert.equal(result.status, "completed");
+  assert.equal(runtimeStore.listTasks("job-turn-root").find((task) => task.profileId === "tester")?.status, "completed");
+});
+
 test("3 Chat × 每 Chat 10 子 Agent 真实调度遵守全局 4 并发且不串 Job", async () => {
   const store = new AgentRunStore(); const runtimeStore = new AgentRuntimeStore(); let active = 0; let peak = 0; let sequence = 0;
   const scheduler = new MultiAgentScheduler({ registry: new AgentRegistry(), store, runtimeStore, maxConcurrentRuns: 4,
@@ -177,6 +265,29 @@ test("P2 Review 自动回到同一 Task 创建第二个 Run，并保留首次 Ru
   assert.equal(runtimeStore.listEvidence(workerTask.id).at(-1)?.verdict, "passed"); assert.equal(result.summary, "已根据 P2 修正");
 });
 
+test("同角色不同 Task 使用不同 Thread，同一 Task 返工复用原 Thread", async () => {
+  const store = new AgentRunStore(); const runtimeStore = new AgentRuntimeStore();
+  let sequence = 0; let reviewCount = 0;
+  const threadByTask = new Map<string, string>();
+  const scheduler = new MultiAgentScheduler({ registry: new AgentRegistry(), store, runtimeStore,
+    resolveParent: () => ({ threadId: "thread-root", teamConfig: { ...DEFAULT_AGENT_TEAM_CONFIG, independentReview: true, maxSubagents: 8 } }),
+    prepare: (_profile, task, _parentRunId, taskId, attempt) => {
+      const threadId = threadByTask.get(taskId) ?? `task-thread-${++sequence}`;
+      threadByTask.set(taskId, threadId);
+      return { threadId, turnId: `${threadId}-attempt-${attempt}`, execute: async () => task.includes("第 2 次执行") ? "返工完成" : "首次完成" };
+    },
+    review: async () => ++reviewCount === 1
+      ? { passed: false, severity: "P2", summary: "需要返工" }
+      : { passed: true, summary: "通过" } });
+  const first = await scheduler.runAgent({ parentTurnId: "turn-root", profileId: "tester", task: "任务 A" });
+  const second = await scheduler.runAgent({ parentTurnId: "turn-root", profileId: "tester", task: "任务 B" });
+  const firstRuns = store.listForJob("job-turn-root").filter((run) => run.taskId === first.taskId);
+  const secondRuns = store.listForJob("job-turn-root").filter((run) => run.taskId === second.taskId);
+  assert.equal(new Set(firstRuns.map((run) => run.threadId)).size, 1);
+  assert.equal(firstRuns.length, 2);
+  assert.notEqual(firstRuns[0]?.threadId, secondRuns[0]?.threadId);
+});
+
 test("完整 AgentLoop 父→多子→独立 Review→Return Ack→父最终回答", async () => {
   const lifecycle = new LifecycleStore(); const thread = lifecycle.createThread(); const turn = lifecycle.createTurn(thread.id);
   lifecycle.appendItem(turn.id, "user_message", { text: "并行排查和测试后汇总" });
@@ -201,6 +312,40 @@ test("完整 AgentLoop 父→多子→独立 Review→Return Ack→父最终回�
   assert.equal(workerTasks.length, 2); assert.equal(workerTasks.every((task) => task.status === "completed"), true);
   assert.equal(workerTasks.every((task) => runtime.listEvidence(task.id).some((item) => item.producer === "reviewer" && item.verdict === "passed")), true);
   assert.equal(llm.requests.length, 2);
+});
+
+test("fixed team skeleton does not consume the executable Task budget", async () => {
+  const lifecycle = new LifecycleStore();
+  const rootThread = lifecycle.createThread();
+  const rootTurn = lifecycle.createTurn(rootThread.id);
+  const store = new AgentRunStore();
+  const runtimeStore = new AgentRuntimeStore();
+  const root = store.ensureRoot(rootThread.id, rootTurn.id, "orchestrator", `job-${rootTurn.id}`);
+  ensureFixedSoftwareTeam(lifecycle, store, root);
+  runtimeStore.createJob({
+    threadId: rootThread.id,
+    rootTurnId: rootTurn.id,
+    rootRunId: root.id,
+    configSnapshot: { ...DEFAULT_AGENT_TEAM_CONFIG, independentReview: false, maxSubagents: 1 },
+  });
+  let sequence = 0;
+  const scheduler = new MultiAgentScheduler({
+    registry: new AgentRegistry(), store, runtimeStore,
+    resolveParent: () => ({ threadId: rootThread.id }),
+    prepare: () => ({
+      threadId: `task-thread-${++sequence}`,
+      turnId: `task-turn-${sequence}`,
+      execute: async () => "done",
+    }),
+  });
+
+  const first = await scheduler.runAgent({ parentTurnId: rootTurn.id, profileId: "tester", task: "first real task" });
+  assert.equal(first.status, "completed");
+  assert.equal(store.listForJob(root.jobId).filter((run) => run.taskId === undefined).length, 5);
+  await assert.rejects(
+    scheduler.runAgent({ parentTurnId: rootTurn.id, profileId: "tester", task: "second real task" }),
+    /Agent Job budget exceeded/,
+  );
 });
 
 test("run_agent definition satisfies Responses strict schema", () => {

@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  DEFAULT_OPENAI_RESPONSES_TIMEOUT_MS,
   OpenAiResponsesProvider,
   parseOpenAiResponse,
   parseOpenAiResponseBody,
@@ -13,6 +14,21 @@ import type {
 import {
   InputItemBudgetExceededError,
 } from "../src/runtime/item-budget.js";
+
+test("Responses Provider 默认请求窗口与 Runtime 单轮上限对齐", () => {
+  assert.equal(DEFAULT_OPENAI_RESPONSES_TIMEOUT_MS, 120_000);
+});
+
+test("Provider 拒绝非法 timeoutMs 配置", () => {
+  assert.throws(
+    () => new OpenAiResponsesProvider({
+      apiKey: "test-key",
+      model: "test-model",
+      timeoutMs: 0,
+    }),
+    /timeoutMs must be a positive integer/,
+  );
+});
 
 test("解析 OpenAI function_call", () => {
   const response = parseOpenAiResponse({

@@ -1,12 +1,15 @@
 import {
   Activity,
   ArrowDown,
+  ArrowLeft,
+  ArrowRight,
   Bot,
   ChevronDown,
   ChevronRight,
   CircleCheck,
   CircleDashed,
   FileCode2,
+  ExternalLink,
   Globe2,
   Menu,
   MoreHorizontal,
@@ -17,6 +20,7 @@ import {
   PanelRightClose,
   PanelRightOpen,
   Plus,
+  RotateCw,
   Search,
   Settings,
   Shield,
@@ -29,11 +33,16 @@ import {
   Plug,
 } from "lucide-react";
 import {
+  useCallback,
   useEffect,
   useMemo,
   useReducer,
   useRef,
   useState,
+} from "react";
+import type {
+  CSSProperties,
+  PointerEvent as ReactPointerEvent,
 } from "react";
 
 import type {
@@ -47,6 +56,7 @@ import type {
 import type {
   RuntimeCapabilities,
 } from "../../app-server/runtime-capabilities.js";
+import type { BrowserState } from "./global.js";
 import {
   desktopReducer,
   INITIAL_DESKTOP_UI_STATE,
@@ -73,7 +83,15 @@ import {
   type ComposerSuggestion,
 } from "./composer-suggestions.js";
 
-type InspectorTab = "changes" | "activity" | "terminal" | "extensions";
+type InspectorTab = "changes" | "activity" | "terminal" | "browser" | "extensions";
+
+const DEFAULT_LEFT_SIDEBAR_WIDTH = 236;
+const MIN_LEFT_SIDEBAR_WIDTH = 108;
+const MAX_LEFT_SIDEBAR_WIDTH = 360;
+const DEFAULT_RIGHT_INSPECTOR_WIDTH = 520;
+const MIN_RIGHT_INSPECTOR_WIDTH = 240;
+const MAX_RIGHT_INSPECTOR_WIDTH = 760;
+const MIN_WORKSPACE_WIDTH = 280;
 
 const RUNNING_STATES = new Set([
   "starting",
@@ -124,17 +142,99 @@ export function App() {
   const [trashOpen, setTrashOpen] = useState(false);
   const [olderLimit, setOlderLimit] = useState(50);
   const [selectedAgentRunId, setSelectedAgentRunId] = useState<string>();
+  const activeAgentRun = ui.snapshot?.agentRuns.find(
+    (run) => run.threadId === ui.snapshot?.activeAgentThreadId,
+  );
   const [leftOpen, setLeftOpen] = useStoredBoolean("god-agent:left-open", true);
   const [rightOpen, setRightOpen] = useStoredBoolean("god-agent:right-open", true);
+  const [leftSidebarWidth, setLeftSidebarWidth] = useStoredNumber(
+    "god-agent:left-sidebar-width",
+    DEFAULT_LEFT_SIDEBAR_WIDTH,
+  );
+  const [rightInspectorWidth, setRightInspectorWidth] = useStoredNumber(
+    "god-agent:right-workbench-width",
+    DEFAULT_RIGHT_INSPECTOR_WIDTH,
+  );
+  const [sidebarResizing, setSidebarResizing] = useState(false);
+  const [inspectorResizing, setInspectorResizing] = useState(false);
   const [inspectorTab, setInspectorTab] = useState<InspectorTab>("activity");
+  const [preview, setPreview] = useState<{ state: "stopped" } | { state: "running"; url: string }>({ state: "stopped" });
+  const [previewBusy, setPreviewBusy] = useState(false);
+  const [browserState, setBrowserState] = useState<BrowserState>();
   const [showJumpToBottom, setShowJumpToBottom] = useState(false);
   const [permissionRequest, setPermissionRequest] = useState<DesktopPermissionRequest>();
+  const [viewportWidth, setViewportWidth] = useState(() => window.innerWidth);
   const timelineRef = useRef<HTMLDivElement>(null);
   const historySearchRef = useRef<HTMLInputElement>(null);
   const composerRef = useRef<HTMLTextAreaElement>(null);
   const autoFollowRef = useRef(true);
   const pendingEventsRef = useRef<DesktopEvent[]>([]);
   const eventFrameRef = useRef<number | undefined>(undefined);
+
+  useEffect(() => {
+    const updateViewportWidth = () => setViewportWidth(window.innerWidth);
+    window.addEventListener("resize", updateViewportWidth);
+    return () => window.removeEventListener("resize", updateViewportWidth);
+  }, []);
+
+  const resizeLeftSidebar = useCallback((clientX: number) => {
+    const rightWidth = rightOpen ? clamp(rightInspectorWidth, MIN_RIGHT_INSPECTOR_WIDTH, MAX_RIGHT_INSPECTOR_WIDTH) : 0;
+    const maxWidth = Math.max(MIN_LEFT_SIDEBAR_WIDTH, Math.min(
+      MAX_LEFT_SIDEBAR_WIDTH,
+      window.innerWidth - rightWidth - MIN_WORKSPACE_WIDTH,
+    ));
+    setLeftSidebarWidth(clamp(clientX, MIN_LEFT_SIDEBAR_WIDTH, maxWidth));
+  }, [rightInspectorWidth, rightOpen, setLeftSidebarWidth]);
+
+  const resizeRightInspector = useCallback((clientX: number) => {
+    const leftWidth = leftOpen ? clamp(leftSidebarWidth, MIN_LEFT_SIDEBAR_WIDTH, MAX_LEFT_SIDEBAR_WIDTH) : 0;
+    const maxWidth = Math.max(MIN_RIGHT_INSPECTOR_WIDTH, Math.min(
+      MAX_RIGHT_INSPECTOR_WIDTH,
+      window.innerWidth - leftWidth - MIN_WORKSPACE_WIDTH,
+    ));
+    setRightInspectorWidth(clamp(
+      window.innerWidth - clientX,
+      MIN_RIGHT_INSPECTOR_WIDTH,
+      maxWidth,
+    ));
+  }, [leftOpen, leftSidebarWidth, setRightInspectorWidth]);
+
+  function startLeftSidebarResize(event: ReactPointerEvent<HTMLDivElement>) {
+    if (event.button !== 0) return;
+    event.currentTarget.setPointerCapture(event.pointerId);
+    setSidebarResizing(true);
+    resizeLeftSidebar(event.clientX);
+  }
+
+  function finishLeftSidebarResize(event: ReactPointerEvent<HTMLDivElement>) {
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+    setSidebarResizing(false);
+  }
+
+  function startRightInspectorResize(event: ReactPointerEvent<HTMLDivElement>) {
+    if (event.button !== 0) return;
+    event.currentTarget.setPointerCapture(event.pointerId);
+    setInspectorResizing(true);
+    resizeRightInspector(event.clientX);
+  }
+
+  function finishRightInspectorResize(event: ReactPointerEvent<HTMLDivElement>) {
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+    setInspectorResizing(false);
+  }
+
+  function resetRightInspectorWidth() {
+    setRightInspectorWidth(DEFAULT_RIGHT_INSPECTOR_WIDTH);
+  }
+
+  function resetThreePaneWidths() {
+    setLeftSidebarWidth(DEFAULT_LEFT_SIDEBAR_WIDTH);
+    setRightInspectorWidth(DEFAULT_RIGHT_INSPECTOR_WIDTH);
+  }
 
   useEffect(() => {
     const removeRuntime = window.godAgent.runtime.onStatusChange(setRuntime);
@@ -165,6 +265,30 @@ export function App() {
       }
     };
   }, []);
+
+  useEffect(() => {
+    void window.godAgent.preview.getStatus().then(setPreview).catch(() => setPreview({ state: "stopped" }));
+  }, []);
+
+  useEffect(() => {
+    const removeBrowser = window.godAgent.browser.onStateChange(setBrowserState);
+    void window.godAgent.browser.getState().then(setBrowserState);
+    return removeBrowser;
+  }, []);
+
+  useEffect(() => {
+    if (ui.snapshot?.agentRuntime?.fixedProductStage !== "completed" || preview.state === "running" || previewBusy) return;
+    setPreviewBusy(true);
+    void window.godAgent.preview.start()
+      .then(async (status) => {
+        setPreview(status);
+        setRightOpen(true);
+        setInspectorTab("browser");
+        if (status.state === "running") setBrowserState(await window.godAgent.browser.createTab(status.url));
+      })
+      .catch(() => setPreview({ state: "stopped" }))
+      .finally(() => setPreviewBusy(false));
+  }, [ui.snapshot?.agentRuntime?.fixedProductStage, preview.state, previewBusy, setRightOpen]);
 
   async function answerPermission(
     decision: "allow" | "deny",
@@ -318,6 +442,22 @@ export function App() {
   const activeAgentCount = ui.snapshot?.agentRuns.filter((run) =>
     ["queued", "running", "waiting_children", "resuming"].includes(run.status),
   ).length ?? 0;
+  const visibleLeftSidebarWidth = leftOpen
+    ? clamp(
+        leftSidebarWidth,
+        MIN_LEFT_SIDEBAR_WIDTH,
+        Math.max(MIN_LEFT_SIDEBAR_WIDTH, Math.min(MAX_LEFT_SIDEBAR_WIDTH, viewportWidth - (rightOpen ? MIN_RIGHT_INSPECTOR_WIDTH : 0) - MIN_WORKSPACE_WIDTH)),
+      )
+    : 0;
+  const rightInspectorMaxWidth = getRightInspectorMaxWidth(
+    viewportWidth,
+    visibleLeftSidebarWidth,
+  );
+  const visibleRightInspectorWidth = clamp(
+    rightInspectorWidth,
+    MIN_RIGHT_INSPECTOR_WIDTH,
+    rightInspectorMaxWidth,
+  );
   const latestAssistantOutput = findLatestAssistantOutput(
     ui.snapshot?.messages ?? [],
     ui.runtimeSession,
@@ -493,9 +633,37 @@ export function App() {
       className="desktop-app"
       data-left-open={leftOpen}
       data-right-open={rightOpen}
+      data-pane-resizing={sidebarResizing || inspectorResizing}
+      style={{
+        "--left-sidebar-width": `${visibleLeftSidebarWidth}px`,
+        "--right-inspector-width": `${visibleRightInspectorWidth}px`,
+      } as CSSProperties}
     >
       <div className="desktop-layout">
         <aside className="left-sidebar" aria-hidden={!leftOpen}>
+          <div
+            className="left-sidebar-resizer pane-resizer"
+            role="separator"
+            aria-label="调整任务栏宽度"
+            aria-orientation="vertical"
+            aria-valuemin={MIN_LEFT_SIDEBAR_WIDTH}
+            aria-valuemax={MAX_LEFT_SIDEBAR_WIDTH}
+            aria-valuenow={visibleLeftSidebarWidth}
+            tabIndex={leftOpen ? 0 : -1}
+            title="按住左右拖动，双击恢复三栏默认宽度"
+            onPointerDown={startLeftSidebarResize}
+            onPointerMove={(event) => {
+              if (sidebarResizing && event.currentTarget.hasPointerCapture(event.pointerId)) resizeLeftSidebar(event.clientX);
+            }}
+            onPointerUp={finishLeftSidebarResize}
+            onPointerCancel={finishLeftSidebarResize}
+            onDoubleClick={resetThreePaneWidths}
+            onKeyDown={(event) => {
+              if (event.key === "ArrowLeft") { event.preventDefault(); setLeftSidebarWidth(Math.max(visibleLeftSidebarWidth - 12, MIN_LEFT_SIDEBAR_WIDTH)); }
+              if (event.key === "ArrowRight") { event.preventDefault(); setLeftSidebarWidth(Math.min(visibleLeftSidebarWidth + 12, MAX_LEFT_SIDEBAR_WIDTH)); }
+              if (event.key === "Home") resetThreePaneWidths();
+            }}
+          />
           <div className="sidebar-actions">
             <button
               className="new-task-button"
@@ -597,7 +765,8 @@ export function App() {
                   </div>
                 </div>
                 {(label === "今天" ? todayOpen : label === "昨天" ? yesterdayOpen : historyOpen) && (label === "历史" ? items.slice(0, olderLimit) : items).map((thread) => (
-                  <div className="history-item-row" key={thread.id}>
+                  <div className="history-thread" key={thread.id}>
+                  <div className="history-item-row">
                   <button
                     type="button"
                     className="history-item"
@@ -626,6 +795,19 @@ export function App() {
                       }}><Trash2 />删除</button>
                     </div>}
                   </div>
+                  </div>
+                  {thread.id === ui.snapshot?.activeThreadId && ui.snapshot.agentRuns.some((run) => run.parentRunId !== undefined) && (
+                    <HistoryAgentTree
+                      runs={ui.snapshot.agentRuns}
+                      requirement={ui.snapshot.requirement}
+                      runtime={ui.snapshot.agentRuntime}
+                      selectedId={selectedAgentRunId}
+                      select={(run) => {
+                        setSelectedAgentRunId(run?.id);
+                        void replaceSnapshot(window.godAgent.desktop.selectAgentThread(run?.threadId));
+                      }}
+                    />
+                  )}
                   </div>
                 ))}
                 {label === "历史" && historyOpen && items.length > olderLimit && <button className="history-load-more" type="button" onClick={() => setOlderLimit((value) => value + 50)}>加载更多（剩余 {items.length - olderLimit}）</button>}
@@ -657,8 +839,8 @@ export function App() {
                   <PanelLeftOpen />
                 </button>
               )}
-              <strong>agent-learn</strong>
-              <span>{ui.snapshot?.agentConfig.model ?? "Runtime"} · {ui.snapshot?.agentConfig.reasoningEffort ?? "high"}</span>
+              <strong>{activeAgentRun === undefined ? "agent-learn / God" : formatAgentProfileName(activeAgentRun.agentProfileId)}</strong>
+              <span>{activeAgentRun === undefined ? `${ui.snapshot?.agentConfig.model ?? "Runtime"} · ${ui.snapshot?.agentConfig.reasoningEffort ?? "high"}` : `真实 Agent Thread · Attempt ${activeAgentRun.attempt}`}</span>
             </div>
             <div className="workspace-actions">
               <button className="command-palette-trigger" type="button" onClick={openCommandPalette}>
@@ -692,6 +874,25 @@ export function App() {
               <EmptyConversation />
             ) : (
               <div className="conversation">
+                {ui.snapshot?.activeAgentThreadId !== undefined && <div className="agent-thread-context"><button className="agent-thread-back" type="button" onClick={() => void replaceSnapshot(window.godAgent.desktop.selectAgentThread())}>← 返回 God</button><span><strong>{formatAgentProfileName(activeAgentRun?.agentProfileId)}</strong><small>{activeAgentRun?.task ?? "真实 Agent 对话"}</small></span></div>}
+                {ui.snapshot?.activeAgentThreadId === undefined && ui.snapshot?.requirement !== undefined && (
+                  <section className="requirement-card" data-status={ui.snapshot.requirement.status}>
+                    <div><strong>{ui.snapshot.requirement.title}</strong><span>需求 v{ui.snapshot.requirement.revision} · {ui.snapshot.requirement.status === "planned" ? "等待确认" : "已确认执行"}</span></div>
+                    <p>{ui.snapshot.requirement.objective}</p>
+                    <small>测试用例 {ui.snapshot.requirement.testCases.length} 条 · 计划：{ui.snapshot.requirement.planArtifact.path}</small>
+                    <div className="requirement-actions"><button type="button" className="secondary" onClick={() => void window.godAgent.desktop.openPlan(ui.snapshot!.requirement!.planArtifact.path)}>打开计划</button>{ui.snapshot.requirement.status === "planned" && <button type="button" onClick={() => {
+                      dispatch({ type: "clear-error" });
+                      void (async () => {
+                        try {
+                          await window.godAgent.desktop.confirmRequirement();
+                          dispatch({ type: "snapshot", snapshot: await window.godAgent.desktop.getSnapshot() });
+                        } catch (error) {
+                          dispatch({ type: "error", message: readError(error) });
+                        }
+                      })();
+                    }}>确认执行</button>}</div>
+                  </section>
+                )}
                 {ui.snapshot?.messages
                   .filter((message) =>
                     ui.runtimeSession === undefined ||
@@ -710,10 +911,6 @@ export function App() {
 
                 {ui.runtimeSession !== undefined && (
                   <RuntimeTimeline session={ui.runtimeSession} />
-                )}
-
-                {(ui.snapshot?.agentRuns.length ?? 0) > 0 && (
-                  <AgentRunTree runs={ui.snapshot!.agentRuns} runtime={ui.snapshot!.agentRuntime} selectedId={selectedAgentRunId} select={setSelectedAgentRunId} />
                 )}
 
                 {ui.runtimeSession === undefined &&
@@ -810,11 +1007,12 @@ export function App() {
                     <button
                       className={`model-select permission-mode-button${ui.snapshot?.agentConfig.agentTeam?.accessMode === "full_access" ? " is-full-access" : ""}`}
                       type="button"
+                      aria-label={`权限模式：${formatAccessMode(ui.snapshot?.agentConfig.agentTeam?.accessMode)}`}
                       aria-haspopup="menu"
                       aria-expanded={permissionMenuOpen}
                       onClick={() => { setAgentSwitchOpen(false); setModelMenuOpen(false); setPermissionMenuOpen(!permissionMenuOpen); }}
                     >
-                      <Shield />{formatAccessMode(ui.snapshot?.agentConfig.agentTeam?.accessMode)}<ChevronDown />
+                      <Shield /><span className="control-label"><span className="control-label-long">{formatAccessMode(ui.snapshot?.agentConfig.agentTeam?.accessMode)}</span><span className="control-label-short">权限</span></span><ChevronDown />
                     </button>
                     {permissionMenuOpen && <section className="agent-switch-menu permission-mode-menu" role="menu" aria-label="权限模式">
                       <header><strong>权限模式</strong><small>保存到当前 Chat，发送后冻结到本次 Job</small></header>
@@ -834,6 +1032,7 @@ export function App() {
                     <button
                       className="model-select model-settings-button"
                       type="button"
+                      aria-label={`模型与推理：${formatModelName(activeModelSettings?.model)} · ${formatReasoningEffort(activeModelSettings?.reasoningEffort)}`}
                       aria-haspopup="menu"
                       aria-expanded={modelMenuOpen}
                       disabled={(capabilities?.models.length ?? 0) === 0}
@@ -844,7 +1043,7 @@ export function App() {
                         setModelMenuOpen(!modelMenuOpen);
                       }}
                     >
-                      {formatModelName(activeModelSettings?.model)} · {formatReasoningEffort(activeModelSettings?.reasoningEffort)}<ChevronDown />
+                      <span className="control-label"><span className="control-label-long">{formatModelName(activeModelSettings?.model)} · {formatReasoningEffort(activeModelSettings?.reasoningEffort)}</span><span className="control-label-short">模型</span></span><ChevronDown />
                     </button>
                     {modelMenuOpen && <section className="model-settings-menu" role="menu" aria-label="模型与推理">
                       {modelMenuView === "simple" ? <>
@@ -892,11 +1091,12 @@ export function App() {
                     <button
                       className="model-select agent-switch-button"
                       type="button"
+                      aria-label={`子 Agent：${ui.snapshot?.agentConfig.agentTeam?.mode === "off" ? "关闭" : "开启"}`}
                       aria-haspopup="menu"
                       aria-expanded={agentSwitchOpen}
                       onClick={() => { setPermissionMenuOpen(false); setModelMenuOpen(false); setAgentSwitchOpen(!agentSwitchOpen); }}
                     >
-                      子 Agent：{ui.snapshot?.agentConfig.agentTeam?.mode === "off" ? "关闭" : "开启"}<ChevronDown />
+                      <span className="control-label"><span className="control-label-long">子 Agent：{ui.snapshot?.agentConfig.agentTeam?.mode === "off" ? "关闭" : "开启"}</span><span className="control-label-short">子 Agent</span></span><ChevronDown />
                     </button>
                     {agentSwitchOpen && <section className="agent-switch-menu" role="menu" aria-label="子 Agent 开关">
                       <button type="button" role="menuitemradio" aria-checked={ui.snapshot?.agentConfig.agentTeam?.mode !== "off"} onClick={() => { setAgentSwitchOpen(false); void replaceSnapshot(window.godAgent.desktop.updateAgentTeam({ mode: "auto" })); }}><i /> <span><strong>开启</strong><small>子 Agent 执行，父 Agent 监工验收</small></span></button>
@@ -919,6 +1119,37 @@ export function App() {
         </main>
 
         <aside className="right-inspector" aria-hidden={!rightOpen}>
+          <div
+            className="right-inspector-resizer pane-resizer"
+            role="separator"
+            aria-label="调整工作区检查器宽度"
+            aria-orientation="vertical"
+            aria-valuemin={MIN_RIGHT_INSPECTOR_WIDTH}
+            aria-valuemax={rightInspectorMaxWidth}
+            aria-valuenow={visibleRightInspectorWidth}
+            tabIndex={rightOpen ? 0 : -1}
+            title="按住左右拖动，双击恢复默认宽度"
+            onPointerDown={startRightInspectorResize}
+            onPointerMove={(event) => {
+              if (inspectorResizing && event.currentTarget.hasPointerCapture(event.pointerId)) {
+                resizeRightInspector(event.clientX);
+              }
+            }}
+            onPointerUp={finishRightInspectorResize}
+            onPointerCancel={finishRightInspectorResize}
+            onDoubleClick={resetThreePaneWidths}
+            onKeyDown={(event) => {
+              if (event.key === "ArrowLeft") {
+                event.preventDefault();
+                setRightInspectorWidth(Math.min(visibleRightInspectorWidth + 12, rightInspectorMaxWidth));
+              }
+              if (event.key === "ArrowRight") {
+                event.preventDefault();
+                setRightInspectorWidth(Math.max(visibleRightInspectorWidth - 12, MIN_RIGHT_INSPECTOR_WIDTH));
+              }
+              if (event.key === "Home") resetRightInspectorWidth();
+            }}
+          />
           <header className="inspector-header">
             <strong>工作区检查器</strong>
             <button className="icon-button" type="button" aria-label="收起右侧栏" onClick={() => setRightOpen(false)}>
@@ -929,14 +1160,32 @@ export function App() {
             <InspectorTabButton id="changes" current={inspectorTab} setCurrent={setInspectorTab}>变更</InspectorTabButton>
             <InspectorTabButton id="activity" current={inspectorTab} setCurrent={setInspectorTab}>活动</InspectorTabButton>
             <InspectorTabButton id="terminal" current={inspectorTab} setCurrent={setInspectorTab}>终端</InspectorTabButton>
+            <InspectorTabButton id="browser" current={inspectorTab} setCurrent={setInspectorTab}>浏览器</InspectorTabButton>
             <InspectorTabButton id="extensions" current={inspectorTab} setCurrent={setInspectorTab}>扩展</InspectorTabButton>
           </div>
           <div className="inspector-content">
             {inspectorTab === "changes" && <DeferredPanel icon={<FileCode2 />} title="变更检查尚未接入">遵守本轮 Git 边界，客户端不会偷偷执行 git diff。后续将通过只读 Workspace Adapter 单独实现。</DeferredPanel>}
             {inspectorTab === "terminal" && <DeferredPanel icon={<TerminalSquare />} title="桌面终端尚未接入">Runtime 当前只允许预注册的 check/test 命令；任意终端需要独立安全设计。</DeferredPanel>}
             {inspectorTab === "activity" && (
-              <div className="inspector-list">
+              <div className="inspector-list inspector-agent-runtime">
                 <div className="inspector-summary"><Activity />当前 Turn · {formatThreadState(ui.snapshot?.turnState ?? "idle")} · {activeAgentCount} Agents</div>
+                {(ui.snapshot?.agentRuns.length ?? 0) > 0 && (
+                  <AgentFlowProgress
+                    runs={ui.snapshot!.agentRuns}
+                    runtime={ui.snapshot!.agentRuntime}
+                    requirement={ui.snapshot!.requirement}
+                    activeAgentThreadId={ui.snapshot!.activeAgentThreadId}
+                    openAgent={(run) => {
+                      setSelectedAgentRunId(run.id);
+                      void replaceSnapshot(window.godAgent.desktop.selectAgentThread(run.threadId));
+                    }}
+                    advance={async (stage) => {
+                    dispatch({ type: "clear-error" });
+                    try { dispatch({ type: "snapshot", snapshot: await window.godAgent.desktop.advanceFixedProduct(stage) }); }
+                    catch (error) { dispatch({ type: "error", message: readError(error) }); }
+                    }}
+                  />
+                )}
                 {ui.activities.length === 0
                   ? <p className="inspector-empty">发送任务后，这里显示真实 Tool、Search 和模型活动。</p>
                   : ui.activities.map((item) => (
@@ -946,6 +1195,27 @@ export function App() {
                       </div>
                     ))}
               </div>
+            )}
+            {inspectorTab === "browser" && (
+              <BrowserPanel
+                browserState={browserState}
+                setBrowserState={setBrowserState}
+                preview={preview}
+                busy={previewBusy}
+                suspended={permissionRequest !== undefined || sidebarResizing || inspectorResizing}
+                openLocal={() => {
+                  setPreviewBusy(true);
+                  const start = preview.state === "running"
+                    ? Promise.resolve(preview)
+                    : window.godAgent.preview.start();
+                  void start
+                    .then(async (status) => {
+                      setPreview(status);
+                      if (status.state === "running") setBrowserState(await window.godAgent.browser.createTab(status.url));
+                    })
+                    .finally(() => setPreviewBusy(false));
+                }}
+              />
             )}
             {inspectorTab === "extensions" && (
               <ExtensionsPanel capabilities={capabilities} />
@@ -983,70 +1253,193 @@ export function App() {
   );
 }
 
-function AgentRunTree({ runs, runtime, selectedId, select }: { runs: import("../desktop-types.js").DesktopAgentRun[]; runtime: import("../desktop-types.js").DesktopAgentRuntimeView | undefined; selectedId: string | undefined; select: (id: string | undefined) => void }) {
-  const profileNames: Record<string, string> = {
-    orchestrator: "父 Agent", investigator: "排查 Agent", researcher: "资料 Agent", coder: "编程 Agent", tester: "测试 Agent", reviewer: "审查 Agent",
+type AgentFlowStepState = "done" | "active" | "waiting" | "rework";
+
+function AgentFlowProgress({ runs, runtime, requirement, activeAgentThreadId, openAgent, advance }: {
+  runs: import("../desktop-types.js").DesktopAgentRun[];
+  runtime: import("../desktop-types.js").DesktopAgentRuntimeView | undefined;
+  requirement: import("../../requirements/requirement.js").Requirement | undefined;
+  activeAgentThreadId: string | undefined;
+  openAgent: (run: import("../desktop-types.js").DesktopAgentRun) => void;
+  advance: (stage: import("../../agents/fixed-software-team-coordinator.js").FixedProductStage) => Promise<void>;
+}) {
+  const [executionExpanded, setExecutionExpanded] = useState(false);
+  const furthestStepByJob = useRef(new Map<string, number>());
+  const latestRunByThread = new Map<string, import("../desktop-types.js").DesktopAgentRun>();
+  for (const run of runs.filter((item) => item.parentRunId !== undefined)) {
+    const previous = latestRunByThread.get(run.threadId);
+    if (previous === undefined || run.attempt >= previous.attempt) latestRunByThread.set(run.threadId, run);
+  }
+  const childRuns = [...latestRunByThread.values()];
+  const terminalRunStates = new Set(["completed", "failed", "cancelled", "timed_out"]);
+  const finishedRuns = childRuns.filter((run) => terminalRunStates.has(run.status)).length;
+  const runningRuns = childRuns.filter((run) => ["queued", "running", "waiting_children", "resuming"].includes(run.status)).length;
+  const consumedReturns = runtime?.returns.filter((item) => item.status === "consumed").length ?? 0;
+  const latestReviewByTask = new Map<string, import("../../agents/agent-runtime.js").AgentEvidence>();
+  for (const review of (runtime?.evidence ?? []).filter((item) => item.kind === "review").sort((left, right) => Date.parse(left.createdAt) - Date.parse(right.createdAt))) latestReviewByTask.set(review.taskId, review);
+  const passedReviews = [...latestReviewByTask.values()].filter((item) => item.verdict === "passed").length;
+  const failedReviews = [...latestReviewByTask.values()].filter((item) => item.verdict === "failed").length;
+  const reworkTasks = runtime?.tasks.filter((item) => item.status === "rework").length ?? 0;
+  const requirementConfirmed = requirement !== undefined && !["clarifying", "planned"].includes(requirement.status);
+  const dispatched = childRuns.length > 0 || (runtime?.tasks.length ?? 0) > 0;
+  const hasRework = reworkTasks > 0 || failedReviews > 0;
+  const jobStatus = runtime?.job?.status;
+  const jobCompleted = jobStatus === "completed" || requirement?.status === "completed";
+  const executionFinished = childRuns.length > 0 && finishedRuns === childRuns.length;
+  const reviewActive = jobStatus === "reviewing" || (runtime?.tasks.some((item) => item.status === "reviewing") ?? false);
+  let derivedCurrentStep = 1;
+  if (requirementConfirmed) derivedCurrentStep = 2;
+  if (dispatched) derivedCurrentStep = 3;
+  if (executionFinished && (reviewActive || hasRework || passedReviews > 0)) derivedCurrentStep = 4;
+  if (executionFinished && !reviewActive && !hasRework && (passedReviews > 0 || ["waiting_returns", "resuming"].includes(jobStatus ?? ""))) derivedCurrentStep = 5;
+  if (jobCompleted) derivedCurrentStep = 6;
+  const flowKey = runtime?.job?.id ?? requirement?.id ?? runs[0]?.jobId ?? "current";
+  const currentStep = Math.max(derivedCurrentStep, furthestStepByJob.current.get(flowKey) ?? 1);
+  furthestStepByJob.current.set(flowKey, currentStep);
+  const stateFor = (index: number): AgentFlowStepState => {
+    if (index < currentStep || currentStep === 6) return "done";
+    if (index > currentStep) return "waiting";
+    if ((index === 3 || index === 4) && hasRework) return "rework";
+    return "active";
   };
-  const roots = runs.filter((run) => run.parentRunId === undefined);
-  const childRuns = runs.filter((run) => run.parentRunId !== undefined);
+  const completedSteps = currentStep === 6 ? 5 : Math.max(0, currentStep - 1);
+  const flowSteps = [
+    { label: "确认需求", detail: requirementConfirmed ? `v${requirement?.revision ?? 1} 已确认` : "等待确认" },
+    { label: "分派任务", detail: dispatched ? `已分派 ${childRuns.length || runtime?.tasks.length || 0} 个任务` : "等待 God 分派" },
+    { label: "Agent 执行", detail: childRuns.length === 0 ? "等待 Agent 启动" : `${finishedRuns}/${childRuns.length} 已结束${runningRuns > 0 ? ` · ${runningRuns} 进行中` : ""}` },
+    { label: "Reviewer 验收", detail: hasRework ? `${Math.max(reworkTasks, failedReviews)} 项需返工` : passedReviews > 0 ? `${passedReviews} 项已通过` : "等待验收" },
+    { label: "God 汇总", detail: jobCompleted ? "最终结果已完成" : currentStep === 5 ? "正在收口最终结果" : "等待前序完成" },
+  ];
+  const returnCount = runtime?.returns.length ?? 0;
+  const substages: Array<{ label: string; detail: string; state: AgentFlowStepState }> = [
+    { label: "子任务分派", detail: dispatched ? "已完成" : "等待分派", state: dispatched ? "done" : currentStep === 2 ? "active" : "waiting" },
+    { label: "并行执行", detail: childRuns.length === 0 ? "尚未开始" : `${finishedRuns}/${childRuns.length} 已结束`, state: executionFinished ? "done" : currentStep === 3 && !hasRework ? "active" : "waiting" },
+    { label: "返工处理", detail: hasRework ? `${Math.max(reworkTasks, failedReviews)} 项处理中` : "暂无返工", state: hasRework ? "rework" : executionFinished ? "done" : "waiting" },
+    { label: "Return 回传", detail: returnCount === 0 ? "等待回传" : `${consumedReturns}/${returnCount} 已接收`, state: returnCount > 0 && consumedReturns === returnCount ? "done" : returnCount > 0 ? "active" : "waiting" },
+  ];
+  return (
+    <section className="agent-flow-progress" aria-label="God Agent 协作流程">
+      <header className="agent-flow-header">
+        <span><strong>协作流程</strong><small>{currentStep === 6 ? "全部完成" : `正在进行第 ${currentStep} 步`}</small></span>
+        <strong>{completedSteps}/5</strong>
+      </header>
+      <div className="agent-flow-track" aria-hidden="true"><span style={{ width: `${(completedSteps / 5) * 100}%` }} /></div>
+      <ol className="agent-flow-steps">
+        {flowSteps.map((step, index) => {
+          const stepNumber = index + 1;
+          const state = stateFor(stepNumber);
+          const isExecutionStep = stepNumber === 3;
+          return <li key={step.label} className="agent-flow-step" data-state={state}>
+            {isExecutionStep ? (
+              <button type="button" className="agent-flow-step-button" aria-expanded={executionExpanded} aria-controls="agent-execution-substages" onClick={() => setExecutionExpanded((value) => !value)}>
+                <span className="agent-flow-step-marker">{state === "done" ? <CircleCheck /> : stepNumber}</span>
+                <span><strong>{step.label}</strong><small>{step.detail}</small></span>
+                {executionExpanded ? <ChevronDown /> : <ChevronRight />}
+              </button>
+            ) : (
+              <div className="agent-flow-step-content">
+                <span className="agent-flow-step-marker">{state === "done" ? <CircleCheck /> : stepNumber}</span>
+                <span><strong>{step.label}</strong><small>{step.detail}</small></span>
+              </div>
+            )}
+            {isExecutionStep && executionExpanded && (
+              <ol className="agent-flow-substages" id="agent-execution-substages">
+                {substages.map((substage) => <li key={substage.label} data-state={substage.state}><span /><span><strong>{substage.label}</strong><small>{substage.detail}</small></span></li>)}
+              </ol>
+            )}
+          </li>;
+        })}
+      </ol>
+      {runtime?.fixedProductStage !== undefined && runtime.fixedProductStage !== "completed" && <button className="fixed-product-advance agent-flow-next-action" type="button" onClick={() => void advance(runtime.fixedProductStage!)}>{formatFixedProductAction(runtime.fixedProductStage)}</button>}
+      <section className="agent-flow-agents" aria-label="子 Agent 最新工作">
+        <header><strong>Agent 动态</strong><small>{childRuns.length} 个</small></header>
+        {childRuns.length === 0 ? <p className="agent-flow-empty">任务分派后，这里会显示每个 Agent 的最新工作。</p> : (
+          <ul>{childRuns.map((run) => {
+            const latestWork = formatAgentLatestWork(run, runtime);
+            return <li key={run.id} data-status={run.status}>
+              <button type="button" className="agent-flow-agent-button" aria-current={activeAgentThreadId === run.threadId} onClick={() => openAgent(run)}>
+                <span className="agent-status-dot" />
+                <span><span><strong>{formatAgentProfileName(run.agentProfileId)}</strong><small>{formatAgentState(run.status)}</small></span><small className="agent-flow-agent-latest" title={latestWork}>{latestWork}</small></span>
+                <ChevronRight />
+              </button>
+            </li>;
+          })}</ul>
+        )}
+      </section>
+    </section>
+  );
+}
+
+function HistoryAgentTree({ runs, requirement, runtime, selectedId, select }: {
+  runs: import("../desktop-types.js").DesktopAgentRun[];
+  requirement: import("../../requirements/requirement.js").Requirement | undefined;
+  runtime: import("../desktop-types.js").DesktopAgentRuntimeView | undefined;
+  selectedId: string | undefined;
+  select: (run: import("../desktop-types.js").DesktopAgentRun | undefined) => void;
+}) {
   const children = new Map<string, typeof runs>();
   for (const run of runs) {
     if (run.parentRunId === undefined) continue;
     children.set(run.parentRunId, [...(children.get(run.parentRunId) ?? []), run]);
   }
-  const renderRun = (run: typeof runs[number]) => {
-    const task = runtime?.tasks.find((item) => item.id === run.taskId);
-    const evidence = runtime?.evidence.filter((item) => item.taskId === task?.id) ?? [];
-    const review = evidence.filter((item) => item.kind === "review").at(-1);
-    return <li key={run.id} data-status={run.status}>
+  const renderRun = (run: typeof runs[number]) => <li key={run.id} data-status={run.status}>
+    <button type="button" aria-expanded={selectedId === run.id} onClick={() => select(selectedId === run.id ? undefined : run)}>
       <span className="agent-status-dot" />
-      <button type="button" className="agent-node-button" aria-expanded={selectedId === run.id} onClick={() => select(selectedId === run.id ? undefined : run.id)}>
-        <span><strong>{profileNames[run.agentProfileId] ?? run.agentProfileId}</strong><small>{run.task}</small></span>
-        <span className="agent-node-state">{formatAgentState(run.status)}{review?.verdict === "passed" ? " · 验收通过" : review?.verdict === "failed" ? " · 需返工" : ""}<ChevronRight /></span>
-      </button>
-      {selectedId === run.id && <AgentNodeDetails run={run} runtime={runtime} />}
-      {(children.get(run.id)?.length ?? 0) > 0 && <ul>{children.get(run.id)!.map(renderRun)}</ul>}
-    </li>;
-  };
-  const consumedReturns = runtime?.returns.filter((item) => item.status === "consumed").length ?? 0;
-  const passedReviews = runtime?.evidence.filter((item) => item.kind === "review" && item.verdict === "passed").length ?? 0;
-  const failedReviews = runtime?.evidence.filter((item) => item.kind === "review" && item.verdict === "failed").length ?? 0;
-  const reworkTasks = runtime?.tasks.filter((item) => item.status === "rework").length ?? 0;
-  return (
-    <details className="agent-run-tree">
-      <summary>
-        <span className="agent-parent-icon"><Bot /></span>
-        <span><strong>父 Agent · {formatSupervisorState(runtime?.job?.status)}</strong><small>{childRuns.length} 个子 Agent · {childRuns.filter((item) => item.status === "running").length} 运行 · {childRuns.filter((item) => item.status === "queued").length} 等待</small></span>
-        <ChevronRight className="agent-tree-chevron" />
-      </summary>
-      <div className="agent-supervision-body">
-        <section className="agent-acceptance-summary">
-          <header><strong>父 Agent 监工与验收</strong><small>Job：{runtime?.job?.status ?? "运行中"} · 当前权限：{formatAccessMode(runtime?.job?.configSnapshot.accessMode)}</small></header>
-          <div>
-            <span><strong>{consumedReturns}/{runtime?.returns.length ?? 0}</strong><small>已接收 Return</small></span>
-            <span><strong>{passedReviews}</strong><small>Review 通过</small></span>
-            <span><strong>{failedReviews + reworkTasks}</strong><small>返工 / 未通过</small></span>
-            <span><strong>{runtime?.tasks.filter((item) => item.status === "completed").length ?? 0}/{runtime?.tasks.length ?? 0}</strong><small>任务已完成</small></span>
-          </div>
-          <p>{formatSupervisorMessage(runtime?.job?.status, childRuns)}</p>
-        </section>
-        <ul className="agent-child-list">{roots.flatMap((root) => children.get(root.id) ?? []).map(renderRun)}</ul>
-        {childRuns.length === 0 && <p className="agent-empty-children">父 Agent 正在分析需求，尚未派出子 Agent。</p>}
-      </div>
+      <span><strong>{formatAgentProfileName(run.agentProfileId)}</strong><small>{formatAgentState(run.status)} · {formatAgentResponsibility(run.agentProfileId)}</small></span>
+      <ChevronRight />
+    </button>
+    {selectedId === run.id && <small className={`history-agent-detail${run.safeError === undefined ? "" : " is-error"}`}>{run.safeError ?? `打开真实对话：${run.task}`}</small>}
+    {(children.get(run.id)?.length ?? 0) > 0 && <ul>{children.get(run.id)!.map(renderRun)}</ul>}
+  </li>;
+  const roots = runs.filter((run) => run.parentRunId === undefined);
+  return <div className="history-workflow-tree">
+    <div className="history-god-node"><strong>God</strong><small>{requirement === undefined ? "当前 Chat" : `${requirement.title} · v${requirement.revision}`}</small></div>
+    <details className="history-team-node" open>
+      <summary><strong>软件产品演示团队</strong><small>{runtime?.job?.status ?? "等待启动"} · 1 位负责人 / 3 个角色</small></summary>
+      <p>目标：产品、工程、测试逐级向负责人 Return，负责人验收后再 Return God。</p>
+      <ul className="history-agent-tree" aria-label="当前 Chat 固定软件团队树">
+        {roots.flatMap((root) => children.get(root.id) ?? []).map(renderRun)}
+      </ul>
     </details>
-  );
+  </div>;
 }
 
-function AgentNodeDetails({ run, runtime }: { run: import("../desktop-types.js").DesktopAgentRun | undefined; runtime: import("../desktop-types.js").DesktopAgentRuntimeView | undefined }) {
-  if (run === undefined) return null;
+function formatAgentLatestWork(run: import("../desktop-types.js").DesktopAgentRun, runtime: import("../desktop-types.js").DesktopAgentRuntimeView | undefined): string {
+  const matchesTask = (taskId: string | undefined) => run.taskId !== undefined && taskId === run.taskId;
+  const candidates: Array<{ summary: string; createdAt: string }> = [];
+  for (const item of runtime?.evidence ?? []) {
+    if (item.runId === run.id || matchesTask(item.taskId)) candidates.push({ summary: item.summary, createdAt: item.createdAt });
+  }
+  for (const item of runtime?.board ?? []) {
+    const boardTaskId = "taskId" in item && typeof item.taskId === "string" ? item.taskId : undefined;
+    if (item.producerRunId === run.id || matchesTask(boardTaskId)) candidates.push({ summary: item.summary, createdAt: item.createdAt });
+  }
+  for (const item of runtime?.returns ?? []) {
+    if (item.childRunId === run.id || matchesTask(item.taskId)) candidates.push({ summary: item.result.summary, createdAt: item.createdAt });
+  }
   const task = runtime?.tasks.find((item) => item.id === run.taskId);
-  const edges = runtime?.edges.filter((item) => item.fromTaskId === task?.id || item.toTaskId === task?.id) ?? [];
-  const evidence = runtime?.evidence.filter((item) => item.taskId === task?.id) ?? [];
-  const returns = runtime?.returns.filter((item) => item.childRunId === run.id) ?? [];
-  return <section className="agent-node-details">
-    <strong>节点详情</strong>
-    <dl><dt>任务合同</dt><dd>{task?.objective ?? run.task}</dd><dt>直接父节点</dt><dd>{run.parentRunId ?? "无（首脑）"}</dd><dt>依赖</dt><dd>{edges.length === 0 ? "无" : edges.map((edge) => `${edge.type}: ${edge.fromTaskId} → ${edge.toTaskId}`).join("；")}</dd><dt>角色 / 层级</dt><dd>{run.agentProfileId} / {run.depth}</dd><dt>访问权限</dt><dd>{formatAccessMode(runtime?.job?.configSnapshot.accessMode)}（继承本次 Job 快照）</dd><dt>父子约束</dt><dd>{runtime?.job?.configSnapshot.permissionMode === "least_privilege" ? "Profile 与 Tool 求交集，子 Agent 不可扩大" : "继承 Chat 后仍受 Profile / Tool 限制"}</dd><dt>Evidence</dt><dd>{evidence.length === 0 ? "暂无" : evidence.map((item) => `${item.kind} · ${item.verdict} · ${item.summary}`).join("；")}</dd><dt>Return</dt><dd>{returns.length === 0 ? "暂无" : returns.map((item) => `${item.status} · 尝试 ${item.attempts}`).join("；")}</dd></dl>
-  </section>;
+  const latest = candidates.sort((left, right) => Date.parse(right.createdAt) - Date.parse(left.createdAt))[0]?.summary.trim();
+  return latest || run.safeError || (task === undefined ? run.task : `${formatAgentState(run.status)} · ${task.objective || task.title}`);
+}
+
+function formatAgentProfileName(profileId: string | undefined): string {
+  const names: Record<string, string> = {
+    orchestrator: "God", software_team_lead: "软件团队负责人",
+    product_role: "产品角色 Agent", engineering_role: "工程角色 Agent", quality_role: "测试角色 Agent",
+    investigator: "排查 Agent", researcher: "资料 Agent", coder: "编程 Agent", tester: "测试 Agent", reviewer: "审查 Agent",
+  };
+  return profileId === undefined ? "Agent" : names[profileId] ?? profileId;
+}
+
+function formatAgentResponsibility(profileId: string): string {
+  const responsibilities: Record<string, string> = {
+    software_team_lead: "拆分、监工、验收，并只把合格结果 Return God",
+    product_role: "只负责产品需求、页面结构与产品验收条件",
+    engineering_role: "只负责工程方案和获准的实现工作",
+    quality_role: "独立检查产品与工程结果，不修改前两者产物",
+    reviewer: "独立审查证据和回归风险",
+  };
+  return responsibilities[profileId] ?? "完成当前任务合同并向直属父级 Return";
 }
 
 function formatAccessMode(mode: import("../../agents/agent-runtime.js").AgentAccessMode | undefined): string {
@@ -1073,21 +1466,13 @@ function describePower(effort: string | undefined): string {
   return "适合复杂、多步骤且需要检查的任务";
 }
 
-function formatSupervisorState(status: import("../../agents/agent-runtime.js").AgentJobStatus | undefined): string {
-  if (status === "completed") return "验收完成";
-  if (status === "failed" || status === "partial") return "发现问题";
-  if (status === "cancelled") return "已停止";
-  if (status === "reviewing") return "正在验收";
-  if (status === "waiting_returns") return "等待子 Agent";
-  return "监工中";
-}
-
-function formatSupervisorMessage(status: import("../../agents/agent-runtime.js").AgentJobStatus | undefined, childRuns: import("../desktop-types.js").DesktopAgentRun[]): string {
-  if (status === "completed") return "全部子任务已经返回并完成验收，父 Agent 已汇总最终结果。";
-  if (status === "failed" || status === "partial") return "存在未通过或未完成的子任务，父 Agent 正在决定返工或降级处理。";
-  if (status === "reviewing") return "子 Agent 已返回结果，父 Agent 正在检查证据和验收条件。";
-  if (childRuns.some((item) => item.status === "running")) return "子 Agent 正在执行，父 Agent 持续监控进度并等待结构化结果。";
-  return "父 Agent 正在拆分需求和安排子任务。";
+function formatFixedProductAction(stage: import("../../agents/fixed-software-team-coordinator.js").FixedProductStage): string {
+  if (stage === "ready_first_return") return "1. 产品生成第一轮 Return";
+  if (stage === "first_return_ready") return "2. 负责人验收并驳回";
+  if (stage === "rework") return "3. 原产品 Thread 返工（Attempt 2）";
+  if (stage === "second_return_ready") return "4. 负责人通过并 Return God";
+  if (stage === "lead_return_ready") return "5. God 接收并单次汇总";
+  return "完整项目闭环已完成";
 }
 
 function formatThreadState(state: import("../desktop-types.js").DesktopTurnState): string {
@@ -1154,6 +1539,152 @@ function ExtensionsPanel(props: { capabilities: RuntimeCapabilities | undefined 
   );
 }
 
+function BrowserPanel(props: {
+  browserState: BrowserState | undefined;
+  setBrowserState: (state: BrowserState) => void;
+  preview: { state: "stopped" } | { state: "running"; url: string };
+  busy: boolean;
+  suspended: boolean;
+  openLocal: () => void;
+}) {
+  const [address, setAddress] = useState("");
+  const [actionError, setActionError] = useState<string>();
+  const surfaceRef = useRef<HTMLDivElement>(null);
+  const addressRef = useRef<HTMLInputElement>(null);
+  const addressFocusedRef = useRef(false);
+  const activeTab = props.browserState?.tabs.find((tab) => tab.id === props.browserState?.activeTabId);
+
+  useEffect(() => {
+    if (!addressFocusedRef.current) setAddress(activeTab?.url ?? "");
+  }, [activeTab?.id, activeTab?.url]);
+
+  useEffect(() => window.godAgent.browser.onCommand(() => {
+    window.requestAnimationFrame(() => {
+      addressRef.current?.focus();
+      addressRef.current?.select();
+    });
+  }), []);
+
+  useEffect(() => {
+    const surface = surfaceRef.current;
+    if (surface === null) return;
+    let frame: number | undefined;
+    const publishBounds = () => {
+      frame = undefined;
+      const rect = surface.getBoundingClientRect();
+      window.godAgent.browser.setBounds({
+        x: rect.x,
+        y: rect.y,
+        width: rect.width,
+        height: rect.height,
+        visible: !props.suspended && rect.width > 0 && rect.height > 0,
+      });
+    };
+    const scheduleBounds = () => {
+      if (frame === undefined) frame = window.requestAnimationFrame(publishBounds);
+    };
+    const observer = new ResizeObserver(scheduleBounds);
+    observer.observe(surface);
+    window.addEventListener("resize", scheduleBounds);
+    scheduleBounds();
+    return () => {
+      observer.disconnect();
+      window.removeEventListener("resize", scheduleBounds);
+      if (frame !== undefined) window.cancelAnimationFrame(frame);
+      window.godAgent.browser.setBounds({ x: 0, y: 0, width: 0, height: 0, visible: false });
+    };
+  }, [activeTab !== undefined, props.suspended]);
+
+  const apply = (operation: Promise<BrowserState>) => {
+    setActionError(undefined);
+    void operation.then(props.setBrowserState).catch((error: unknown) => setActionError(readError(error)));
+  };
+
+  if (props.browserState === undefined || activeTab === undefined) {
+    return <div className="browser-workbench"><div className="browser-loading-state"><CircleDashed /><span>正在启动浏览器…</span></div></div>;
+  }
+
+  const createTab = () => {
+    setActionError(undefined);
+    void window.godAgent.browser.createTab()
+      .then((state) => {
+        props.setBrowserState(state);
+        window.requestAnimationFrame(() => addressRef.current?.focus());
+      })
+      .catch((error: unknown) => setActionError(readError(error)));
+  };
+
+  return <div className="browser-workbench">
+    <div className="browser-tab-strip">
+      <div className="browser-tabs" role="tablist" aria-label="网页标签">
+        {props.browserState.tabs.map((tab) => (
+          <div
+            className={`browser-tab${tab.id === props.browserState?.activeTabId ? " is-active" : ""}`}
+            role="tab"
+            tabIndex={0}
+            aria-selected={tab.id === props.browserState?.activeTabId}
+            key={tab.id}
+            title={tab.title}
+            onClick={() => apply(window.godAgent.browser.activateTab(tab.id))}
+            onKeyDown={(event) => {
+              if (event.key === "Enter" || event.key === " ") {
+                event.preventDefault();
+                apply(window.godAgent.browser.activateTab(tab.id));
+              }
+            }}
+          >
+            {tab.faviconUrl
+              ? <img src={tab.faviconUrl} alt="" referrerPolicy="no-referrer" />
+              : <Globe2 className={tab.isLoading ? "is-loading" : ""} />}
+            <span>{tab.title}</span>
+            <span
+              className="browser-tab-close"
+              role="button"
+              tabIndex={0}
+              aria-label={`关闭 ${tab.title}`}
+              onClick={(event) => { event.stopPropagation(); apply(window.godAgent.browser.closeTab(tab.id)); }}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" || event.key === " ") {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  apply(window.godAgent.browser.closeTab(tab.id));
+                }
+              }}
+            ><X /></span>
+          </div>
+        ))}
+      </div>
+      <button className="browser-new-tab-action" type="button" aria-label="新建标签页" onClick={createTab}><Plus /></button>
+    </div>
+    <div className="browser-navigation">
+      <button className="browser-history-action" type="button" disabled={!activeTab.canGoBack} onClick={() => apply(window.godAgent.browser.goBack(activeTab.id))} aria-label="后退"><ArrowLeft /></button>
+      <button className="browser-history-action" type="button" disabled={!activeTab.canGoForward} onClick={() => apply(window.godAgent.browser.goForward(activeTab.id))} aria-label="前进"><ArrowRight /></button>
+      <button type="button" onClick={() => apply(activeTab.isLoading ? window.godAgent.browser.stop(activeTab.id) : window.godAgent.browser.reload(activeTab.id))} aria-label={activeTab.isLoading ? "停止加载" : "刷新"}>{activeTab.isLoading ? <X /> : <RotateCw />}</button>
+      <form className="browser-address" data-error={Boolean(activeTab.error || actionError)} onSubmit={(event) => {
+        event.preventDefault();
+        apply(window.godAgent.browser.navigate(activeTab.id, address));
+        addressRef.current?.blur();
+      }}>
+        <Globe2 />
+        <input
+          ref={addressRef}
+          value={address}
+          aria-label="地址栏"
+          placeholder="搜索或输入网址"
+          title={activeTab.error ?? actionError ?? activeTab.url}
+          onChange={(event) => setAddress(event.target.value)}
+          onFocus={(event) => { addressFocusedRef.current = true; event.currentTarget.select(); }}
+          onBlur={() => { addressFocusedRef.current = false; setAddress(activeTab.url); }}
+          spellCheck={false}
+        />
+      </form>
+      <button className="browser-local-action browser-secondary-action" type="button" disabled={props.busy} onClick={props.openLocal} title="在新标签打开今日运势签"><Sparkles /><span>{props.preview.state === "running" ? "本地" : "启动"}</span></button>
+      <button className="browser-secondary-action" type="button" disabled={!activeTab.url} onClick={() => void window.godAgent.browser.openExternal(activeTab.id)} aria-label="外部打开"><ExternalLink /></button>
+    </div>
+    <div className="browser-surface" ref={surfaceRef} aria-label="网页内容" />
+  </div>;
+}
+
 function ExtensionRow(props: { icon: React.ReactNode; title: string; meta: string; enabled: boolean }) {
   return <div className="extension-row"><span className="extension-icon">{props.icon}</span><span><strong>{props.title}</strong><small>{props.meta}</small></span><i data-enabled={props.enabled}>{props.enabled ? "在线" : "关闭"}</i></div>;
 }
@@ -1171,11 +1702,36 @@ function useStoredBoolean(key: string, fallback: boolean) {
     const stored = localStorage.getItem(key);
     return stored === null ? fallback : stored === "true";
   });
-  const update = (next: boolean) => {
+  const update = useCallback((next: boolean) => {
     localStorage.setItem(key, String(next));
     setValue(next);
-  };
+  }, [key]);
   return [value, update] as const;
+}
+
+function useStoredNumber(key: string, fallback: number) {
+  const [value, setValue] = useState(() => {
+    const stored = Number(localStorage.getItem(key));
+    return Number.isFinite(stored) && stored > 0 ? stored : fallback;
+  });
+  const update = useCallback((next: number) => {
+    const rounded = Math.round(next);
+    localStorage.setItem(key, String(rounded));
+    setValue(rounded);
+  }, [key]);
+  return [value, update] as const;
+}
+
+function getRightInspectorMaxWidth(viewportWidth: number, leftWidth: number) {
+  const workspaceSafeWidth = viewportWidth - leftWidth - MIN_WORKSPACE_WIDTH;
+  return Math.max(
+    MIN_RIGHT_INSPECTOR_WIDTH,
+    Math.min(MAX_RIGHT_INSPECTOR_WIDTH, workspaceSafeWidth),
+  );
+}
+
+function clamp(value: number, minimum: number, maximum: number) {
+  return Math.min(maximum, Math.max(minimum, value));
 }
 
 function groupThreads(threads: DesktopThreadSummary[]) {

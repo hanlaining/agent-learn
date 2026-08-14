@@ -9,6 +9,27 @@ const RUNTIME_STATUS_CHANGED_CHANNEL =
 const DESKTOP_GET_SNAPSHOT_CHANNEL = "desktop:get-snapshot";
 const DESKTOP_CREATE_THREAD_CHANNEL = "desktop:create-thread";
 const DESKTOP_SELECT_THREAD_CHANNEL = "desktop:select-thread";
+const DESKTOP_SELECT_AGENT_THREAD_CHANNEL = "desktop:select-agent-thread";
+const DESKTOP_CONFIRM_REQUIREMENT_CHANNEL = "desktop:confirm-requirement";
+const DESKTOP_ADVANCE_FIXED_PRODUCT_CHANNEL = "desktop:advance-fixed-product";
+const DESKTOP_OPEN_PLAN_CHANNEL = "desktop:open-plan";
+const PREVIEW_GET_STATUS_CHANNEL = "preview:get-status";
+const PREVIEW_START_CHANNEL = "preview:start";
+const PREVIEW_STOP_CHANNEL = "preview:stop";
+const PREVIEW_OPEN_EXTERNAL_CHANNEL = "preview:open-external";
+const BROWSER_GET_STATE_CHANNEL = "browser:get-state";
+const BROWSER_CREATE_TAB_CHANNEL = "browser:create-tab";
+const BROWSER_CLOSE_TAB_CHANNEL = "browser:close-tab";
+const BROWSER_ACTIVATE_TAB_CHANNEL = "browser:activate-tab";
+const BROWSER_NAVIGATE_CHANNEL = "browser:navigate";
+const BROWSER_GO_BACK_CHANNEL = "browser:go-back";
+const BROWSER_GO_FORWARD_CHANNEL = "browser:go-forward";
+const BROWSER_RELOAD_CHANNEL = "browser:reload";
+const BROWSER_STOP_CHANNEL = "browser:stop";
+const BROWSER_OPEN_EXTERNAL_CHANNEL = "browser:open-external";
+const BROWSER_SET_BOUNDS_CHANNEL = "browser:set-bounds";
+const BROWSER_STATE_CHANGED_CHANNEL = "browser:state-changed";
+const BROWSER_COMMAND_CHANNEL = "browser:command";
 const DESKTOP_SEND_MESSAGE_CHANNEL = "desktop:send-message";
 const DESKTOP_SEARCH_WORKSPACE_FILES_CHANNEL = "desktop:search-workspace-files";
 const DESKTOP_CANCEL_TURN_CHANNEL = "desktop:cancel-turn";
@@ -155,6 +176,9 @@ function sanitizeSnapshot(value) {
     ...(typeof value.activeThreadId === "string"
       ? { activeThreadId: safeText(value.activeThreadId, 200) }
       : {}),
+    ...(typeof value.activeAgentThreadId === "string"
+      ? { activeAgentThreadId: safeText(value.activeAgentThreadId, 200) }
+      : {}),
     messages,
     capabilities: sanitizeCapabilities(value.capabilities),
     turnState: [
@@ -169,6 +193,7 @@ function sanitizeSnapshot(value) {
       : [],
     trash: Array.isArray(value.trash) ? value.trash.slice(0, 500).flatMap((thread) => isRecord(thread) && typeof thread.id === "string" && typeof thread.deletedAt === "string" && typeof thread.trashExpiresAt === "string" ? [{ id: safeText(thread.id, 200), title: safeText(thread.title, 160) || "未命名 Chat", deletedAt: safeText(thread.deletedAt, 80), trashExpiresAt: safeText(thread.trashExpiresAt, 80), ...(typeof thread.deleteBatchId === "string" ? { deleteBatchId: safeText(thread.deleteBatchId, 200) } : {}) }] : []) : [],
     ...(isRecord(value.agentRuntime) ? { agentRuntime: sanitizeAgentRuntime(value.agentRuntime) } : {}),
+    ...(isRecord(value.requirement) ? { requirement: JSON.parse(JSON.stringify(value.requirement)) } : {}),
   });
 }
 
@@ -181,6 +206,7 @@ function sanitizeAgentRuntime(value) {
     evidence: Array.isArray(value.evidence) ? value.evidence.slice(0, 500).map(clean) : [],
     board: Array.isArray(value.board) ? value.board.slice(0, 500).map(clean) : [],
     returns: Array.isArray(value.returns) ? value.returns.slice(0, 100).map(clean) : [],
+    ...(["ready_first_return", "first_return_ready", "rework", "second_return_ready", "engineering_ready", "engineering_return_ready", "quality_ready", "quality_return_ready", "lead_return_ready", "completed"].includes(value.fixedProductStage) ? { fixedProductStage: value.fixedProductStage } : {}),
   };
 }
 
@@ -210,6 +236,9 @@ function sanitizeAgentRun(value) {
     status: value.status,
     task: safeText(value.task, 8_000),
     depth: Math.max(0, value.depth),
+    ...(typeof value.safeError === "string"
+      ? { safeError: safeText(value.safeError, 1_000) }
+      : {}),
   }];
 }
 
@@ -676,6 +705,23 @@ contextBridge.exposeInMainWorld("godAgent", {
         await invoke(DESKTOP_SELECT_THREAD_CHANNEL, threadId),
       );
     },
+    selectAgentThread: async (threadId) => sanitizeSnapshot(
+      await invoke(DESKTOP_SELECT_AGENT_THREAD_CHANNEL, threadId),
+    ),
+    confirmRequirement: async () => {
+      const value = await invoke(DESKTOP_CONFIRM_REQUIREMENT_CHANNEL);
+      if (!isRecord(value) || typeof value.turnId !== "string") throw new Error("确认执行返回无效结果");
+      return { turnId: safeText(value.turnId, 200) };
+    },
+    advanceFixedProduct: async (expectedStage) => {
+      const stages = ["ready_first_return", "first_return_ready", "rework", "second_return_ready", "engineering_ready", "engineering_return_ready", "quality_ready", "quality_return_ready", "lead_return_ready", "completed"];
+      if (typeof expectedStage !== "string" || !stages.includes(expectedStage)) throw new TypeError("Invalid fixed product stage");
+      return sanitizeSnapshot(await invoke(DESKTOP_ADVANCE_FIXED_PRODUCT_CHANNEL, expectedStage));
+    },
+    openPlan: async (path) => {
+      if (typeof path !== "string") throw new TypeError("Plan path must be a string");
+      return Boolean(await invoke(DESKTOP_OPEN_PLAN_CHANNEL, path));
+    },
     sendMessage: async (input) => {
       const safeInput = sanitizeMessageInput(input);
       const value = await invoke(DESKTOP_SEND_MESSAGE_CHANNEL, safeInput);
@@ -754,4 +800,99 @@ contextBridge.exposeInMainWorld("godAgent", {
       return () => ipcRenderer.removeListener(DESKTOP_EVENT_CHANNEL, handler);
     },
   },
+  preview: {
+    getStatus: async () => sanitizePreviewStatus(await ipcRenderer.invoke(PREVIEW_GET_STATUS_CHANNEL)),
+    start: async () => sanitizePreviewStatus(await invoke(PREVIEW_START_CHANNEL)),
+    stop: async () => sanitizePreviewStatus(await invoke(PREVIEW_STOP_CHANNEL)),
+    openExternal: async () => Boolean(await invoke(PREVIEW_OPEN_EXTERNAL_CHANNEL)),
+  },
+  browser: {
+    getState: async () => sanitizeBrowserState(await invoke(BROWSER_GET_STATE_CHANNEL)),
+    createTab: async (url) => sanitizeBrowserState(await invoke(
+      BROWSER_CREATE_TAB_CHANNEL,
+      typeof url === "string" ? safeText(url, 4_096) : undefined,
+    )),
+    closeTab: async (id) => sanitizeBrowserState(await invoke(BROWSER_CLOSE_TAB_CHANNEL, safeBrowserTabId(id))),
+    activateTab: async (id) => sanitizeBrowserState(await invoke(BROWSER_ACTIVATE_TAB_CHANNEL, safeBrowserTabId(id))),
+    navigate: async (id, url) => sanitizeBrowserState(await invoke(BROWSER_NAVIGATE_CHANNEL, {
+      id: safeBrowserTabId(id),
+      url: safeText(url, 4_096),
+    })),
+    goBack: async (id) => sanitizeBrowserState(await invoke(BROWSER_GO_BACK_CHANNEL, safeBrowserTabId(id))),
+    goForward: async (id) => sanitizeBrowserState(await invoke(BROWSER_GO_FORWARD_CHANNEL, safeBrowserTabId(id))),
+    reload: async (id) => sanitizeBrowserState(await invoke(BROWSER_RELOAD_CHANNEL, safeBrowserTabId(id))),
+    stop: async (id) => sanitizeBrowserState(await invoke(BROWSER_STOP_CHANNEL, safeBrowserTabId(id))),
+    openExternal: async (id) => Boolean(await invoke(BROWSER_OPEN_EXTERNAL_CHANNEL, safeBrowserTabId(id))),
+    setBounds: (bounds) => {
+      if (!isRecord(bounds)) return;
+      const safeDimension = (value) => Math.max(0, Math.min(20_000, Math.round(Number(value) || 0)));
+      ipcRenderer.send(BROWSER_SET_BOUNDS_CHANNEL, {
+        x: safeDimension(bounds.x),
+        y: safeDimension(bounds.y),
+        width: safeDimension(bounds.width),
+        height: safeDimension(bounds.height),
+        visible: bounds.visible === true,
+      });
+    },
+    onStateChange: (listener) => {
+      if (typeof listener !== "function") throw new TypeError("Browser state listener must be a function");
+      const handler = (_event, value) => listener(sanitizeBrowserState(value));
+      ipcRenderer.on(BROWSER_STATE_CHANGED_CHANNEL, handler);
+      return () => ipcRenderer.removeListener(BROWSER_STATE_CHANGED_CHANNEL, handler);
+    },
+    onCommand: (listener) => {
+      if (typeof listener !== "function") throw new TypeError("Browser command listener must be a function");
+      const handler = (_event, value) => {
+        if (value === "focus_address") listener(value);
+      };
+      ipcRenderer.on(BROWSER_COMMAND_CHANNEL, handler);
+      return () => ipcRenderer.removeListener(BROWSER_COMMAND_CHANNEL, handler);
+    },
+  },
 });
+
+function safeBrowserTabId(value) {
+  if (typeof value !== "string" || !/^browser-tab-\d+$/.test(value)) {
+    throw new TypeError("浏览器标签无效");
+  }
+  return value;
+}
+
+function sanitizeBrowserState(value) {
+  if (!isRecord(value) || !Array.isArray(value.tabs) || typeof value.activeTabId !== "string") {
+    throw new Error("浏览器状态无效");
+  }
+  const tabs = value.tabs.slice(0, 50).map((tab) => {
+    if (!isRecord(tab)) throw new Error("浏览器标签状态无效");
+    const id = safeBrowserTabId(tab.id);
+    const url = safeText(tab.url, 4_096);
+    if (url !== "" && !/^https?:\/\//i.test(url)) throw new Error("浏览器网址无效");
+    const faviconUrl = safeText(tab.faviconUrl, 8_192);
+    return Object.freeze({
+      id,
+      title: safeText(tab.title, 240) || "新标签页",
+      url,
+      ...(faviconUrl !== "" && (/^https?:\/\//i.test(faviconUrl) || /^data:image\//i.test(faviconUrl))
+        ? { faviconUrl }
+        : {}),
+      isLoading: tab.isLoading === true,
+      canGoBack: tab.canGoBack === true,
+      canGoForward: tab.canGoForward === true,
+      ...(typeof tab.error === "string" ? { error: safeText(tab.error, 160) } : {}),
+    });
+  });
+  const activeTabId = safeBrowserTabId(value.activeTabId);
+  if (!tabs.some((tab) => tab.id === activeTabId)) throw new Error("活动浏览器标签无效");
+  return Object.freeze({ tabs: Object.freeze(tabs), activeTabId });
+}
+
+function sanitizePreviewStatus(value) {
+  if (!isRecord(value) || (value.state !== "running" && value.state !== "stopped")) {
+    throw new Error("项目预览状态无效");
+  }
+  if (value.state === "stopped") return { state: "stopped" };
+  if (typeof value.url !== "string" || !/^http:\/\/127\.0\.0\.1:\d+\/$/.test(value.url)) {
+    throw new Error("项目预览地址无效");
+  }
+  return { state: "running", url: value.url };
+}

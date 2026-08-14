@@ -27,3 +27,11 @@ await copyFile(
   join(sourceRoot, "preload.cjs"),
   join(outputRoot, "preload.cjs"),
 );
+await copyFile(
+  join(sourceRoot, "preview-server.cjs"),
+  join(outputRoot, "preview-server.cjs"),
+);
+await copyFile(
+  join(sourceRoot, "browser-manager.cjs"),
+  join(outputRoot, "browser-manager.cjs"),
+);

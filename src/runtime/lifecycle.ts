@@ -6,6 +6,8 @@ export type ThreadStatus =
   | "active"
   | "closed";
 
+export type ThreadKind = "user_chat" | "agent_internal";
+
 export type TurnStatus =
   | "pending"
   | "in_progress"
@@ -17,12 +19,14 @@ export type TurnStatus =
 export type ItemType =
   | "user_message"
   | "assistant_message"
+  | "runtime_message"
   | "tool_call"
   | "tool_result";
 
 export interface Thread {
   id: ThreadId;
   status: ThreadStatus;
+  kind?: ThreadKind;
   createdAt: string;
   lastActivityAt?: string;
   title?: string;
@@ -92,6 +96,7 @@ export function isThread(value: unknown): value is Thread {
     (value.status === "active" ||
       value.status === "closed") &&
     typeof value.createdAt === "string" &&
+    (value.kind === undefined || value.kind === "user_chat" || value.kind === "agent_internal") &&
     (value.lastActivityAt === undefined || typeof value.lastActivityAt === "string") &&
     (value.title === undefined || typeof value.title === "string") &&
     (value.deletedAt === undefined || typeof value.deletedAt === "string") &&
@@ -149,6 +154,7 @@ export function isItem(value: unknown): value is Item {
   const validType =
     value.type === "user_message" ||
     value.type === "assistant_message" ||
+    value.type === "runtime_message" ||
     value.type === "tool_call" ||
     value.type === "tool_result";
 

@@ -78,10 +78,22 @@ test("Main IPC 自己拒绝非法发送和非法搜索，不调用 DesktopContro
   const handlers = new Map<string, (_event: unknown, value: unknown) => Promise<unknown>>();
   const inertPromise = { then() { return this; }, catch() { return this; } };
   vm.runInNewContext(source, {
-    require: (name: string) => name === "electron" ? {
-      app: { on() {}, whenReady: () => inertPromise }, BrowserWindow: class {},
-      ipcMain: { handle: (channel: string, handler: (_event: unknown, value: unknown) => Promise<unknown>) => handlers.set(channel, handler) },
-    } : name === "node:path" ? { join: (...parts: string[]) => parts.join("/") } : undefined,
+    require: (name: string) => {
+      if (name === "electron") return {
+        app: { getAppPath: () => "D:/app", on() {}, whenReady: () => inertPromise },
+        BrowserWindow: class {},
+        WebContentsView: class {},
+        ipcMain: {
+          handle: (channel: string, handler: (_event: unknown, value: unknown) => Promise<unknown>) => handlers.set(channel, handler),
+          on() {},
+        },
+        shell: {},
+      };
+      if (name === "node:path") return { join: (...parts: string[]) => parts.join("/") };
+      if (name === "./preview-server.cjs") return { PreviewServer: class {} };
+      if (name === "./browser-manager.cjs") return { BrowserManager: class {} };
+      return undefined;
+    },
     __dirname: "D:/app",
     process: { env: {}, execPath: "node", stderr: { write() {} } },
   }, { filename: "main.cjs" });

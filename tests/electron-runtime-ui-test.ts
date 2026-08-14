@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 
 import type {
   DesktopEvent,
@@ -498,6 +500,205 @@ test("桌面快照恢复仍在运行的 RuntimeSession", () => {
   });
 
   assert.deepEqual(state.runtimeSession, runtimeSession);
+});
+
+test("父 Chat 接收失败子 Agent 更新并保留安全错误", () => {
+  const base = desktopReducer(INITIAL_DESKTOP_UI_STATE, {
+    type: "snapshot",
+    snapshot: {
+      threads: [], activeThreadId: "thread-parent", messages: [],
+      capabilities: { llm: true, models: [], webSearch: false, tools: [], skills: [], mcpServers: [] },
+      turnState: "failed",
+      agentConfig: { model: "gpt-5.6-sol", reasoningEffort: "high", agentProfileId: "orchestrator" },
+      agentRuns: [],
+    },
+  });
+  const state = desktopReducer(base, {
+    type: "event",
+    event: {
+      type: "agent/run_updated",
+      threadId: "thread-parent",
+      turnId: "turn-parent",
+      run: {
+        id: "run-child", jobId: "job-parent", rootRunId: "run-root",
+        attempt: 1, threadId: "thread-internal", turnId: "turn-child",
+        agentProfileId: "reviewer", parentRunId: "run-worker",
+        status: "failed", task: "独立验收", depth: 2,
+        safeError: "Reviewer configuration is unavailable",
+      },
+    },
+  });
+
+  assert.equal(state.snapshot?.agentRuns[0]?.agentProfileId, "reviewer");
+  assert.equal(state.snapshot?.agentRuns[0]?.safeError, "Reviewer configuration is unavailable");
+});
+
+test("固定软件团队 UI 展示 God、负责人、三角色和真实 Thread 返回入口", () => {
+  const source = readFileSync(new URL("../src/electron/renderer/App.tsx", import.meta.url), "utf8");
+  assert.match(source, /软件产品演示团队/);
+  assert.match(source, /软件团队负责人/);
+  assert.match(source, /产品角色 Agent/);
+  assert.match(source, /工程角色 Agent/);
+  assert.match(source, /测试角色 Agent/);
+  assert.match(source, /selectAgentThread\(run\?\.threadId\)/);
+  assert.match(source, /← 返回 God/);
+});
+
+test("产品双轮 Return 使用受控阶段按钮且返工状态不标红", () => {
+  const appSource = readFileSync(resolve("src/electron/renderer/App.tsx"), "utf8");
+  const cssSource = readFileSync(resolve("src/electron/renderer/styles.css"), "utf8");
+  const preloadSource = readFileSync(resolve("src/electron/preload.cjs"), "utf8");
+  assert.match(appSource, /产品生成第一轮 Return/);
+  assert.match(appSource, /原产品 Thread 返工（Attempt 2）/);
+  assert.match(appSource, /God 接收并单次汇总/);
+  assert.match(appSource, /负责人验收并驳回/);
+  assert.match(appSource, /负责人通过并 Return God/);
+  assert.match(preloadSource, /desktop:advance-fixed-product/);
+  assert.match(cssSource, /fixed-product-advance/);
+  assert.doesNotMatch(cssSource, /rework[^}]*var\(--negative\)/s);
+});
+
+test("真实 Agent 对话提示仅在安全错误存在时使用错误色", () => {
+  const appSource = readFileSync(
+    resolve("src/electron/renderer/App.tsx"),
+    "utf8",
+  );
+  const styles = readFileSync(
+    resolve("src/electron/renderer/styles.css"),
+    "utf8",
+  );
+
+  assert.match(
+    appSource,
+    /run\.safeError === undefined \? "" : " is-error"/,
+  );
+  assert.match(
+    styles,
+    /\.history-agent-detail \{[^}]*color: var\(--faint-text\)/,
+  );
+  assert.match(
+    styles,
+    /\.history-agent-detail\.is-error \{ color: var\(--negative\)/,
+  );
+});
+
+test("可恢复 Runtime 错误使用琥珀色而不是红色", () => {
+  const timeline = readFileSync(resolve("src/electron/renderer/RuntimeTimeline.tsx"), "utf8");
+  const styles = readFileSync(resolve("src/electron/renderer/styles.css"), "utf8");
+  assert.match(timeline, /data-retryable=\{item\.retryable\}/);
+  assert.match(styles, /\.runtime-error\[data-retryable="true"\]/);
+  assert.match(styles, /color: #8a5a12/);
+});
+
+test("三栏支持小手拖拽、联动边界、宽度记忆与双击复位", () => {
+  const app = readFileSync(resolve("src/electron/renderer/App.tsx"), "utf8");
+  const styles = readFileSync(resolve("src/electron/renderer/styles.css"), "utf8");
+  assert.match(app, /className="left-sidebar-resizer pane-resizer"/);
+  assert.match(app, /className="right-inspector-resizer pane-resizer"/);
+  assert.match(app, /role="separator"/);
+  assert.match(app, /onPointerDown=\{startLeftSidebarResize\}/);
+  assert.match(app, /onPointerDown=\{startRightInspectorResize\}/);
+  assert.match(app, /onDoubleClick=\{resetThreePaneWidths\}/);
+  assert.match(app, /god-agent:left-sidebar-width/);
+  assert.match(app, /god-agent:right-workbench-width/);
+  assert.match(app, /visibleRightInspectorWidth = clamp/);
+  assert.match(app, /MIN_WORKSPACE_WIDTH/);
+  assert.match(app, /window\.addEventListener\("resize", updateViewportWidth\)/);
+  assert.match(styles, /\.pane-resizer \{[\s\S]*?cursor: grab/);
+  assert.match(styles, /cursor: grabbing/);
+  assert.match(styles, /var\(--left-sidebar-width, 236px\)/);
+  assert.match(styles, /var\(--right-inspector-width, 520px\)/);
+});
+
+test("右侧浏览器使用 Codex 风格多标签、真实地址栏与隔离网页区域", () => {
+  const app = readFileSync(resolve("src/electron/renderer/App.tsx"), "utf8");
+  const styles = readFileSync(resolve("src/electron/renderer/styles.css"), "utf8");
+  const main = readFileSync(resolve("src/electron/main.cjs"), "utf8");
+  const browserManager = readFileSync(resolve("src/electron/browser-manager.cjs"), "utf8");
+  assert.match(app, /className="browser-tab-strip"/);
+  assert.match(app, /className="browser-tabs"/);
+  assert.match(app, /className="browser-navigation"/);
+  assert.match(app, /className="browser-address"/);
+  assert.match(app, /aria-label="地址栏"/);
+  assert.match(app, /aria-label="新建标签页"/);
+  assert.match(app, /aria-label="后退"/);
+  assert.match(app, /aria-label="前进"/);
+  assert.match(app, /activeTab\.isLoading \? "停止加载" : "刷新"/);
+  assert.match(app, /aria-label="外部打开"/);
+  assert.match(app, /className="browser-surface"/);
+  assert.doesNotMatch(app, /<iframe/);
+  assert.match(main, /WebContentsView/);
+  assert.match(browserManager, /sandbox: true/);
+  assert.match(browserManager, /contextIsolation: true/);
+  assert.match(browserManager, /nodeIntegration: false/);
+  assert.match(browserManager, /setWindowOpenHandler/);
+  assert.match(browserManager, /before-input-event/);
+  assert.match(app, /browser\.onCommand/);
+  assert.match(styles, /\.browser-workbench \{[\s\S]*grid-template-rows: 40px 40px minmax\(0, 1fr\)/);
+  assert.doesNotMatch(styles, /\.right-inspector \{[^}]*position: absolute/s);
+});
+
+test("中间工作区内容按自身容器安全换行且不撑破三栏", () => {
+  const styles = readFileSync(resolve("src/electron/renderer/styles.css"), "utf8");
+  assert.match(styles, /\.main-workspace \{[\s\S]*container-name: workspace;[\s\S]*container-type: inline-size;/);
+  assert.match(styles, /\.message > div,[\s\S]*\.safe-markdown \{ min-width: 0; max-width: 100%; \}/);
+  assert.match(styles, /\.message-copy \{[\s\S]*overflow-wrap: anywhere;[\s\S]*word-break: break-word;/);
+  assert.match(styles, /\.runtime-timeline \{[\s\S]*max-width: calc\(100% - 31px\)/);
+  assert.match(styles, /\.safe-markdown table \{ display: block; max-width: 100%; overflow-x: auto; \}/);
+  assert.match(styles, /@container workspace \(max-width: 560px\) \{[\s\S]*\.runtime-summary \{ flex-wrap: wrap;/);
+});
+
+test("God 极简流程只在右侧活动栏展示并支持 AgentChat 快捷入口", () => {
+  const app = readFileSync(resolve("src/electron/renderer/App.tsx"), "utf8");
+  const styles = readFileSync(resolve("src/electron/renderer/styles.css"), "utf8");
+  assert.equal(app.match(/<AgentFlowProgress\b/g)?.length, 1);
+  assert.match(app, /inspectorTab === "activity"[\s\S]*className="inspector-list inspector-agent-runtime"[\s\S]*<AgentFlowProgress/);
+  for (const label of ["确认需求", "分派任务", "Agent 执行", "Reviewer 验收", "God 汇总"]) assert.match(app, new RegExp(label));
+  assert.match(app, /className="agent-flow-step-button" aria-expanded=\{executionExpanded\} aria-controls="agent-execution-substages"/);
+  for (const label of ["子任务分派", "并行执行", "返工处理", "Return 回传"]) assert.match(app, new RegExp(label));
+  assert.match(app, /className="agent-flow-agent-button"[\s\S]*onClick=\{\(\) => openAgent\(run\)\}/);
+  assert.match(app, /setSelectedAgentRunId\(run\.id\);[\s\S]*selectAgentThread\(run\.threadId\)/);
+  assert.match(app, /latestRunByThread\.get\(run\.threadId\)[\s\S]*run\.attempt >= previous\.attempt/);
+  assert.match(app, /className="agent-flow-agent-latest" title=\{latestWork\}>\{latestWork\}/);
+  assert.match(app, /item\.runId === run\.id \|\| matchesTask\(item\.taskId\)/);
+  assert.match(app, /const boardTaskId = "taskId" in item && typeof item\.taskId === "string" \? item\.taskId : undefined/);
+  assert.match(app, /item\.producerRunId === run\.id \|\| matchesTask\(boardTaskId\)/);
+  assert.match(app, /item\.childRunId === run\.id \|\| matchesTask\(item\.taskId\)/);
+  assert.match(app, /Math\.max\(derivedCurrentStep, furthestStepByJob\.current\.get\(flowKey\) \?\? 1\)/);
+  assert.doesNotMatch(app, /<AgentRunTree\b|<AgentNodeDetails\b/);
+  assert.match(styles, /\.agent-flow-progress \{[\s\S]*width: 100%;[\s\S]*min-width: 0;[\s\S]*overflow: hidden;/);
+  assert.match(styles, /\.agent-flow-agent-button \{[\s\S]*grid-template-columns: 6px minmax\(0, 1fr\) 12px;[\s\S]*min-width: 0;/);
+  assert.match(styles, /\.agent-flow-agent-button strong, \.agent-flow-agent-button small \{[\s\S]*text-overflow: ellipsis;[\s\S]*white-space: nowrap;/);
+  assert.match(styles, /@container inspector \(max-width: 260px\) \{[\s\S]*\.agent-flow-agent-button/);
+});
+
+test("输入工具栏与左栏按各自容器切换紧凑模式", () => {
+  const app = readFileSync(resolve("src/electron/renderer/App.tsx"), "utf8");
+  const styles = readFileSync(resolve("src/electron/renderer/styles.css"), "utf8");
+  assert.match(app, /const MIN_LEFT_SIDEBAR_WIDTH = 108/);
+  assert.match(app, /className="control-label-short">权限</);
+  assert.match(app, /className="control-label-short">模型</);
+  assert.match(app, /className="control-label-short">子 Agent</);
+  assert.match(styles, /\.left-sidebar \{[\s\S]*container-name: sidebar;[\s\S]*container-type: inline-size;/);
+  assert.match(styles, /\.composer-toolbar \{[\s\S]*flex-wrap: wrap;/);
+  assert.match(styles, /@container sidebar \(max-width: 210px\)/);
+  assert.match(styles, /@container sidebar \(max-width: 140px\)/);
+});
+
+test("右侧浏览器按容器降级且三栏不再组合出横向最小宽度", () => {
+  const app = readFileSync(resolve("src/electron/renderer/App.tsx"), "utf8");
+  const styles = readFileSync(resolve("src/electron/renderer/styles.css"), "utf8");
+  assert.match(app, /const MIN_RIGHT_INSPECTOR_WIDTH = 240/);
+  assert.match(app, /const MIN_WORKSPACE_WIDTH = 280/);
+  assert.match(app, /className="browser-history-action"/);
+  assert.match(app, /className="browser-secondary-action"/);
+  assert.match(styles, /\.right-inspector \{[\s\S]*container-name: inspector;[\s\S]*container-type: inline-size;/);
+  assert.match(styles, /grid-template-columns: minmax\(0, var\(--left-sidebar-width, 236px\)\) minmax\(0, 1fr\) minmax\(0, var\(--right-inspector-width, 520px\)\)/);
+  assert.match(styles, /\.browser-tabs \{[\s\S]*overflow-x: auto;/);
+  assert.match(styles, /\.browser-surface \{ width: 100%; height: 100%; min-width: 0;/);
+  assert.match(styles, /\.browser-address input \{ width: 100%; min-width: 0;/);
+  assert.match(styles, /@container inspector \(max-width: 300px\)/);
+  assert.doesNotMatch(styles, /@media \(max-width: 900px\)[\s\S]*\.desktop-layout \{ min-width:/);
 });
 
 function session(status: RuntimeSession["status"]): RuntimeSession {

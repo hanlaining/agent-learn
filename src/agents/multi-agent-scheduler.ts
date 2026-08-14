@@ -19,7 +19,7 @@ export interface MultiAgentSchedulerOptions {
   registry: AgentRegistry; store: AgentRunStore;
   runtimeStore?: AgentRuntimeStore;
   resolveParent(turnId: string): { threadId: string; teamConfig?: AgentTeamConfig } | undefined;
-  prepare(profile: AgentProfile, task: string, parentRunId: string): ChildAgentExecution;
+  prepare(profile: AgentProfile, task: string, parentRunId: string, taskId: string, attempt: number): ChildAgentExecution;
   maxConcurrentRuns?: number; maxDepth?: number; maxChildrenPerRun?: number;
   persist?: () => void | Promise<void>;
   onRunUpdated?: (rootThreadId: string, parentTurnId: string, runId: string) => void;
@@ -58,7 +58,7 @@ export class MultiAgentScheduler {
     if (config.mode === "off") throw new Error("Agent collaboration is disabled for this Job");
     if (parent.depth >= config.maxDepth) throw new Error("Agent delegation depth exceeded");
     if (!config.allowedProfiles.includes(request.profileId as never)) throw new Error("Agent profile is not allowed for this Job");
-    if (this.options.store.listForJob(job.id).filter((run) => run.parentRunId !== undefined).length >= config.maxSubagents) throw new Error("Agent Job budget exceeded");
+    if (this.countTaskRuns(job.id) >= config.maxSubagents) throw new Error("Agent Job budget exceeded");
     const children = this.childrenByParent.get(parent.id) ?? new Set<string>();
     const registeredProfile = this.options.registry.require(request.profileId);
     const routedModel = config.modelRouting === "role_based" ? config.roleModels?.[request.profileId as keyof typeof config.roleModels] : undefined;
@@ -69,17 +69,19 @@ export class MultiAgentScheduler {
 
     let childId: string | undefined;
     let taskId: string | undefined;
+    let workerCompleted = false;
     let acquired = false;
     try {
-      const execution = this.options.prepare(profile, request.task, parent.id);
-      const child = this.options.store.create({ jobId: job.id, threadId: execution.threadId, turnId: execution.turnId,
-        agentProfileId: profile.id, parentRunId: parent.id, task: request.task, depth: parent.depth + 1, attempt: 1 });
-      childId = child.id; children.add(child.id); this.childrenByParent.set(parent.id, children);
-      const task = this.runtimeStore.createTask({ jobId: job.id, rootRunId: parent.rootRunId, ownerRunId: child.id,
+      const task = this.runtimeStore.createTask({ jobId: job.id, rootRunId: parent.rootRunId, ownerRunId: `pending:${parent.id}`,
         profileId: profile.id, title: request.task.slice(0, 80), objective: request.task,
         scope: { allowedPaths: [], deniedPaths: [], nonGoals: [] }, requiredOutputs: request.requiredOutputs ?? ["结构化子任务结论"],
         acceptanceCriteria: request.acceptanceCriteria ?? ["子 Agent 返回可验证结果"], fileClaims: request.fileClaims ?? [], maxAttempts: 2, status: "draft" });
       taskId = task.id;
+      const execution = this.options.prepare(profile, request.task, parent.id, task.id, 1);
+      const child = this.options.store.create({ jobId: job.id, threadId: execution.threadId, turnId: execution.turnId,
+        agentProfileId: profile.id, parentRunId: parent.id, task: request.task, depth: parent.depth + 1, attempt: 1 });
+      childId = child.id; children.add(child.id); this.childrenByParent.set(parent.id, children);
+      this.runtimeStore.setTaskOwnerRun(task.id, child.id, 1);
       this.options.store.setTaskId(child.id, task.id);
       for (const dependencyId of request.dependsOnTaskIds ?? []) {
         this.runtimeStore.addEdge({ jobId: job.id, fromTaskId: dependencyId, toTaskId: task.id, type: "depends_on", hard: true });
@@ -97,6 +99,7 @@ export class MultiAgentScheduler {
       const summary = await execution.execute();
       const result: AgentRunResult = { runId: child.id, taskId: task.id, status: "completed", summary };
       this.options.store.complete(child.id, result);
+      workerCompleted = true;
       const evidence = this.runtimeStore.addEvidence({ jobId: job.id, taskId: task.id, runId: child.id,
         kind: "summary", summary, producer: "worker", verdict: "supported" });
       let deliveryRunId = child.id; let deliverySummary = summary; const deliveryEvidenceIds = [evidence.id];
@@ -106,7 +109,7 @@ export class MultiAgentScheduler {
         boardEntryIds.push(this.runtimeStore.publishBoard({ jobId: job.id, producerRunId: child.id, kind: "summary",
           title: task.title, summary, confidence: "supported", visibility: "job" }).id);
       }
-      if (config.independentReview) {
+      if (config.independentReview && profile.id !== "reviewer") {
         this.runtimeStore.setTaskStatus(task.id, "reviewing");
         const review = this.options.review !== undefined
           ? await this.options.review({ taskId: task.id, jobId: job.id, workerRunId: child.id, summary })
@@ -141,7 +144,9 @@ export class MultiAgentScheduler {
       return deliveryRunId === child.id ? result : { runId: deliveryRunId, taskId: task.id, status: "completed", summary: deliverySummary };
     } catch (error) {
       const result: AgentRunResult = { runId: childId ?? "unstarted", status: "failed", summary: "子 Agent 未完成", safeError: error instanceof Error ? error.message : "Unknown child agent failure" };
-      if (childId !== undefined) this.options.store.complete(childId, result);
+      // A Reviewer failure invalidates the Task/Return, but it must not rewrite
+      // an already completed Worker Run as though the Worker itself crashed.
+      if (childId !== undefined && !workerCompleted) this.options.store.complete(childId, result);
       if (childId !== undefined) this.notify(parentFact.threadId, request.parentTurnId, childId);
       this.options.store.setStatus(parent.id, "resuming");
       this.notify(parentFact.threadId, request.parentTurnId, parent.id);
@@ -217,36 +222,51 @@ export class MultiAgentScheduler {
   private async runIndependentReviewer(jobId: string, parentRunId: string, workerRunId: string, workerTaskId: string,
     request: ChildAgentRequest, workerSummary: string, config: AgentTeamConfig): Promise<{ passed: boolean; summary: string; severity?: "P0" | "P1" | "P2" | "P3" }> {
     if (!config.allowedProfiles.includes("reviewer")) throw new Error("Independent review requires the reviewer profile");
-    if (this.options.store.listForJob(jobId).filter((run) => run.parentRunId !== undefined).length >= config.maxSubagents) {
+    if (this.countTaskRuns(jobId) >= config.maxSubagents) {
       throw new Error("Agent Job budget has no slot for independent review");
     }
     const worker = this.options.store.get(workerRunId); if (worker === undefined) throw new Error("Worker Run is unavailable for review");
     const profile = this.options.registry.require("reviewer");
-    const prompt = `独立验收以下子任务。\n任务：${request.task}\n验收条件：${(request.acceptanceCriteria ?? ["结论可验证"]).join("；")}\nWorker 结论：${workerSummary}\n若存在问题，必须以 P0、P1、P2 或 P3 开头；否则以 PASS 开头，并给出证据判断。`;
-    const execution = this.options.prepare(profile, prompt, workerRunId);
+    const prompt = `独立验收以下子任务。\n任务：${request.task}\n验收条件：${(request.acceptanceCriteria ?? ["结论可验证"]).join("；")}\nWorker 结论：${workerSummary}\n只返回 JSON：{"verdict":"pass"|"fail","severity":null|"P0"|"P1"|"P2"|"P3","summary":"可验证的审查结论"}。`;
+    const reviewTask = this.runtimeStore.createTask({ jobId, rootRunId: worker.rootRunId, ownerRunId: `pending:${workerRunId}`,
+      parentTaskId: workerTaskId, profileId: "reviewer", title: `验收：${request.task.slice(0, 70)}`, objective: prompt,
+      scope: { allowedPaths: [], deniedPaths: [], nonGoals: ["修改 Worker 产物"] }, requiredOutputs: ["独立验收结论"],
+      acceptanceCriteria: ["返回结构化 verdict、severity 与 summary"], fileClaims: [], maxAttempts: 1, status: "running" });
+    const execution = this.options.prepare(profile, prompt, workerRunId, reviewTask.id, 1);
     const reviewRun = this.options.store.create({ jobId, threadId: execution.threadId, turnId: execution.turnId,
       agentProfileId: profile.id, parentRunId: worker.depth < config.maxDepth ? workerRunId : parentRunId,
       task: `验收：${request.task}`, depth: Math.min(config.maxDepth, worker.depth + 1), attempt: 1 });
-    const reviewTask = this.runtimeStore.createTask({ jobId, rootRunId: worker.rootRunId, ownerRunId: reviewRun.id,
-      parentTaskId: workerTaskId, profileId: "reviewer", title: `验收：${request.task.slice(0, 70)}`, objective: prompt,
-      scope: { allowedPaths: [], deniedPaths: [], nonGoals: ["修改 Worker 产物"] }, requiredOutputs: ["独立验收结论"],
-      acceptanceCriteria: ["明确 PASS 或 P0-P3"], fileClaims: [], maxAttempts: 1, status: "running" });
+    this.runtimeStore.setTaskOwnerRun(reviewTask.id, reviewRun.id, 1);
     this.options.store.setTaskId(reviewRun.id, reviewTask.id); this.options.store.setStatus(reviewRun.id, "running");
+    const job = this.runtimeStore.getJob(jobId);
+    this.notify(job?.threadId ?? worker.threadId, job?.rootTurnId ?? worker.turnId, reviewRun.id);
     this.runtimeStore.addEdge({ jobId, fromTaskId: workerTaskId, toTaskId: reviewTask.id, type: "validates", hard: false });
-    const reviewSummary = await execution.execute();
-    const severity = /\b(P[0-3])\b/i.exec(reviewSummary)?.[1]?.toUpperCase() as "P0" | "P1" | "P2" | "P3" | undefined;
-    const passed = severity === undefined && /^\s*PASS\b/i.test(reviewSummary);
-    const result: AgentRunResult = { runId: reviewRun.id, status: passed ? "completed" : "failed", summary: reviewSummary };
-    this.options.store.complete(reviewRun.id, result); this.runtimeStore.setTaskStatus(reviewTask.id, passed ? "completed" : "failed");
-    this.notify(worker.threadId, worker.turnId, reviewRun.id);
-    return { passed, summary: reviewSummary, ...(severity === undefined ? {} : { severity }) };
+    try {
+      const rawReviewSummary = await execution.execute();
+      const review = parseReviewerVerdict(rawReviewSummary);
+      const reviewSummary = review.summary;
+      const severity = review.severity;
+      const passed = review.passed;
+      const result: AgentRunResult = { runId: reviewRun.id, status: passed ? "completed" : "failed", summary: reviewSummary };
+      this.options.store.complete(reviewRun.id, result); this.runtimeStore.setTaskStatus(reviewTask.id, passed ? "completed" : "failed");
+      this.notify(job?.threadId ?? worker.threadId, job?.rootTurnId ?? worker.turnId, reviewRun.id);
+      return { passed, summary: reviewSummary, ...(severity === undefined ? {} : { severity }) };
+    } catch (error) {
+      const safeError = error instanceof Error ? error.message : "Unknown reviewer failure";
+      this.options.store.complete(reviewRun.id, {
+        runId: reviewRun.id, taskId: reviewTask.id, status: "failed", summary: "Reviewer 未完成", safeError,
+      });
+      this.runtimeStore.setTaskStatus(reviewTask.id, "failed");
+      this.notify(job?.threadId ?? worker.threadId, job?.rootTurnId ?? worker.turnId, reviewRun.id);
+      throw error;
+    }
   }
   private async runRework(jobId: string, parentRunId: string, taskId: string, profile: AgentProfile, request: ChildAgentRequest,
     reviewFeedback: string, config: AgentTeamConfig): Promise<{ runId: string; summary: string; evidenceIds: string[] }> {
     const task = this.runtimeStore.getTask(taskId); if (task === undefined) throw new Error("Rework Task is unavailable");
     const attempt = task.attempt + 1;
     const prompt = `${request.task}\n\n这是同一 Task 的第 ${attempt} 次执行。独立 Reviewer 发现必须返工的问题：${reviewFeedback}\n请保留原任务上下文并针对问题修正，再返回新的可验证结果。`;
-    const execution = this.options.prepare(profile, prompt, parentRunId);
+    const execution = this.options.prepare(profile, prompt, parentRunId, taskId, attempt);
     const parent = this.options.store.get(parentRunId); if (parent === undefined) throw new Error("Rework parent Run is unavailable");
     const run = this.options.store.create({ jobId, threadId: execution.threadId, turnId: execution.turnId, agentProfileId: profile.id,
       parentRunId, task: request.task, depth: parent.depth + 1, attempt });
@@ -272,4 +292,32 @@ export class MultiAgentScheduler {
       runId,
     );
   }
+
+  private countTaskRuns(jobId: string): number {
+    return this.options.store.listForJob(jobId).filter((run) => run.taskId !== undefined).length;
+  }
+}
+
+function parseReviewerVerdict(raw: string): { passed: boolean; summary: string; severity?: "P0" | "P1" | "P2" | "P3" } {
+  const normalized = raw.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "");
+  try {
+    const value = JSON.parse(normalized) as unknown;
+    if (typeof value === "object" && value !== null &&
+      "verdict" in value && (value.verdict === "pass" || value.verdict === "fail") &&
+      "summary" in value && typeof value.summary === "string" && value.summary.trim().length > 0) {
+      const severityValue = "severity" in value ? value.severity : undefined;
+      const severity = typeof severityValue === "string" && /^(P0|P1|P2|P3)$/i.test(severityValue)
+        ? severityValue.toUpperCase() as "P0" | "P1" | "P2" | "P3"
+        : undefined;
+      return {
+        passed: value.verdict === "pass" && severity === undefined,
+        summary: value.summary.trim(),
+        ...(severity === undefined ? {} : { severity }),
+      };
+    }
+  } catch {
+    // Backward-compatible parsing for persisted prompts and scripted tests.
+  }
+  const severity = /\b(P[0-3])\b/i.exec(raw)?.[1]?.toUpperCase() as "P0" | "P1" | "P2" | "P3" | undefined;
+  return { passed: severity === undefined && /^\s*PASS\b/i.test(raw), summary: raw.trim(), ...(severity === undefined ? {} : { severity }) };
 }

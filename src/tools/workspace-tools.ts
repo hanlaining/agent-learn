@@ -8,6 +8,7 @@ import type {
 
 export const LIST_FILES_TOOL_NAME = "list_files";
 export const READ_FILE_TOOL_NAME = "read_file";
+export const WRITE_FILE_TOOL_NAME = "write_file";
 
 /**
  * Workspace Tool 不直接接触 node:fs，所有路径和容量限制统一交给 Sandbox。
@@ -97,12 +98,34 @@ export function createWorkspaceTools(
         };
       },
     },
+    {
+      definition: {
+        name: WRITE_FILE_TOOL_NAME,
+        description: "Write complete UTF-8 text to one file inside the authorized Workspace. Use only after the requirement revision is confirmed.",
+        parameters: strictObjectSchema({
+          path: { type: "string", description: "Workspace-relative file path." },
+          text: { type: "string", description: "Complete replacement file content." },
+        }),
+      },
+      riskLevel: "execute",
+      describePermission(argumentsJson) {
+        const input = parseArguments(WRITE_FILE_TOOL_NAME, argumentsJson, ["path", "text"]);
+        return `写入 Workspace 文件：${readRequiredPath(WRITE_FILE_TOOL_NAME, input)}`;
+      },
+      async execute(argumentsJson) {
+        const input = parseArguments(WRITE_FILE_TOOL_NAME, argumentsJson, ["path", "text"]);
+        if (typeof input.text !== "string") throw new Error("write_file text must be a string");
+        const result = await sandbox.writeTextFile(readRequiredPath(WRITE_FILE_TOOL_NAME, input), input.text);
+        return { result, modelOutput: result };
+      },
+    },
   ];
 }
 
 function parseArguments(
   toolName: string,
   argumentsJson: string,
+  allowedKeys: readonly string[] = ["path"],
 ): Record<string, unknown> {
   let value: unknown;
 
@@ -121,7 +144,7 @@ function parseArguments(
   }
 
   const unexpectedKeys = Object.keys(value).filter(
-    (key) => key !== "path",
+    (key) => !allowedKeys.includes(key),
   );
 
   if (unexpectedKeys.length > 0) {

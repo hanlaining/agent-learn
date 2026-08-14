@@ -10,6 +10,9 @@ export class AgentRunStore {
     const store = new AgentRunStore();
     if (value === undefined) return store;
     store.sequence = value.sequence;
+    const fixedTeamJobIds = new Set(value.runs.filter((run) => [
+      "software_team_lead", "product_role", "engineering_role", "quality_role",
+    ].includes(run.agentProfileId)).map((run) => "jobId" in run ? run.jobId : `job-${run.turnId}`));
     value.runs.forEach((run) => {
       const restored = structuredClone({
         ...run,
@@ -17,7 +20,12 @@ export class AgentRunStore {
         rootRunId: "rootRunId" in run ? run.rootRunId : run.id,
         attempt: "attempt" in run ? run.attempt : 1,
       }) as AgentRun;
-      if (["queued", "running", "waiting_children", "resuming"].includes(restored.status)) {
+      const isWaitingTeamMember = restored.status === "queued" && [
+        "software_team_lead", "product_role", "engineering_role", "quality_role",
+      ].includes(restored.agentProfileId) && restored.taskId === undefined;
+      const isRecoverableFixedCheckpoint = fixedTeamJobIds.has(restored.jobId) &&
+        ["queued", "waiting_children", "resuming"].includes(restored.status);
+      if (!isWaitingTeamMember && !isRecoverableFixedCheckpoint && ["queued", "running", "waiting_children", "resuming"].includes(restored.status)) {
         restored.status = "cancelled";
         restored.completedAt = new Date().toISOString();
         restored.result = { runId: restored.id, status: "cancelled", summary: "Runtime 重启，旧 AgentRun 已安全中断" };
@@ -42,9 +50,9 @@ export class AgentRunStore {
     return structuredClone(run);
   }
 
-  ensureRoot(threadId: string, turnId: string, profileId = "orchestrator"): AgentRun {
+  ensureRoot(threadId: string, turnId: string, profileId = "orchestrator", jobId?: string): AgentRun {
     const existing = this.getByTurn(turnId);
-    return existing ?? this.create({ jobId: `job-${turnId}`, threadId, turnId, agentProfileId: profileId, task: "主任务", depth: 0, attempt: 1 });
+    return existing ?? this.create({ jobId: jobId ?? `job-${turnId}`, threadId, turnId, agentProfileId: profileId, task: "主任务", depth: 0, attempt: 1 });
   }
 
   getByTurn(turnId: string): AgentRun | undefined {
@@ -63,6 +71,11 @@ export class AgentRunStore {
   }
   list(): AgentRun[] { return [...this.runs.values()].map((run) => structuredClone(run)); }
   listForJob(jobId: string): AgentRun[] { return this.list().filter((run) => run.jobId === jobId); }
+  findWorkerThread(jobId: string, taskId: string): string | undefined {
+    return this.listForJob(jobId)
+      .filter((run) => run.parentRunId !== undefined && run.taskId === taskId)
+      .sort((left, right) => right.createdAt.localeCompare(left.createdAt))[0]?.threadId;
+  }
   isChildThread(threadId: string): boolean {
     return [...this.runs.values()].some(
       (run) => run.threadId === threadId && run.parentRunId !== undefined,
@@ -88,6 +101,13 @@ export class AgentRunStore {
 
   setStatus(id: string, status: AgentRunStatus): void { this.require(id).status = status; }
   setTaskId(id: string, taskId: string): void { this.require(id).taskId = taskId; }
+  rebindAttempt(id: string, turnId: string, attempt: number): void {
+    const run = this.require(id);
+    if (!Number.isInteger(attempt) || attempt < run.attempt) throw new Error("AgentRun attempt cannot move backwards");
+    run.turnId = turnId;
+    run.attempt = attempt;
+    this.runByTurn.set(turnId, id);
+  }
   complete(id: string, result: AgentRunResult): void {
     const run = this.require(id); run.status = result.status; run.result = structuredClone(result); run.completedAt = new Date().toISOString();
   }

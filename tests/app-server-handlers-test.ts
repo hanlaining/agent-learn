@@ -3,6 +3,7 @@ import test from "node:test";
 
 import {
   applyAgentModeToTools,
+  applyRequirementGateToTools,
   buildParentAgentInstructions,
   selectInitialChildProfile,
   registerAppServerHandlers,
@@ -45,7 +46,6 @@ function createTestAppServer(options: {
   agentLoop?: Pick<AgentLoop, "run" | "cancel">;
   runtimeCapabilities?: RuntimeCapabilities;
   selectModel?: (model: string) => RuntimeCapabilities;
-  runInitialChildAgent?: (request: { parentTurnId: string; profileId: string; task: string }) => Promise<AgentRunResult>;
   threadConfigs?: Map<string, PersistedThreadConfig>;
   agentRegistry?: AgentRegistry;
   workspaceSandbox?: {
@@ -93,9 +93,6 @@ function createTestAppServer(options: {
     ...(options.selectModel === undefined
       ? {}
       : { selectModel: options.selectModel }),
-    ...(options.runInitialChildAgent === undefined
-      ? {}
-      : { runInitialChildAgent: options.runInitialChildAgent }),
     ...(options.threadConfigs === undefined
       ? {}
       : { threadConfigs: options.threadConfigs }),
@@ -209,16 +206,22 @@ test("工作区候选与显式文件和 Skill 在 App Server 边界再次验证"
   });
 });
 
-test("子 Agent 开关控制委派工具和父 Agent 监工合同", () => {
+test("确认硬门与子 Agent 开关共同控制执行工具和父 Agent 合同", () => {
   assert.deepEqual(applyAgentModeToTools(["*"], "off"), ["*", "!run_agent"]);
   assert.deepEqual(applyAgentModeToTools(["read_file", "run_agent"], "off"), ["read_file"]);
   assert.deepEqual(applyAgentModeToTools(["*"], "auto"), ["*"]);
 
-  const disabled = buildParentAgentInstructions("基础指令", "off");
+  assert.deepEqual(applyRequirementGateToTools(["*"], false), ["*", "!run_agent", "!run_command", "!write_file", "!read_shared_board", "!publish_shared_result"]);
+  assert.deepEqual(applyRequirementGateToTools(["read_file", "read_shared_board", "publish_shared_result"], false), ["read_file"]);
+  const clarifying = buildParentAgentInstructions("基础指令", "auto");
+  assert.match(clarifying, /clarify-before-execute/);
+  assert.match(clarifying, /确认前不得执行命令/);
+
+  const disabled = buildParentAgentInstructions("基础指令", "off", undefined, true);
   assert.match(disabled, /必须独立完成/);
   assert.match(disabled, /不得创建或委派子 Agent/);
 
-  const enabled = buildParentAgentInstructions("基础指令", "auto");
+  const enabled = buildParentAgentInstructions("基础指令", "auto", undefined, true);
   assert.match(enabled, /父 Agent和监工/);
   assert.match(enabled, /委派给子 Agent/);
   assert.match(enabled, /检查 Evidence、验收 Return/);
@@ -226,7 +229,7 @@ test("子 Agent 开关控制委派工具和父 Agent 监工合同", () => {
 
   const delivered = buildParentAgentInstructions("基础指令", "auto", {
     runId: "child-1", status: "completed", summary: "子任务已完成",
-  });
+  }, true);
   assert.match(delivered, /Runtime 已强制派发首个子 Agent/);
   assert.match(delivered, /子任务已完成/);
 
@@ -235,17 +238,12 @@ test("子 Agent 开关控制委派工具和父 Agent 监工合同", () => {
   assert.equal(selectInitialChildProfile("分析这个问题", ["investigator", "coder"]), "investigator");
 });
 
-test("开启子 Agent 后在父 Agent 汇总前强制派发首个执行 Agent", async () => {
+test("开启子 Agent 但需求未确认时不会开放执行工具", async () => {
   const threadConfigs = new Map<string, PersistedThreadConfig>();
-  const delegated: Array<{ parentTurnId: string; profileId: string; task: string }> = [];
   let parentInstructions = "";
   const app = createTestAppServer({
     threadConfigs,
     agentRegistry: new AgentRegistry(),
-    runInitialChildAgent: async (request) => {
-      delegated.push(request);
-      return { runId: "child-1", status: "completed", summary: "已完成代码修复" };
-    },
     agentLoop: {
       cancel: () => false,
       run: async (turnId, options) => {
@@ -275,9 +273,8 @@ test("开启子 Agent 后在父 Agent 汇总前强制派发首个执行 Agent", 
   await app.flushClientRequest();
   await runPromise;
 
-  assert.deepEqual(delegated, [{ parentTurnId: turn.turn.id, profileId: "coder", task: "修复项目代码" }]);
-  assert.match(parentInstructions, /已强制派发首个子 Agent/);
-  assert.match(parentInstructions, /已完成代码修复/);
+  assert.match(parentInstructions, /确认前不得执行命令/);
+  assert.match(parentInstructions, /prepare_requirement_plan/);
 });
 
 type TestAppServer =
@@ -379,6 +376,7 @@ test("turn/cancel 取消指定的运行中 Turn", async () => {
 test("thread/list 返回可恢复的 Thread", async () => {
   const app = createTestAppServer();
   const existingThread = app.store.createThread();
+  app.store.createThread("agent_internal");
 
   await completeHandshake(app);
 

@@ -2,8 +2,12 @@ const { join } = require("node:path");
 const {
   app,
   BrowserWindow,
+  WebContentsView,
   ipcMain,
+  shell,
 } = require("electron");
+const { PreviewServer } = require("./preview-server.cjs");
+const { BrowserManager } = require("./browser-manager.cjs");
 
 const GET_RUNTIME_STATUS_CHANNEL = "runtime:get-status";
 const RUNTIME_STATUS_CHANGED_CHANNEL =
@@ -11,6 +15,27 @@ const RUNTIME_STATUS_CHANGED_CHANNEL =
 const DESKTOP_GET_SNAPSHOT_CHANNEL = "desktop:get-snapshot";
 const DESKTOP_CREATE_THREAD_CHANNEL = "desktop:create-thread";
 const DESKTOP_SELECT_THREAD_CHANNEL = "desktop:select-thread";
+const DESKTOP_SELECT_AGENT_THREAD_CHANNEL = "desktop:select-agent-thread";
+const DESKTOP_CONFIRM_REQUIREMENT_CHANNEL = "desktop:confirm-requirement";
+const DESKTOP_ADVANCE_FIXED_PRODUCT_CHANNEL = "desktop:advance-fixed-product";
+const DESKTOP_OPEN_PLAN_CHANNEL = "desktop:open-plan";
+const PREVIEW_GET_STATUS_CHANNEL = "preview:get-status";
+const PREVIEW_START_CHANNEL = "preview:start";
+const PREVIEW_STOP_CHANNEL = "preview:stop";
+const PREVIEW_OPEN_EXTERNAL_CHANNEL = "preview:open-external";
+const BROWSER_GET_STATE_CHANNEL = "browser:get-state";
+const BROWSER_CREATE_TAB_CHANNEL = "browser:create-tab";
+const BROWSER_CLOSE_TAB_CHANNEL = "browser:close-tab";
+const BROWSER_ACTIVATE_TAB_CHANNEL = "browser:activate-tab";
+const BROWSER_NAVIGATE_CHANNEL = "browser:navigate";
+const BROWSER_GO_BACK_CHANNEL = "browser:go-back";
+const BROWSER_GO_FORWARD_CHANNEL = "browser:go-forward";
+const BROWSER_RELOAD_CHANNEL = "browser:reload";
+const BROWSER_STOP_CHANNEL = "browser:stop";
+const BROWSER_OPEN_EXTERNAL_CHANNEL = "browser:open-external";
+const BROWSER_SET_BOUNDS_CHANNEL = "browser:set-bounds";
+const BROWSER_STATE_CHANGED_CHANNEL = "browser:state-changed";
+const BROWSER_COMMAND_CHANNEL = "browser:command";
 const DESKTOP_SEND_MESSAGE_CHANNEL = "desktop:send-message";
 const DESKTOP_SEARCH_WORKSPACE_FILES_CHANNEL = "desktop:search-workspace-files";
 const DESKTOP_CANCEL_TURN_CHANNEL = "desktop:cancel-turn";
@@ -32,9 +57,11 @@ const CLOSED_RUNTIME_STATUS = Object.freeze({
 let mainWindow;
 let runtimeClient;
 let desktopController;
+let browserManager;
 let shutdownPromise;
 let quitAllowed = false;
 const pendingPermissions = new Map();
+const previewServer = new PreviewServer(join(app.getAppPath(), "examples", "today-fortune"));
 
 function requestDesktopPermission(request) {
   if (mainWindow === undefined || mainWindow.isDestroyed()) {
@@ -88,6 +115,18 @@ function createMainWindow() {
 
   window.removeMenu();
 
+  browserManager = new BrowserManager({
+    BrowserViewClass: WebContentsView,
+    window,
+    shell,
+    onStateChange: (state) => {
+      if (!window.isDestroyed()) window.webContents.send(BROWSER_STATE_CHANGED_CHANNEL, state);
+    },
+    onCommand: (command) => {
+      if (!window.isDestroyed()) window.webContents.send(BROWSER_COMMAND_CHANNEL, command);
+    },
+  });
+
   // Electron 01 没有外部导航能力，阻止页面创建新窗口或离开本地壳。
   window.webContents.setWindowOpenHandler(() => ({
     action: "deny",
@@ -108,6 +147,8 @@ function createMainWindow() {
     void shutdownAndQuit();
   });
   window.once("closed", () => {
+    browserManager?.destroy();
+    browserManager = undefined;
     if (mainWindow === window) {
       mainWindow = undefined;
     }
@@ -152,6 +193,9 @@ async function shutdownAndQuit() {
 
   shutdownPromise = (async () => {
     denyPendingPermissions("Electron client closed");
+    browserManager?.destroy();
+    browserManager = undefined;
+    await previewServer.stop();
     if (desktopController !== undefined) {
       await desktopController.close();
     } else {
@@ -202,6 +246,78 @@ ipcMain.handle(
     "无法切换任务，请稍后重试",
   ),
 );
+ipcMain.handle(DESKTOP_SELECT_AGENT_THREAD_CHANNEL, (_event, threadId) => desktopCall(
+  () => desktopController?.selectAgentThread(typeof threadId === "string" ? threadId : undefined),
+  "无法打开子 Agent 对话",
+));
+ipcMain.handle(DESKTOP_CONFIRM_REQUIREMENT_CHANNEL, () => desktopCall(
+  () => desktopController?.confirmRequirement(),
+  "无法确认并执行当前需求",
+));
+ipcMain.handle(DESKTOP_ADVANCE_FIXED_PRODUCT_CHANNEL, (_event, expectedStage) => desktopCall(() => {
+  const stages = ["ready_first_return", "first_return_ready", "rework", "second_return_ready", "engineering_ready", "engineering_return_ready", "quality_ready", "quality_return_ready", "lead_return_ready", "completed"];
+  if (typeof expectedStage !== "string" || !stages.includes(expectedStage)) throw new Error("Invalid fixed product stage");
+  return desktopController?.advanceFixedProduct(expectedStage);
+}, "无法推进产品双轮验收"));
+ipcMain.handle(DESKTOP_OPEN_PLAN_CHANNEL, async (_event, path) => {
+  if (typeof path !== "string" || !path.toLowerCase().endsWith(".md")) throw new Error("Invalid plan path");
+  const result = await shell.openPath(path);
+  if (result) throw new Error("无法打开计划文档");
+  return true;
+});
+ipcMain.handle(PREVIEW_GET_STATUS_CHANNEL, () => previewServer.getStatus());
+ipcMain.handle(PREVIEW_START_CHANNEL, () => desktopCall(() => previewServer.start(), "无法启动本地项目预览"));
+ipcMain.handle(PREVIEW_STOP_CHANNEL, () => desktopCall(() => previewServer.stop(), "无法停止本地项目预览"));
+ipcMain.handle(PREVIEW_OPEN_EXTERNAL_CHANNEL, () => desktopCall(async () => {
+  const status = previewServer.getStatus();
+  if (status.state !== "running") throw new Error("Preview is not running");
+  await shell.openExternal(status.url); return true;
+}, "无法在外部浏览器打开项目"));
+
+ipcMain.handle(BROWSER_GET_STATE_CHANNEL, () => desktopCall(
+  () => browserManager?.getState(),
+  "无法读取浏览器状态",
+));
+ipcMain.handle(BROWSER_CREATE_TAB_CHANNEL, (_event, url) => desktopCall(
+  () => browserManager?.createTab(typeof url === "string" ? url : undefined),
+  "无法新建浏览器标签",
+));
+ipcMain.handle(BROWSER_CLOSE_TAB_CHANNEL, (_event, id) => desktopCall(
+  () => browserManager?.closeTab(id),
+  "无法关闭浏览器标签",
+));
+ipcMain.handle(BROWSER_ACTIVATE_TAB_CHANNEL, (_event, id) => desktopCall(
+  () => browserManager?.activateTab(id),
+  "无法切换浏览器标签",
+));
+ipcMain.handle(BROWSER_NAVIGATE_CHANNEL, (_event, value) => desktopCall(
+  () => browserManager?.navigate(value?.id, value?.url),
+  "无法打开该网页，请检查地址后重试",
+));
+ipcMain.handle(BROWSER_GO_BACK_CHANNEL, (_event, id) => desktopCall(
+  () => browserManager?.goBack(id),
+  "当前网页无法后退",
+));
+ipcMain.handle(BROWSER_GO_FORWARD_CHANNEL, (_event, id) => desktopCall(
+  () => browserManager?.goForward(id),
+  "当前网页无法前进",
+));
+ipcMain.handle(BROWSER_RELOAD_CHANNEL, (_event, id) => desktopCall(
+  () => browserManager?.reload(id),
+  "无法刷新当前网页",
+));
+ipcMain.handle(BROWSER_STOP_CHANNEL, (_event, id) => desktopCall(
+  () => browserManager?.stop(id),
+  "无法停止加载当前网页",
+));
+ipcMain.handle(BROWSER_OPEN_EXTERNAL_CHANNEL, (_event, id) => desktopCall(
+  () => browserManager?.openExternal(id),
+  "当前网页无法在外部浏览器打开",
+));
+ipcMain.on(BROWSER_SET_BOUNDS_CHANNEL, (event, bounds) => {
+  if (mainWindow === undefined || event.sender !== mainWindow.webContents) return;
+  browserManager?.setBounds(bounds);
+});
 
 ipcMain.handle(
   DESKTOP_RESPOND_PERMISSION_CHANNEL,

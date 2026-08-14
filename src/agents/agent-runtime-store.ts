@@ -40,11 +40,13 @@ export class AgentRuntimeStore {
     return store;
   }
 
-  createJob(input: { threadId: string; rootTurnId: string; rootRunId: string; configSnapshot: AgentTeamConfig }): AgentJob {
-    const existing = this.getJobByTurn(input.rootTurnId);
+  createJob(input: { threadId: string; rootTurnId: string; rootRunId: string; configSnapshot: AgentTeamConfig; requirementId?: string; requirementRevision?: number }): AgentJob {
+    const existing = input.requirementId === undefined
+      ? this.getJobByTurn(input.rootTurnId)
+      : this.getJobByRequirement(input.requirementId, input.requirementRevision);
     if (existing !== undefined) return existing;
     const job: AgentJob = {
-      ...input, id: `job-${input.rootTurnId}`, configSnapshot: normalizeAgentTeamConfig(input.configSnapshot),
+      ...input, id: input.requirementId === undefined ? `job-${input.rootTurnId}` : `job-${input.requirementId}-v${input.requirementRevision ?? 1}`, configSnapshot: normalizeAgentTeamConfig(input.configSnapshot),
       status: "planning", createdAt: this.now(),
     };
     this.jobs.set(job.id, job);
@@ -53,10 +55,56 @@ export class AgentRuntimeStore {
 
   getJob(id: string): AgentJob | undefined { return clone(this.jobs.get(id)); }
   getJobByTurn(turnId: string): AgentJob | undefined { return clone([...this.jobs.values()].find((item) => item.rootTurnId === turnId)); }
+  getJobByRequirement(requirementId: string, revision?: number): AgentJob | undefined {
+    return clone([...this.jobs.values()].find((item) => item.requirementId === requirementId &&
+      (revision === undefined || item.requirementRevision === revision)));
+  }
   listJobs(threadId?: string): AgentJob[] { return [...this.jobs.values()].filter((item) => threadId === undefined || item.threadId === threadId).map(copy); }
   setJobStatus(id: string, status: AgentJobStatus): void {
     const job = this.requireJob(id); job.status = status;
     if (["completed", "partial", "failed", "cancelled"].includes(status)) job.completedAt = this.now();
+    else delete job.completedAt;
+  }
+
+  /**
+   * Reconcile a Job from persisted Task/Return facts instead of treating an
+   * empty Return outbox as proof that the work passed acceptance.
+   */
+  reconcileJobStatus(jobId: string): AgentJobStatus {
+    const job = this.requireJob(jobId);
+    if (job.status === "cancelled") return job.status;
+    const returns = this.listReturns(jobId);
+    if (returns.some((item) => item.status === "ready" || item.status === "delivering")) {
+      this.setJobStatus(jobId, "waiting_returns");
+      return "waiting_returns";
+    }
+
+    // Reviewer Tasks are evidence for their parent Task. They must not create
+    // a second independent completion contract for the Job.
+    const requiredTasks = this.listTasks(jobId).filter((task) => task.parentTaskId === undefined);
+    if (requiredTasks.length === 0) {
+      this.setJobStatus(jobId, "planning");
+      return "planning";
+    }
+    if (requiredTasks.some((task) => ["failed", "cancelled", "lost"].includes(task.status))) {
+      this.setJobStatus(jobId, "failed");
+      return "failed";
+    }
+    if (requiredTasks.some((task) => task.status === "rework" || task.status === "reviewing")) {
+      this.setJobStatus(jobId, "reviewing");
+      return "reviewing";
+    }
+    if (requiredTasks.some((task) => task.status !== "completed")) {
+      this.setJobStatus(jobId, "running");
+      return "running";
+    }
+    if (job.configSnapshot.independentReview && requiredTasks.some((task) =>
+      !this.listEvidence(task.id).some((item) => item.kind === "review" && item.producer === "reviewer" && item.verdict === "passed"))) {
+      this.setJobStatus(jobId, "failed");
+      return "failed";
+    }
+    this.setJobStatus(jobId, "completed");
+    return "completed";
   }
 
   createTask(input: CreateTaskInput): AgentTask {
@@ -135,6 +183,13 @@ export class AgentRuntimeStore {
 
   recoverInterruptedWork(at = this.now()): { lostTasks: AgentTask[]; pendingReturns: AgentReturnEnvelope[] } {
     return { lostTasks: this.recoverExpiredLeases(at), pendingReturns: this.listReturns().filter((item) => item.status === "ready") };
+  }
+
+  reconcilePersistedJobs(): AgentJob[] {
+    for (const job of this.jobs.values()) {
+      if (job.status !== "cancelled") this.reconcileJobStatus(job.id);
+    }
+    return this.listJobs();
   }
 
   addEvidence(input: Omit<AgentEvidence, "id" | "createdAt">): AgentEvidence {

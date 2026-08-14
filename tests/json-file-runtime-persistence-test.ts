@@ -97,7 +97,7 @@ test("原子保存并在新实例中恢复 Runtime 状态", async (t) => {
   const json = JSON.parse(
     await readFile(fixture.statePath, "utf8"),
   ) as { version: number };
-  assert.equal(json.version, 3);
+  assert.equal(json.version, 4);
 });
 
 test("后续保存覆盖旧快照且保持合法 JSON", async (t) => {
@@ -178,7 +178,7 @@ test("重启时把遗留的 in_progress Turn 恢复为 interrupted", async (t) =
   );
 });
 
-test("v1 快照迁移到 v3 并初始化 Agent Runtime 数据", async (t) => {
+test("v1 快照迁移到 v4 并初始化 Agent Runtime 与 Requirement 数据", async (t) => {
   const fixture = await createFixture(t);
   const base = await new JsonFileRuntimePersistence(fixture.statePath).load();
   const legacy = {
@@ -195,7 +195,7 @@ test("v1 快照迁移到 v3 并初始化 Agent Runtime 数据", async (t) => {
     loaded.lifecycleStore, loaded.contextCheckpointStore, loaded.agentRunStore,
   );
   const persisted = JSON.parse(await readFile(fixture.statePath, "utf8")) as { version: number };
-  assert.equal(persisted.version, 3);
+  assert.equal(persisted.version, 4);
 });
 
 test("v2 恢复 Thread 配置、RuntimeSession 和 run_return 收据", async (t) => {

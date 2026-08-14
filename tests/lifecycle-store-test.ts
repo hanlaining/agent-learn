@@ -104,6 +104,20 @@ test("不能在不存在的 Thread 下创建 Turn", () => {
   );
 });
 
+test("Thread 区分用户 Chat 与内部子 Agent 会话", () => {
+  const store = createStore();
+  const userChat = store.createThread();
+  const childThread = store.createThread("agent_internal");
+
+  assert.equal(userChat.kind, "user_chat");
+  assert.equal(childThread.kind, "agent_internal");
+  assert.equal(
+    LifecycleStore.fromSnapshot(store.exportSnapshot())
+      .getThread(childThread.id)?.kind,
+    "agent_internal",
+  );
+});
+
 test("失败的 Turn 进入 failed 终态", () => {
   const store = createStore();
 
