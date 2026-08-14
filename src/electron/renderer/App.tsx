@@ -707,14 +707,6 @@ export function App() {
                   <RuntimeTimeline session={ui.runtimeSession} />
                 )}
 
-                {(ui.snapshot?.agentRuns.length ?? 0) > 0 && (
-                  <AgentRunTree runs={ui.snapshot!.agentRuns} runtime={ui.snapshot!.agentRuntime} selectedId={selectedAgentRunId} select={setSelectedAgentRunId} advance={async (stage) => {
-                    dispatch({ type: "clear-error" });
-                    try { dispatch({ type: "snapshot", snapshot: await window.godAgent.desktop.advanceFixedProduct(stage) }); }
-                    catch (error) { dispatch({ type: "error", message: readError(error) }); }
-                  }} />
-                )}
-
                 {ui.runtimeSession === undefined &&
                   (ui.reasoning.length > 0 || ui.activities.length > 0) && (
                   <section className="thinking-block">
@@ -936,8 +928,25 @@ export function App() {
             {inspectorTab === "changes" && <DeferredPanel icon={<FileCode2 />} title="变更检查尚未接入">遵守本轮 Git 边界，客户端不会偷偷执行 git diff。后续将通过只读 Workspace Adapter 单独实现。</DeferredPanel>}
             {inspectorTab === "terminal" && <DeferredPanel icon={<TerminalSquare />} title="桌面终端尚未接入">Runtime 当前只允许预注册的 check/test 命令；任意终端需要独立安全设计。</DeferredPanel>}
             {inspectorTab === "activity" && (
-              <div className="inspector-list">
+              <div className="inspector-list inspector-agent-runtime">
                 <div className="inspector-summary"><Activity />当前 Turn · {formatThreadState(ui.snapshot?.turnState ?? "idle")} · {activeAgentCount} Agents</div>
+                {(ui.snapshot?.agentRuns.length ?? 0) > 0 && (
+                  <AgentFlowProgress
+                    runs={ui.snapshot!.agentRuns}
+                    runtime={ui.snapshot!.agentRuntime}
+                    requirement={ui.snapshot!.requirement}
+                    activeAgentThreadId={ui.snapshot!.activeAgentThreadId}
+                    openAgent={(run) => {
+                      setSelectedAgentRunId(run.id);
+                      void replaceSnapshot(window.godAgent.desktop.selectAgentThread(run.threadId));
+                    }}
+                    advance={async (stage) => {
+                    dispatch({ type: "clear-error" });
+                    try { dispatch({ type: "snapshot", snapshot: await window.godAgent.desktop.advanceFixedProduct(stage) }); }
+                    catch (error) { dispatch({ type: "error", message: readError(error) }); }
+                    }}
+                  />
+                )}
                 {ui.activities.length === 0
                   ? <p className="inspector-empty">发送任务后，这里显示真实 Tool、Search 和模型活动。</p>
                   : ui.activities.map((item) => (
@@ -998,56 +1007,120 @@ export function App() {
   );
 }
 
-function AgentRunTree({ runs, runtime, selectedId, select, advance }: { runs: import("../desktop-types.js").DesktopAgentRun[]; runtime: import("../desktop-types.js").DesktopAgentRuntimeView | undefined; selectedId: string | undefined; select: (id: string | undefined) => void; advance: (stage: import("../../agents/fixed-software-team-coordinator.js").FixedProductStage) => Promise<void> }) {
-  const roots = runs.filter((run) => run.parentRunId === undefined);
-  const childRuns = runs.filter((run) => run.parentRunId !== undefined);
-  const children = new Map<string, typeof runs>();
-  for (const run of runs) {
-    if (run.parentRunId === undefined) continue;
-    children.set(run.parentRunId, [...(children.get(run.parentRunId) ?? []), run]);
+type AgentFlowStepState = "done" | "active" | "waiting" | "rework";
+
+function AgentFlowProgress({ runs, runtime, requirement, activeAgentThreadId, openAgent, advance }: {
+  runs: import("../desktop-types.js").DesktopAgentRun[];
+  runtime: import("../desktop-types.js").DesktopAgentRuntimeView | undefined;
+  requirement: import("../../requirements/requirement.js").Requirement | undefined;
+  activeAgentThreadId: string | undefined;
+  openAgent: (run: import("../desktop-types.js").DesktopAgentRun) => void;
+  advance: (stage: import("../../agents/fixed-software-team-coordinator.js").FixedProductStage) => Promise<void>;
+}) {
+  const [executionExpanded, setExecutionExpanded] = useState(false);
+  const furthestStepByJob = useRef(new Map<string, number>());
+  const latestRunByThread = new Map<string, import("../desktop-types.js").DesktopAgentRun>();
+  for (const run of runs.filter((item) => item.parentRunId !== undefined)) {
+    const previous = latestRunByThread.get(run.threadId);
+    if (previous === undefined || run.attempt >= previous.attempt) latestRunByThread.set(run.threadId, run);
   }
-  const renderRun = (run: typeof runs[number]) => {
-    const task = runtime?.tasks.find((item) => item.id === run.taskId);
-    const evidence = runtime?.evidence.filter((item) => item.taskId === task?.id) ?? [];
-    const review = evidence.filter((item) => item.kind === "review").at(-1);
-    return <li key={run.id} data-status={run.status}>
-      <span className="agent-status-dot" />
-      <button type="button" className="agent-node-button" aria-expanded={selectedId === run.id} onClick={() => select(selectedId === run.id ? undefined : run.id)}>
-        <span><strong>{formatAgentProfileName(run.agentProfileId)}</strong><small title={run.task}>{run.task}</small></span>
-        <span className="agent-node-state">{formatAgentState(run.status)}{review?.verdict === "passed" ? " · 验收通过" : review?.verdict === "failed" ? " · 需返工" : ""}<ChevronRight /></span>
-      </button>
-      {selectedId === run.id && <AgentNodeDetails run={run} runtime={runtime} />}
-      {(children.get(run.id)?.length ?? 0) > 0 && <ul>{children.get(run.id)!.map(renderRun)}</ul>}
-    </li>;
-  };
+  const childRuns = [...latestRunByThread.values()];
+  const terminalRunStates = new Set(["completed", "failed", "cancelled", "timed_out"]);
+  const finishedRuns = childRuns.filter((run) => terminalRunStates.has(run.status)).length;
+  const runningRuns = childRuns.filter((run) => ["queued", "running", "waiting_children", "resuming"].includes(run.status)).length;
   const consumedReturns = runtime?.returns.filter((item) => item.status === "consumed").length ?? 0;
-  const passedReviews = runtime?.evidence.filter((item) => item.kind === "review" && item.verdict === "passed").length ?? 0;
-  const failedReviews = runtime?.evidence.filter((item) => item.kind === "review" && item.verdict === "failed").length ?? 0;
+  const latestReviewByTask = new Map<string, import("../../agents/agent-runtime.js").AgentEvidence>();
+  for (const review of (runtime?.evidence ?? []).filter((item) => item.kind === "review").sort((left, right) => Date.parse(left.createdAt) - Date.parse(right.createdAt))) latestReviewByTask.set(review.taskId, review);
+  const passedReviews = [...latestReviewByTask.values()].filter((item) => item.verdict === "passed").length;
+  const failedReviews = [...latestReviewByTask.values()].filter((item) => item.verdict === "failed").length;
   const reworkTasks = runtime?.tasks.filter((item) => item.status === "rework").length ?? 0;
+  const requirementConfirmed = requirement !== undefined && !["clarifying", "planned"].includes(requirement.status);
+  const dispatched = childRuns.length > 0 || (runtime?.tasks.length ?? 0) > 0;
+  const hasRework = reworkTasks > 0 || failedReviews > 0;
+  const jobStatus = runtime?.job?.status;
+  const jobCompleted = jobStatus === "completed" || requirement?.status === "completed";
+  const executionFinished = childRuns.length > 0 && finishedRuns === childRuns.length;
+  const reviewActive = jobStatus === "reviewing" || (runtime?.tasks.some((item) => item.status === "reviewing") ?? false);
+  let derivedCurrentStep = 1;
+  if (requirementConfirmed) derivedCurrentStep = 2;
+  if (dispatched) derivedCurrentStep = 3;
+  if (executionFinished && (reviewActive || hasRework || passedReviews > 0)) derivedCurrentStep = 4;
+  if (executionFinished && !reviewActive && !hasRework && (passedReviews > 0 || ["waiting_returns", "resuming"].includes(jobStatus ?? ""))) derivedCurrentStep = 5;
+  if (jobCompleted) derivedCurrentStep = 6;
+  const flowKey = runtime?.job?.id ?? requirement?.id ?? runs[0]?.jobId ?? "current";
+  const currentStep = Math.max(derivedCurrentStep, furthestStepByJob.current.get(flowKey) ?? 1);
+  furthestStepByJob.current.set(flowKey, currentStep);
+  const stateFor = (index: number): AgentFlowStepState => {
+    if (index < currentStep || currentStep === 6) return "done";
+    if (index > currentStep) return "waiting";
+    if ((index === 3 || index === 4) && hasRework) return "rework";
+    return "active";
+  };
+  const completedSteps = currentStep === 6 ? 5 : Math.max(0, currentStep - 1);
+  const flowSteps = [
+    { label: "确认需求", detail: requirementConfirmed ? `v${requirement?.revision ?? 1} 已确认` : "等待确认" },
+    { label: "分派任务", detail: dispatched ? `已分派 ${childRuns.length || runtime?.tasks.length || 0} 个任务` : "等待 God 分派" },
+    { label: "Agent 执行", detail: childRuns.length === 0 ? "等待 Agent 启动" : `${finishedRuns}/${childRuns.length} 已结束${runningRuns > 0 ? ` · ${runningRuns} 进行中` : ""}` },
+    { label: "Reviewer 验收", detail: hasRework ? `${Math.max(reworkTasks, failedReviews)} 项需返工` : passedReviews > 0 ? `${passedReviews} 项已通过` : "等待验收" },
+    { label: "God 汇总", detail: jobCompleted ? "最终结果已完成" : currentStep === 5 ? "正在收口最终结果" : "等待前序完成" },
+  ];
+  const returnCount = runtime?.returns.length ?? 0;
+  const substages: Array<{ label: string; detail: string; state: AgentFlowStepState }> = [
+    { label: "子任务分派", detail: dispatched ? "已完成" : "等待分派", state: dispatched ? "done" : currentStep === 2 ? "active" : "waiting" },
+    { label: "并行执行", detail: childRuns.length === 0 ? "尚未开始" : `${finishedRuns}/${childRuns.length} 已结束`, state: executionFinished ? "done" : currentStep === 3 && !hasRework ? "active" : "waiting" },
+    { label: "返工处理", detail: hasRework ? `${Math.max(reworkTasks, failedReviews)} 项处理中` : "暂无返工", state: hasRework ? "rework" : executionFinished ? "done" : "waiting" },
+    { label: "Return 回传", detail: returnCount === 0 ? "等待回传" : `${consumedReturns}/${returnCount} 已接收`, state: returnCount > 0 && consumedReturns === returnCount ? "done" : returnCount > 0 ? "active" : "waiting" },
+  ];
   return (
-    <details className="agent-run-tree">
-      <summary>
-        <span className="agent-parent-icon"><Bot /></span>
-        <span><strong>God · {formatSupervisorState(runtime?.job?.status)}</strong><small>软件产品演示团队 · {childRuns.filter((item) => item.status === "running").length} 运行 · {childRuns.filter((item) => item.status === "queued").length} 等待</small></span>
-        <ChevronRight className="agent-tree-chevron" />
-      </summary>
-      <div className="agent-supervision-body">
-        <section className="agent-acceptance-summary">
-          <header><strong>软件产品演示团队</strong><small>God 监工 · Job：{runtime?.job?.status ?? "运行中"} · 当前权限：{formatAccessMode(runtime?.job?.configSnapshot.accessMode)}</small></header>
-          <div>
-            <span><strong>{consumedReturns}/{runtime?.returns.length ?? 0}</strong><small>已接收 Return</small></span>
-            <span><strong>{passedReviews}</strong><small>Review 通过</small></span>
-            <span><strong>{Math.max(failedReviews, reworkTasks)}</strong><small>返工 / 未通过</small></span>
-            <span><strong>{runtime?.tasks.filter((item) => item.status === "completed").length ?? 0}/{runtime?.tasks.length ?? 0}</strong><small>任务已完成</small></span>
-          </div>
-          <p>{formatSupervisorMessage(runtime?.job?.status, childRuns)}</p>
-          {runtime?.fixedProductStage !== undefined && runtime.fixedProductStage !== "completed" && <button className="fixed-product-advance" type="button" onClick={() => void advance(runtime.fixedProductStage!)}>{formatFixedProductAction(runtime.fixedProductStage)}</button>}
-          {runtime?.fixedProductStage === "completed" && <p className="fixed-product-complete">产品、工程和测试已完成，负责人已向 God 单次汇总。</p>}
-        </section>
-        <ul className="agent-child-list">{roots.flatMap((root) => children.get(root.id) ?? []).map(renderRun)}</ul>
-        {childRuns.length === 0 && <p className="agent-empty-children">父 Agent 正在分析需求，尚未派出子 Agent。</p>}
-      </div>
-    </details>
+    <section className="agent-flow-progress" aria-label="God Agent 协作流程">
+      <header className="agent-flow-header">
+        <span><strong>协作流程</strong><small>{currentStep === 6 ? "全部完成" : `正在进行第 ${currentStep} 步`}</small></span>
+        <strong>{completedSteps}/5</strong>
+      </header>
+      <div className="agent-flow-track" aria-hidden="true"><span style={{ width: `${(completedSteps / 5) * 100}%` }} /></div>
+      <ol className="agent-flow-steps">
+        {flowSteps.map((step, index) => {
+          const stepNumber = index + 1;
+          const state = stateFor(stepNumber);
+          const isExecutionStep = stepNumber === 3;
+          return <li key={step.label} className="agent-flow-step" data-state={state}>
+            {isExecutionStep ? (
+              <button type="button" className="agent-flow-step-button" aria-expanded={executionExpanded} aria-controls="agent-execution-substages" onClick={() => setExecutionExpanded((value) => !value)}>
+                <span className="agent-flow-step-marker">{state === "done" ? <CircleCheck /> : stepNumber}</span>
+                <span><strong>{step.label}</strong><small>{step.detail}</small></span>
+                {executionExpanded ? <ChevronDown /> : <ChevronRight />}
+              </button>
+            ) : (
+              <div className="agent-flow-step-content">
+                <span className="agent-flow-step-marker">{state === "done" ? <CircleCheck /> : stepNumber}</span>
+                <span><strong>{step.label}</strong><small>{step.detail}</small></span>
+              </div>
+            )}
+            {isExecutionStep && executionExpanded && (
+              <ol className="agent-flow-substages" id="agent-execution-substages">
+                {substages.map((substage) => <li key={substage.label} data-state={substage.state}><span /><span><strong>{substage.label}</strong><small>{substage.detail}</small></span></li>)}
+              </ol>
+            )}
+          </li>;
+        })}
+      </ol>
+      {runtime?.fixedProductStage !== undefined && runtime.fixedProductStage !== "completed" && <button className="fixed-product-advance agent-flow-next-action" type="button" onClick={() => void advance(runtime.fixedProductStage!)}>{formatFixedProductAction(runtime.fixedProductStage)}</button>}
+      <section className="agent-flow-agents" aria-label="子 Agent 最新工作">
+        <header><strong>Agent 动态</strong><small>{childRuns.length} 个</small></header>
+        {childRuns.length === 0 ? <p className="agent-flow-empty">任务分派后，这里会显示每个 Agent 的最新工作。</p> : (
+          <ul>{childRuns.map((run) => {
+            const latestWork = formatAgentLatestWork(run, runtime);
+            return <li key={run.id} data-status={run.status}>
+              <button type="button" className="agent-flow-agent-button" aria-current={activeAgentThreadId === run.threadId} onClick={() => openAgent(run)}>
+                <span className="agent-status-dot" />
+                <span><span><strong>{formatAgentProfileName(run.agentProfileId)}</strong><small>{formatAgentState(run.status)}</small></span><small className="agent-flow-agent-latest" title={latestWork}>{latestWork}</small></span>
+                <ChevronRight />
+              </button>
+            </li>;
+          })}</ul>
+        )}
+      </section>
+    </section>
   );
 }
 
@@ -1085,16 +1158,21 @@ function HistoryAgentTree({ runs, requirement, runtime, selectedId, select }: {
   </div>;
 }
 
-function AgentNodeDetails({ run, runtime }: { run: import("../desktop-types.js").DesktopAgentRun | undefined; runtime: import("../desktop-types.js").DesktopAgentRuntimeView | undefined }) {
-  if (run === undefined) return null;
+function formatAgentLatestWork(run: import("../desktop-types.js").DesktopAgentRun, runtime: import("../desktop-types.js").DesktopAgentRuntimeView | undefined): string {
+  const matchesTask = (taskId: string | undefined) => run.taskId !== undefined && taskId === run.taskId;
+  const candidates: Array<{ summary: string; createdAt: string }> = [];
+  for (const item of runtime?.evidence ?? []) {
+    if (item.runId === run.id || matchesTask(item.taskId)) candidates.push({ summary: item.summary, createdAt: item.createdAt });
+  }
+  for (const item of runtime?.board ?? []) {
+    if (item.producerRunId === run.id || matchesTask(item.taskId)) candidates.push({ summary: item.summary, createdAt: item.createdAt });
+  }
+  for (const item of runtime?.returns ?? []) {
+    if (item.childRunId === run.id || matchesTask(item.taskId)) candidates.push({ summary: item.result.summary, createdAt: item.createdAt });
+  }
   const task = runtime?.tasks.find((item) => item.id === run.taskId);
-  const edges = runtime?.edges.filter((item) => item.fromTaskId === task?.id || item.toTaskId === task?.id) ?? [];
-  const evidence = runtime?.evidence.filter((item) => item.taskId === task?.id) ?? [];
-  const returns = runtime?.returns.filter((item) => item.childRunId === run.id) ?? [];
-  return <section className="agent-node-details">
-    <strong>节点详情</strong>
-    <dl><dt>身份</dt><dd>{formatAgentProfileName(run.agentProfileId)}</dd><dt>职责</dt><dd>{formatAgentResponsibility(run.agentProfileId)}</dd><dt>任务合同</dt><dd>{task?.objective ?? run.task}</dd><dt>Return 对象</dt><dd>{run.agentProfileId === "software_team_lead" ? "God" : "软件团队负责人"}</dd><dt>直接父节点</dt><dd>{run.parentRunId ?? "无（God）"}</dd><dt>依赖</dt><dd>{edges.length === 0 ? "无" : edges.map((edge) => `${edge.type}: ${edge.fromTaskId} → ${edge.toTaskId}`).join("；")}</dd><dt>角色 / 层级</dt><dd>{run.agentProfileId} / {run.depth}</dd><dt>失败原因</dt><dd>{run.safeError ?? "无"}</dd><dt>访问权限</dt><dd>{formatAccessMode(runtime?.job?.configSnapshot.accessMode)}（继承本次 Job 快照）</dd><dt>父子约束</dt><dd>{runtime?.job?.configSnapshot.permissionMode === "least_privilege" ? "Profile 与 Tool 求交集，子 Agent 不可扩大" : "继承 Chat 后仍受 Profile / Tool 限制"}</dd><dt>Evidence</dt><dd>{evidence.length === 0 ? "暂无" : evidence.map((item) => `${item.kind} · ${item.verdict} · ${item.summary}`).join("；")}</dd><dt>Return</dt><dd>{returns.length === 0 ? "暂无" : returns.map((item) => `${item.status} · 尝试 ${item.attempts}`).join("；")}</dd></dl>
-  </section>;
+  const latest = candidates.sort((left, right) => Date.parse(right.createdAt) - Date.parse(left.createdAt))[0]?.summary.trim();
+  return latest || run.safeError || (task === undefined ? run.task : `${formatAgentState(run.status)} · ${task.objective || task.title}`);
 }
 
 function formatAgentProfileName(profileId: string | undefined): string {
@@ -1139,23 +1217,6 @@ function describePower(effort: string | undefined): string {
   if (effort === "medium") return "在响应速度和深入思考之间保持平衡";
   if (effort === "xhigh" || effort === "max") return "适合高难度、长链路且需要深入推演的任务";
   return "适合复杂、多步骤且需要检查的任务";
-}
-
-function formatSupervisorState(status: import("../../agents/agent-runtime.js").AgentJobStatus | undefined): string {
-  if (status === "completed") return "验收完成";
-  if (status === "failed" || status === "partial") return "发现问题";
-  if (status === "cancelled") return "已停止";
-  if (status === "reviewing") return "正在验收";
-  if (status === "waiting_returns") return "等待子 Agent";
-  return "监工中";
-}
-
-function formatSupervisorMessage(status: import("../../agents/agent-runtime.js").AgentJobStatus | undefined, childRuns: import("../desktop-types.js").DesktopAgentRun[]): string {
-  if (status === "completed") return "全部子任务已经返回并完成验收，父 Agent 已汇总最终结果。";
-  if (status === "failed" || status === "partial") return "存在未通过或未完成的子任务，父 Agent 正在决定返工或降级处理。";
-  if (status === "reviewing") return "子 Agent 已返回结果，父 Agent 正在检查证据和验收条件。";
-  if (childRuns.some((item) => item.status === "running")) return "子 Agent 正在执行，父 Agent 持续监控进度并等待结构化结果。";
-  return "父 Agent 正在拆分需求和安排子任务。";
 }
 
 function formatFixedProductAction(stage: import("../../agents/fixed-software-team-coordinator.js").FixedProductStage): string {

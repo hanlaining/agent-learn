@@ -497,7 +497,29 @@ test("中间工作区内容按自身容器安全换行且不撑破三栏", () =>
   assert.match(styles, /\.runtime-timeline \{[\s\S]*max-width: calc\(100% - 31px\)/);
   assert.match(styles, /\.safe-markdown table \{ display: block; max-width: 100%; overflow-x: auto; \}/);
   assert.match(styles, /@container workspace \(max-width: 560px\) \{[\s\S]*\.runtime-summary \{ flex-wrap: wrap;/);
-  assert.match(styles, /\.agent-acceptance-summary > div \{ grid-template-columns: repeat\(2, minmax\(0, 1fr\)\)/);
+});
+
+test("God 极简流程只在右侧活动栏展示并支持 AgentChat 快捷入口", () => {
+  const app = readFileSync(resolve("src/electron/renderer/App.tsx"), "utf8");
+  const styles = readFileSync(resolve("src/electron/renderer/styles.css"), "utf8");
+  assert.equal(app.match(/<AgentFlowProgress\b/g)?.length, 1);
+  assert.match(app, /inspectorTab === "activity"[\s\S]*className="inspector-list inspector-agent-runtime"[\s\S]*<AgentFlowProgress/);
+  for (const label of ["确认需求", "分派任务", "Agent 执行", "Reviewer 验收", "God 汇总"]) assert.match(app, new RegExp(label));
+  assert.match(app, /className="agent-flow-step-button" aria-expanded=\{executionExpanded\} aria-controls="agent-execution-substages"/);
+  for (const label of ["子任务分派", "并行执行", "返工处理", "Return 回传"]) assert.match(app, new RegExp(label));
+  assert.match(app, /className="agent-flow-agent-button"[\s\S]*onClick=\{\(\) => openAgent\(run\)\}/);
+  assert.match(app, /setSelectedAgentRunId\(run\.id\);[\s\S]*selectAgentThread\(run\.threadId\)/);
+  assert.match(app, /latestRunByThread\.get\(run\.threadId\)[\s\S]*run\.attempt >= previous\.attempt/);
+  assert.match(app, /className="agent-flow-agent-latest" title=\{latestWork\}>\{latestWork\}/);
+  assert.match(app, /item\.runId === run\.id \|\| matchesTask\(item\.taskId\)/);
+  assert.match(app, /item\.producerRunId === run\.id \|\| matchesTask\(item\.taskId\)/);
+  assert.match(app, /item\.childRunId === run\.id \|\| matchesTask\(item\.taskId\)/);
+  assert.match(app, /Math\.max\(derivedCurrentStep, furthestStepByJob\.current\.get\(flowKey\) \?\? 1\)/);
+  assert.doesNotMatch(app, /<AgentRunTree\b|<AgentNodeDetails\b/);
+  assert.match(styles, /\.agent-flow-progress \{[\s\S]*width: 100%;[\s\S]*min-width: 0;[\s\S]*overflow: hidden;/);
+  assert.match(styles, /\.agent-flow-agent-button \{[\s\S]*grid-template-columns: 6px minmax\(0, 1fr\) 12px;[\s\S]*min-width: 0;/);
+  assert.match(styles, /\.agent-flow-agent-button strong, \.agent-flow-agent-button small \{[\s\S]*text-overflow: ellipsis;[\s\S]*white-space: nowrap;/);
+  assert.match(styles, /@container inspector \(max-width: 260px\) \{[\s\S]*\.agent-flow-agent-button/);
 });
 
 test("输入工具栏与左栏按各自容器切换紧凑模式", () => {
