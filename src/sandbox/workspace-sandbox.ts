@@ -14,6 +14,13 @@ import {
 
 const DEFAULT_MAX_FILE_BYTES = 64 * 1024;
 const DEFAULT_MAX_LIST_ENTRIES = 100;
+const DEFAULT_MAX_SEARCH_RESULTS = 20;
+const DEFAULT_MAX_SEARCH_DEPTH = 6;
+const DEFAULT_IGNORED_SEARCH_DIRECTORIES = new Set([
+  ".git", ".hg", ".svn", ".idea", ".vscode", ".vs", ".cache",
+  ".ssh", ".aws", ".gnupg", ".codex", "node_modules", "dist", "build",
+  "coverage", "target", ".gradle",
+]);
 
 export interface WorkspaceSandboxOptions {
   maxFileBytes?: number;
@@ -37,6 +44,12 @@ export interface SandboxReadResult {
   sizeBytes: number;
 }
 export interface SandboxWriteResult { path: string; sizeBytes: number; }
+
+export interface SandboxSearchResult {
+  query: string;
+  paths: string[];
+  truncated: boolean;
+}
 
 /**
  * 教学级 Workspace Sandbox：所有文件能力都先经过这一层路径与容量检查。
@@ -184,6 +197,68 @@ export class WorkspaceSandbox {
     return { path: resolved.relativePath, sizeBytes: bytes };
   }
 
+  async searchFiles(
+    query: string,
+    options: { maxResults?: number; maxDepth?: number } = {},
+  ): Promise<SandboxSearchResult> {
+    const normalizedQuery = query.trim().replaceAll("\\", "/").toLocaleLowerCase();
+    const maxResults = options.maxResults ?? DEFAULT_MAX_SEARCH_RESULTS;
+    const maxDepth = options.maxDepth ?? DEFAULT_MAX_SEARCH_DEPTH;
+    assertPositiveInteger(maxResults, "maxResults");
+    assertPositiveInteger(maxDepth, "maxDepth");
+
+    if (query.length > 240 || /[\u0000-\u001f\u007f]/u.test(query)) {
+      throw new Error("Invalid workspace file query");
+    }
+
+    const matches: string[] = [];
+    let truncated = false;
+    const visit = async (relativeDirectory: string, depth: number): Promise<void> => {
+      if (truncated || depth > maxDepth) return;
+      const resolved = await this.resolveExistingPath(relativeDirectory);
+      const entries = await readdir(resolved.absolutePath, { withFileTypes: true });
+
+      for (const entry of entries.sort((left, right) => left.name.localeCompare(right.name))) {
+        if (truncated) break;
+        if (entry.isSymbolicLink()) continue;
+        const relativePath = normalizeRelativePath(
+          relativeDirectory === "." ? entry.name : `${relativeDirectory}/${entry.name}`,
+        );
+
+        if (entry.isDirectory()) {
+          if (!DEFAULT_IGNORED_SEARCH_DIRECTORIES.has(entry.name) && depth < maxDepth) {
+            await visit(relativePath, depth + 1);
+          }
+          continue;
+        }
+        if (!entry.isFile() || isSensitiveSearchFile(entry.name)) continue;
+        if (normalizedQuery.length > 0 && !relativePath.toLocaleLowerCase().includes(normalizedQuery)) {
+          continue;
+        }
+        if (matches.length >= maxResults) {
+          truncated = true;
+          break;
+        }
+        matches.push(relativePath);
+      }
+    };
+
+    await visit(".", 0);
+    return { query, paths: matches, truncated };
+  }
+
+  async validateFilePath(requestedPath: string): Promise<string> {
+    const resolved = await this.resolveExistingPath(requestedPath);
+    const fileStats = await stat(resolved.absolutePath);
+    if (!fileStats.isFile()) throw new Error("Sandbox path is not a file");
+    if (resolved.relativePath.split("/").some((segment) =>
+      DEFAULT_IGNORED_SEARCH_DIRECTORIES.has(segment) || isSensitiveSearchFile(segment)
+    )) {
+      throw new Error("Sensitive workspace file is not selectable");
+    }
+    return resolved.relativePath;
+  }
+
   private async resolveExistingPath(
     requestedPath: string,
   ): Promise<{
@@ -237,6 +312,13 @@ export class WorkspaceSandbox {
     const pathFromRoot = relative(this.rootPath, candidatePath);
     return { absolutePath: candidatePath, relativePath: normalizeRelativePath(pathFromRoot) };
   }
+}
+
+function isSensitiveSearchFile(name: string): boolean {
+  const normalized = name.toLocaleLowerCase();
+  return normalized === ".env" || normalized.startsWith(".env.") ||
+    normalized.endsWith(".pem") || normalized.endsWith(".key") ||
+    normalized === "credentials.json" || normalized === "secrets.json";
 }
 
 function isWithin(rootPath: string, targetPath: string): boolean {

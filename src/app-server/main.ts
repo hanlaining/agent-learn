@@ -153,6 +153,7 @@ const skillLoader = await SkillLoader.create({
 });
 const skillCatalogInstructions =
   skillLoader.createCatalogInstructions();
+const workspaceSandbox = await WorkspaceSandbox.create(workspacePath);
 const workspaceTools: AgentTool[] = [];
 const agentRegistry = new AgentRegistry(
   loadedRuntimeState.agentProfiles,
@@ -166,9 +167,6 @@ const runtimeCoordinator = new AgentRuntimeCoordinator({
 });
 
 if (apiKey !== undefined) {
-  const workspaceSandbox = await WorkspaceSandbox.create(
-    workspacePath,
-  );
   const npmExecutable =
     process.platform === "win32" ? "npm.cmd" : "npm";
   const commandRunner = await WorkspaceCommandRunner.create(
@@ -419,6 +417,8 @@ registerAppServerHandlers(connection, {
   runtimeSessions,
   requirementStore,
   ...(fixedSoftwareTeamCoordinator === undefined ? {} : { fixedSoftwareTeamCoordinator }),
+  workspaceSandbox,
+  skillNames: skillLoader.list().map((skill) => skill.name),
   ...(multiAgentScheduler === undefined ? {} : {
     cancelChildAgentRuns: (turnId: string) =>
       multiAgentScheduler.cancelChildren(

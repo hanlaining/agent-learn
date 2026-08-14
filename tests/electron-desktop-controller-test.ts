@@ -11,6 +11,33 @@ import {
   DesktopController,
   type DesktopRuntimeClient,
 } from "../src/electron/desktop-controller.js";
+import type { DesktopMessageInput } from "../src/electron/desktop-types.js";
+
+test("DesktopController 仅转发目录中存在的显式 Skill 与去重文件", async () => {
+  const runtime = new FakeDesktopRuntime();
+  const controller = new DesktopController(runtime);
+  await controller.getSnapshot();
+  await controller.sendMessage({
+    text: "检查 @src/app.ts 并使用 $demo-skill",
+    mentions: [{ kind: "file", path: "src/app.ts" }, { kind: "file", path: "src/app.ts" }],
+    explicitSkills: ["demo-skill", "demo-skill"],
+  });
+  assert.deepEqual(runtime.lastStartContext, {
+    mentions: [{ kind: "file", path: "src/app.ts" }],
+    explicitSkills: ["demo-skill"],
+  });
+  await assert.rejects(() => controller.sendMessage({ text: "bad", explicitSkills: ["unknown"] }), /Invalid explicit/);
+});
+
+test("DesktopController 工作区搜索限制查询并原样转发安全结果", async () => {
+  const runtime = new FakeDesktopRuntime();
+  const controller = new DesktopController(runtime);
+  assert.deepEqual(await controller.searchWorkspaceFiles("app"), {
+    query: "app", paths: ["src/app.ts"], truncated: false,
+  });
+  assert.equal(runtime.lastWorkspaceQuery, "app");
+  await assert.rejects(() => controller.searchWorkspaceFiles("x".repeat(241)), /Invalid/);
+});
 import type {
   Item,
   Thread,
@@ -342,6 +369,8 @@ test("取消和超时都会保留过程并结束全部运行状态", async () =>
 class FakeDesktopRuntime implements DesktopRuntimeClient {
   startThreadCount = 0;
   readonly savedConfigs: import("../src/electron/desktop-types.js").DesktopAgentConfig[] = [];
+  lastStartContext: Omit<DesktopMessageInput, "text"> | undefined;
+  lastWorkspaceQuery: string | undefined;
   private readonly listeners = new Set<(event: AgentEvent) => void>();
 
   private readonly thread: Thread = {
@@ -406,6 +435,11 @@ class FakeDesktopRuntime implements DesktopRuntimeClient {
     return this.capabilities;
   }
 
+  async searchWorkspaceFiles(query: string) {
+    this.lastWorkspaceQuery = query;
+    return { query, paths: ["src/app.ts"], truncated: false };
+  }
+
   async listAgentRuns() { return []; }
   async getThreadConfig() { return undefined; }
   async setThreadConfig(
@@ -425,7 +459,9 @@ class FakeDesktopRuntime implements DesktopRuntimeClient {
   async startTurn(
     threadId: string,
     input: string,
+    context: Omit<DesktopMessageInput, "text"> = {},
   ) {
+    this.lastStartContext = structuredClone(context);
     const turn: Turn = {
       id: "turn-2",
       threadId,

@@ -31,6 +31,7 @@ const BROWSER_SET_BOUNDS_CHANNEL = "browser:set-bounds";
 const BROWSER_STATE_CHANGED_CHANNEL = "browser:state-changed";
 const BROWSER_COMMAND_CHANNEL = "browser:command";
 const DESKTOP_SEND_MESSAGE_CHANNEL = "desktop:send-message";
+const DESKTOP_SEARCH_WORKSPACE_FILES_CHANNEL = "desktop:search-workspace-files";
 const DESKTOP_CANCEL_TURN_CHANNEL = "desktop:cancel-turn";
 const DESKTOP_SELECT_MODEL_CHANNEL = "desktop:select-model";
 const DESKTOP_SELECT_REASONING_CHANNEL = "desktop:select-reasoning";
@@ -638,6 +639,32 @@ async function invoke(channel, ...args) {
   return envelope.value;
 }
 
+function sanitizeMessageInput(value) {
+  if (!isRecord(value) || typeof value.text !== "string" ||
+    Object.keys(value).some((key) => !["text", "mentions", "explicitSkills"].includes(key))) {
+    throw new TypeError("Message input is invalid");
+  }
+  if (value.text.trim().length === 0 || [...value.text].length > 32_000) {
+    throw new TypeError("Message text is empty or too long");
+  }
+  const mentions = value.mentions === undefined ? [] : value.mentions;
+  const explicitSkills = value.explicitSkills === undefined ? [] : value.explicitSkills;
+  if (!Array.isArray(mentions) || mentions.length > 20 || !mentions.every((mention) =>
+    isRecord(mention) && mention.kind === "file" && typeof mention.path === "string" &&
+    mention.path.trim().length > 0 && mention.path.length <= 500 && !/[\u0000-\u001f\u007f]/u.test(mention.path) &&
+    Object.keys(mention).every((key) => key === "kind" || key === "path")
+  )) throw new TypeError("Message mentions are invalid");
+  if (!Array.isArray(explicitSkills) || explicitSkills.length > 20 ||
+    !explicitSkills.every((name) => typeof name === "string" && /^[a-z0-9]+(?:-[a-z0-9]+)*$/u.test(name))) {
+    throw new TypeError("Message Skills are invalid");
+  }
+  return {
+    text: value.text,
+    ...(mentions.length === 0 ? {} : { mentions: mentions.map((mention) => ({ kind: "file", path: safeText(mention.path, 500) })) }),
+    ...(explicitSkills.length === 0 ? {} : { explicitSkills: explicitSkills.map((name) => safeText(name, 200)) }),
+  };
+}
+
 contextBridge.exposeInMainWorld("godAgent", {
   runtime: {
     getStatus: async () => sanitizeRuntimeStatus(
@@ -695,15 +722,26 @@ contextBridge.exposeInMainWorld("godAgent", {
       if (typeof path !== "string") throw new TypeError("Plan path must be a string");
       return Boolean(await invoke(DESKTOP_OPEN_PLAN_CHANNEL, path));
     },
-    sendMessage: async (text) => {
-      if (typeof text !== "string") {
-        throw new TypeError("Message must be a string");
-      }
-      const value = await invoke(DESKTOP_SEND_MESSAGE_CHANNEL, text);
+    sendMessage: async (input) => {
+      const safeInput = sanitizeMessageInput(input);
+      const value = await invoke(DESKTOP_SEND_MESSAGE_CHANNEL, safeInput);
       if (!isRecord(value) || typeof value.turnId !== "string") {
         throw new Error("桌面操作返回无效结果");
       }
       return { turnId: safeText(value.turnId, 200) };
+    },
+    searchWorkspaceFiles: async (query) => {
+      if (typeof query !== "string" || query.length > 240) throw new TypeError("Query must be a short string");
+      const value = await invoke(DESKTOP_SEARCH_WORKSPACE_FILES_CHANNEL, query);
+      if (!isRecord(value) || typeof value.query !== "string" || !Array.isArray(value.paths) ||
+        !value.paths.every((path) => typeof path === "string") || typeof value.truncated !== "boolean") {
+        throw new Error("工作区文件搜索返回无效结果");
+      }
+      return {
+        query: safeText(value.query, 240),
+        paths: value.paths.slice(0, 20).map((path) => safeText(path, 500)),
+        truncated: value.truncated,
+      };
     },
     cancelTurn: async () =>
       Boolean(await invoke(DESKTOP_CANCEL_TURN_CHANNEL)),

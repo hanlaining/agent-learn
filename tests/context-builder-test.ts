@@ -18,6 +18,24 @@ function createStore(): LifecycleStore {
   });
 }
 
+test("显式文件与 Skill 使用 modelText 进入模型，但保留用户原文", () => {
+  const store = createStore();
+  const thread = store.createThread();
+  const turn = store.createTurn(thread.id);
+  store.appendItem(turn.id, "user_message", {
+    text: "检查 @src/app.ts",
+    modelText: "检查 @src/app.ts\n\n- workspace file: src/app.ts\n- Skill: code-review",
+    mentions: [{ kind: "file", path: "src/app.ts" }],
+    explicitSkills: ["code-review"],
+  });
+
+  assert.deepEqual(new ContextBuilder(store).build(turn.id), [{
+    role: "user",
+    text: "检查 @src/app.ts\n\n- workspace file: src/app.ts\n- Skill: code-review",
+  }]);
+  assert.equal((store.getItemsForTurn(turn.id)[0]?.content as { text: string }).text, "检查 @src/app.ts");
+});
+
 test("按 Turn 生命周期顺序构建跨 Turn 消息", () => {
   const store = createStore();
   const thread = store.createThread();

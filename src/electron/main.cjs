@@ -37,6 +37,7 @@ const BROWSER_SET_BOUNDS_CHANNEL = "browser:set-bounds";
 const BROWSER_STATE_CHANGED_CHANNEL = "browser:state-changed";
 const BROWSER_COMMAND_CHANNEL = "browser:command";
 const DESKTOP_SEND_MESSAGE_CHANNEL = "desktop:send-message";
+const DESKTOP_SEARCH_WORKSPACE_FILES_CHANNEL = "desktop:search-workspace-files";
 const DESKTOP_CANCEL_TURN_CHANNEL = "desktop:cancel-turn";
 const DESKTOP_SELECT_MODEL_CHANNEL = "desktop:select-model";
 const DESKTOP_SELECT_REASONING_CHANNEL = "desktop:select-reasoning";
@@ -345,17 +346,45 @@ ipcMain.handle(
 
 ipcMain.handle(
   DESKTOP_SEND_MESSAGE_CHANNEL,
-  (_event, text) => desktopCall(
+  (_event, input) => desktopCall(
     () => {
-      if (typeof text !== "string") {
+      if (!isSafeMessageInput(input)) {
         throw new Error("Invalid message");
       }
 
-      return desktopController?.sendMessage(text);
+      return desktopController?.sendMessage(input);
     },
     "Agent 执行失败，请重试",
   ),
 );
+
+ipcMain.handle(
+  DESKTOP_SEARCH_WORKSPACE_FILES_CHANNEL,
+  (_event, query) => desktopCall(
+    () => {
+      if (typeof query !== "string" || query.length > 240) throw new Error("Invalid workspace file query");
+      return desktopController?.searchWorkspaceFiles(query);
+    },
+    "无法搜索工作区文件",
+  ),
+);
+
+function isSafeMessageInput(value) {
+  if (value === null || typeof value !== "object" || Array.isArray(value) || typeof value.text !== "string") return false;
+  if (Object.keys(value).some((key) => !["text", "mentions", "explicitSkills"].includes(key))) return false;
+  if (value.text.trim().length === 0 || [...value.text].length > 32_000) return false;
+  return (value.mentions === undefined || (
+    Array.isArray(value.mentions) && value.mentions.length <= 20 && value.mentions.every((mention) =>
+      mention !== null && typeof mention === "object" && !Array.isArray(mention) &&
+      mention.kind === "file" && typeof mention.path === "string" && mention.path.trim().length > 0 &&
+      mention.path.length <= 500 && !/[\u0000-\u001f\u007f]/u.test(mention.path) &&
+      Object.keys(mention).every((key) => key === "kind" || key === "path")
+    )
+  )) && (value.explicitSkills === undefined || (
+    Array.isArray(value.explicitSkills) && value.explicitSkills.length <= 20 &&
+    value.explicitSkills.every((name) => typeof name === "string" && /^[a-z0-9]+(?:-[a-z0-9]+)*$/u.test(name))
+  ));
+}
 
 ipcMain.handle(DESKTOP_CANCEL_TURN_CHANNEL, () =>
   desktopCall(

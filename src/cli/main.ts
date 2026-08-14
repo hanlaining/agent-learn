@@ -24,6 +24,7 @@ import {
   isTurnStartResult,
   type TurnStartResult,
 } from "../runtime/turn-start.js";
+import { CLI_COMMAND_REGISTRY } from "../shortcuts/builtins.js";
 import { CliInputRouter } from "./input-router.js";
 import {
   registerCliInterruptHandler,
@@ -241,25 +242,28 @@ async function main(options: CliOptions): Promise<void> {
       }
 
       const input = line.trim();
+      const command = CLI_COMMAND_REGISTRY.resolve(input);
 
       if (activeTurn !== undefined) {
-        if (input === "/cancel") {
+        if (command.kind === "matched" && command.action.id === "turn.cancel") {
           await requestTurnCancel(connection, activeTurn);
-        } else if (input === "/status") {
+        } else if (command.kind === "matched" && command.action.id === "session.status") {
           printStatus(
             currentThread,
             activeTurn,
             messageQueue.size,
           );
-        } else if (input === "/exit") {
+        } else if (command.kind === "matched" && command.action.id === "app.exit") {
           exitRequested = true;
           messageQueue.clear();
           await requestTurnCancel(connection, activeTurn);
           await activeTurn.completion.catch(() => undefined);
           break;
-        } else if (input.startsWith("/")) {
+        } else if (command.kind !== "not-command") {
           console.log(
-            "\nTurn 运行期间可使用 /cancel、/status 或 /exit。",
+            "\nTurn 运行期间可使用 " +
+              CLI_COMMAND_REGISTRY.formatAvailableCommands("running") +
+              "。",
           );
         } else if (input.length > 0) {
           const position = messageQueue.enqueue(input);
@@ -279,46 +283,41 @@ async function main(options: CliOptions): Promise<void> {
         continue;
       }
 
-      if (input === "/exit") {
-        exitRequested = true;
-        messageQueue.clear();
-        break;
-      }
+      if (command.kind === "matched") {
+        switch (command.action.id) {
+          case "app.exit":
+            exitRequested = true;
+            messageQueue.clear();
+            break;
+          case "app.help":
+            printHelp();
+            break;
+          case "session.status":
+            printStatus(currentThread, undefined, messageQueue.size);
+            break;
+          case "chat.list": {
+            const threads = await listThreads(connection);
+            printThreads(threads, currentThread.id);
+            break;
+          }
+          case "chat.new":
+            currentThread = await startThread(connection);
+            console.log(`\n已创建新 Thread：${currentThread.id}`);
+            break;
+          case "turn.cancel":
+            console.log("\n当前没有正在运行的 Turn。");
+            break;
+          default:
+            throw new Error(`Unhandled CLI Action: ${command.action.id}`);
+        }
 
-      if (input === "/help") {
-        printHelp();
+        if (exitRequested) break;
         writePrompt(false);
         continue;
       }
 
-      if (input === "/status") {
-        printStatus(currentThread, undefined, messageQueue.size);
-        writePrompt(false);
-        continue;
-      }
-
-      if (input === "/threads") {
-        const threads = await listThreads(connection);
-        printThreads(threads, currentThread.id);
-        writePrompt(false);
-        continue;
-      }
-
-      if (input === "/new") {
-        currentThread = await startThread(connection);
-        console.log(`\n已创建新 Thread：${currentThread.id}`);
-        writePrompt(false);
-        continue;
-      }
-
-      if (input === "/cancel") {
-        console.log("\n当前没有正在运行的 Turn。");
-        writePrompt(false);
-        continue;
-      }
-
-      if (input.startsWith("/")) {
-        console.log(`\n未知命令：${input}；输入 /help 查看帮助。`);
+      if (command.kind === "unknown") {
+        console.log(`\n未知命令：${command.input}；输入 /help 查看帮助。`);
         writePrompt(false);
         continue;
       }
@@ -515,13 +514,7 @@ function printWelcome(thread: Thread, debug: boolean): void {
 
 function printHelp(): void {
   console.log(`
-命令：
-  /help     查看帮助
-  /status   查看当前 Thread 和 Turn 状态
-  /threads  列出已持久化的 Thread
-  /new      创建并切换到新 Thread
-  /cancel   取消正在运行的 Turn
-  /exit     安全退出
+${CLI_COMMAND_REGISTRY.formatHelp()}
 
 Turn 运行期间继续输入普通消息会进入 FIFO 队列。
 Tool 执行前会显示审批提示；输入 y/yes 允许，其他输入拒绝。`);

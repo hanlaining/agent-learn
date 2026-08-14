@@ -3,12 +3,14 @@ import type {
 } from "../runtime-status.js";
 import type {
   DesktopEvent,
+  DesktopMessageInput,
   DesktopPermissionDecision,
   DesktopPermissionRequest,
   DesktopModelSettings,
   DesktopSendResult,
   DesktopSnapshot,
   DesktopReasoningEffort,
+  DesktopWorkspaceSearchResult,
 } from "../desktop-types.js";
 
 declare module "*.css";
@@ -46,7 +48,8 @@ declare global {
         confirmRequirement(): Promise<DesktopSendResult>;
         advanceFixedProduct(expectedStage: import("../../agents/fixed-software-team-coordinator.js").FixedProductStage): Promise<DesktopSnapshot>;
         openPlan(path: string): Promise<boolean>;
-        sendMessage(text: string): Promise<DesktopSendResult>;
+        sendMessage(input: DesktopMessageInput): Promise<DesktopSendResult>;
+        searchWorkspaceFiles(query: string): Promise<DesktopWorkspaceSearchResult>;
         cancelTurn(): Promise<boolean>;
         selectModel(model: string): Promise<DesktopSnapshot>;
         selectReasoningEffort(effort: DesktopReasoningEffort): Promise<DesktopSnapshot>;

@@ -576,6 +576,72 @@ button { color: inherit; }
 .runtime-state[data-state="failed"] i { background: var(--negative); }
 .runtime-state[data-state="connecting"] i { animation: status-pulse 1s ease-in-out infinite; }
 
+.command-palette-trigger {
+  display: flex;
+  height: 27px;
+  align-items: center;
+  gap: 5px;
+  padding: 0 7px;
+  border: 1px solid var(--border-color);
+  border-radius: 7px;
+  color: var(--muted-text);
+  background: var(--raised-background);
+  font-size: 9px;
+}
+.command-palette-trigger:hover { color: var(--main-text); border-color: var(--strong-border); }
+.command-palette-trigger svg { width: 12px; height: 12px; }
+.command-palette-trigger kbd { color: var(--faint-text); font: 8px/1.2 Consolas, monospace; }
+
+.command-palette-backdrop {
+  position: fixed;
+  z-index: 100;
+  inset: 0;
+  display: grid;
+  align-items: start;
+  justify-items: center;
+  padding: min(15vh, 110px) 20px 20px;
+  background: rgba(22, 22, 20, .24);
+  backdrop-filter: blur(2px);
+}
+
+.command-palette {
+  width: min(620px, calc(100vw - 40px));
+  max-height: min(620px, calc(100vh - 140px));
+  overflow: hidden;
+  border: 1px solid var(--strong-border);
+  border-radius: 14px;
+  background: var(--raised-background);
+  box-shadow: 0 24px 70px rgba(20, 20, 18, .24);
+}
+
+.command-palette > header {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr) auto 26px;
+  gap: 7px;
+  align-items: center;
+  padding: 11px 12px;
+  border-bottom: 1px solid var(--border-color);
+}
+.command-palette > header > svg { width: 15px; height: 15px; color: var(--muted-text); }
+.command-palette > header input { min-width: 0; border: 0; outline: 0; color: var(--main-text); background: transparent; font-size: 13px; }
+.command-palette > header input::placeholder { color: var(--faint-text); }
+.command-palette > header button { display: grid; width: 26px; height: 26px; place-items: center; padding: 0; border: 0; border-radius: 6px; color: var(--muted-text); background: transparent; }
+.command-palette > header button:hover { color: var(--main-text); background: var(--hover-background); }
+.command-palette > header button svg { width: 13px; height: 13px; }
+.command-palette kbd { padding: 2px 5px; border: 1px solid var(--border-color); border-radius: 5px; color: var(--muted-text); background: var(--soft-background); font: 8px/1.3 Consolas, monospace; white-space: nowrap; }
+
+.command-palette-results { max-height: min(530px, calc(100vh - 210px)); overflow: auto; padding: 6px; }
+.command-palette-results > button { display: grid; width: 100%; grid-template-columns: minmax(0, 1fr) auto; gap: 12px; align-items: center; padding: 9px 10px; border: 0; border-radius: 8px; color: var(--main-text); background: transparent; text-align: left; }
+.command-palette-results > button:hover:not(:disabled),
+.command-palette-results > button[aria-selected="true"]:not(:disabled) { background: var(--hover-background); }
+.command-palette-results > button:disabled { opacity: .48; }
+.command-palette-results > button > span:first-child { display: grid; grid-template-columns: 46px minmax(100px, auto) minmax(0, 1fr); gap: 8px; align-items: baseline; min-width: 0; }
+.command-palette-results small { color: var(--faint-text); font-size: 8px; }
+.command-palette-results strong { font-size: 11px; }
+.command-palette-results em { overflow: hidden; color: var(--muted-text); font-size: 9px; font-style: normal; text-overflow: ellipsis; white-space: nowrap; }
+.command-palette-results > p { margin: 26px; color: var(--muted-text); font-size: 10px; text-align: center; }
+.command-palette-shortcuts { display: flex; gap: 4px; justify-content: flex-end; }
+
 .conversation-scroll {
   position: relative;
   min-width: 0;
@@ -926,7 +992,10 @@ button { color: inherit; }
   background: linear-gradient(to bottom, transparent, var(--app-background) 22%);
 }
 
+.shortcut-notice { width: min(100%, 860px); margin: 0 auto 5px; color: var(--muted-text); font-size: 9px; text-align: center; }
+
 .composer {
+  position: relative;
   width: min(100%, 860px);
   min-width: 0;
   margin: 0 auto;
@@ -1362,4 +1431,34 @@ button { color: inherit; }
   .runtime-state i { animation: none !important; }
   .runtime-spinner,
   .streaming-caret { animation: none !important; }
+}
+.composer-suggestions {
+  position: absolute;
+  z-index: 35;
+  right: 0;
+  bottom: calc(100% + 7px);
+  left: 0;
+  max-height: 300px;
+  overflow: auto;
+  padding: 6px;
+  border: 1px solid var(--strong-border);
+  border-radius: 11px;
+  background: var(--raised-background);
+  box-shadow: 0 14px 38px rgba(30, 30, 28, .14);
+}
+.composer-suggestions > button { display: grid; width: 100%; grid-template-columns: 18px minmax(0, 1fr) auto; gap: 9px; align-items: center; padding: 8px 9px; border: 0; border-radius: 7px; color: var(--main-text); background: transparent; text-align: left; }
+.composer-suggestions > button:hover:not(:disabled), .composer-suggestions > button[aria-selected="true"]:not(:disabled) { background: var(--hover-background); }
+.composer-suggestions > button:disabled { opacity: .45; }
+.composer-suggestions svg { width: 14px; height: 14px; color: var(--muted-text); }
+.composer-suggestions span { display: grid; min-width: 0; gap: 2px; }
+.composer-suggestions strong { overflow: hidden; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+.composer-suggestions small, .composer-suggestions > p { margin: 0; color: var(--faint-text); font-size: 8px; }
+.composer-suggestions kbd { color: var(--muted-text); font: 8px/1.2 Consolas, monospace; }
+.composer-suggestions > p { padding: 14px; text-align: center; }
+
+@media (max-width: 700px) {
+  .command-palette-trigger span,
+  .command-palette-trigger kbd { display: none; }
+  .command-palette-results > button > span:first-child { grid-template-columns: 40px minmax(0, 1fr); }
+  .command-palette-results em { display: none; }
 }

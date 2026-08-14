@@ -31,6 +31,7 @@ import type {
 import type {
   DesktopEvent,
   DesktopMessage,
+  DesktopMessageInput,
   DesktopSendResult,
   DesktopSnapshot,
   DesktopAgentConfig,
@@ -38,6 +39,7 @@ import type {
   DesktopReasoningEffort,
   DesktopThreadSummary,
   DesktopTurnState,
+  DesktopWorkspaceSearchResult,
 } from "./desktop-types.js";
 import { DEFAULT_AGENT_TEAM_CONFIG, normalizeAgentTeamConfig, type AgentTeamConfig } from "../agents/agent-runtime.js";
 
@@ -54,8 +56,9 @@ export interface DesktopRuntimeClient {
   confirmRequirement?(requirementId: string, revision: number, contentHash: string): Promise<import("../requirements/requirement.js").Requirement>;
   readThreadHistory(threadId: string): Promise<ThreadHistoryResult>;
   getCapabilities(): Promise<RuntimeCapabilities>;
+  searchWorkspaceFiles?(query: string): Promise<DesktopWorkspaceSearchResult>;
   selectModel(model: string): Promise<RuntimeCapabilities>;
-  startTurn(threadId: string, input: string): Promise<TurnStartResult>;
+  startTurn(threadId: string, input: string, context?: Omit<DesktopMessageInput, "text">): Promise<TurnStartResult>;
   runTurn(
     turnId: string,
     options?: { model?: string; reasoningEffort?: DesktopReasoningEffort },
@@ -376,8 +379,16 @@ export class DesktopController {
     return this.sendMessage(`确认执行 ${requirement.id} v${requirement.revision}，请严格按已确认计划执行并完成测试验收。`);
   }
 
-  async sendMessage(input: string): Promise<DesktopSendResult> {
-    const text = requireInput(input);
+  async searchWorkspaceFiles(query: string): Promise<DesktopWorkspaceSearchResult> {
+    if (typeof query !== "string" || query.length > 240) throw new Error("Invalid workspace file query");
+    if (this.runtime.searchWorkspaceFiles === undefined) throw new Error("Workspace file search is unavailable");
+    return this.runtime.searchWorkspaceFiles(query);
+  }
+
+  async sendMessage(input: string | DesktopMessageInput): Promise<DesktopSendResult> {
+    const messageInput = typeof input === "string" ? { text: input } : input;
+    const text = requireInput(messageInput.text);
+    const context = normalizeMessageContext(messageInput, this.capabilities);
     let threadId = this.activeThreadId;
     let run: DesktopThreadRun | undefined;
     if (threadId !== undefined && isRunningState(
@@ -405,7 +416,7 @@ export class DesktopController {
       const historyBeforeTurn = await this.runtime.readThreadHistory(
         threadId,
       );
-      const started = await this.runtime.startTurn(threadId, text);
+      const started = await this.runtime.startTurn(threadId, text, context);
       const turnId = started.turn.id;
       run = {
         turnId,
@@ -1049,6 +1060,29 @@ function requireInput(value: string): string {
   }
 
   return text;
+}
+
+function normalizeMessageContext(
+  input: DesktopMessageInput,
+  capabilities: RuntimeCapabilities,
+): Omit<DesktopMessageInput, "text"> {
+  const mentions = [...new Map((input.mentions ?? []).map((mention) => {
+    if (mention.kind !== "file" || typeof mention.path !== "string" ||
+      mention.path.trim().length === 0 || mention.path.length > 500) {
+      throw new Error("Invalid workspace file mention");
+    }
+    return [mention.path, { kind: "file" as const, path: mention.path }];
+  })).values()];
+  const availableSkills = new Set(capabilities.skills.map((skill) => skill.name));
+  const explicitSkills = [...new Set(input.explicitSkills ?? [])];
+  if (mentions.length > 20 || explicitSkills.length > 20 ||
+    explicitSkills.some((name) => typeof name !== "string" || !availableSkills.has(name))) {
+    throw new Error("Invalid explicit message context");
+  }
+  return {
+    ...(mentions.length === 0 ? {} : { mentions }),
+    ...(explicitSkills.length === 0 ? {} : { explicitSkills }),
+  };
 }
 
 function toDesktopMessage(item: TurnStartResult["userMessage"]): DesktopMessage {

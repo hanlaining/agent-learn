@@ -29,6 +29,155 @@ import {
   desktopReducer,
   INITIAL_DESKTOP_UI_STATE,
 } from "../src/electron/renderer/desktop-reducer.js";
+import {
+  filterCommandPaletteItems,
+  findLatestAssistantOutput,
+  movePaletteSelection,
+  resolveDesktopShortcut,
+} from "../src/electron/renderer/command-palette.js";
+import { DESKTOP_COMMAND_REGISTRY } from "../src/shortcuts/builtins.js";
+import {
+  createComposerMessageInput,
+  filterComposerSuggestions,
+  findComposerToken,
+  moveComposerSelection,
+  replaceComposerToken,
+  type ComposerSuggestion,
+} from "../src/electron/renderer/composer-suggestions.js";
+
+test("Composer 只在安全 token 边界识别 / @ $", () => {
+  assert.deepEqual(findComposerToken("请检查 @src/app", 12), {
+    kind: "file", trigger: "@", query: "src/app", start: 4, end: 12,
+  });
+  assert.equal(findComposerToken("mail@example.com", 16), undefined);
+  assert.equal(findComposerToken("https://example.com", 8), undefined);
+  assert.equal(findComposerToken("`$finance`", 8), undefined);
+  assert.deepEqual(findComposerToken("/$skill", 7), {
+    kind: "slash", trigger: "/", query: "$skill", start: 0, end: 7,
+  });
+});
+
+test("Composer 建议支持检索、上限、循环选择和完整 token 替换", () => {
+  const suggestions: ComposerSuggestion[] = [
+    { id: "a", kind: "skill", value: "$finance", label: "finance-analysis", description: "财务分析" },
+    { id: "b", kind: "skill", value: "$writer", label: "writer", description: "内容写作" },
+  ];
+  assert.deepEqual(filterComposerSuggestions(suggestions, "财务").map((item) => item.id), ["a"]);
+  assert.equal(moveComposerSelection(0, -1, 2), 1);
+  assert.equal(moveComposerSelection(1, 1, 2), 0);
+  assert.deepEqual(
+    replaceComposerToken("使用 $finace-now 完成", {
+      kind: "skill", trigger: "$", query: "fin", start: 3, end: 14,
+    }, "$finance-analysis"),
+    { text: "使用 $finance-analysis 完成", cursor: 20 },
+  );
+});
+
+test("Composer token 覆盖多行、光标中部、空触发符和代码边界", () => {
+  assert.deepEqual(findComposerToken("第一行\n@src/app.ts 后续", 8), {
+    kind: "file", trigger: "@", query: "src", start: 4, end: 15,
+  });
+  assert.deepEqual(findComposerToken("使用 $", 4), {
+    kind: "skill", trigger: "$", query: "", start: 3, end: 4,
+  });
+  assert.equal(findComposerToken("foo/@src", 8), undefined);
+  assert.equal(findComposerToken("escaped `code` @src", 19)?.kind, "file");
+  assert.equal(findComposerToken("escaped \\` $skill", 17)?.kind, "skill");
+  assert.equal(findComposerToken("text", -1), undefined);
+  assert.equal(findComposerToken("text", 5), undefined);
+});
+
+test("Composer 建议大小写不敏感、遵守上限并安全处理零上限", () => {
+  const suggestions: ComposerSuggestion[] = Array.from({ length: 15 }, (_, index) => ({
+    id: String(index), kind: "file", value: `@src/File${index}.ts`,
+    label: `src/File${index}.ts`, description: index === 13 ? "SPECIAL MATCH" : "workspace",
+  }));
+  assert.equal(filterComposerSuggestions(suggestions, "file").length, 12);
+  assert.deepEqual(filterComposerSuggestions(suggestions, "special match").map((item) => item.id), ["13"]);
+  assert.deepEqual(filterComposerSuggestions(suggestions, "", 0), []);
+  assert.equal(moveComposerSelection(0, 1, 0), -1);
+  assert.deepEqual(replaceComposerToken("@old", {
+    kind: "file", trigger: "@", query: "old", start: 0, end: 4,
+  }, "@new"), { text: "@new ", cursor: 5 });
+});
+
+test("Composer 发送只保留仍存在的完整显式 token", () => {
+  assert.deepEqual(createComposerMessageInput(
+    "检查 @src/app.ts 使用 $code-review",
+    ["src/app.ts", "src/app.ts", "removed.ts"],
+    ["code-review", "removed-skill"],
+  ), {
+    text: "检查 @src/app.ts 使用 $code-review",
+    mentions: [{ kind: "file", path: "src/app.ts" }],
+    explicitSkills: ["code-review"],
+  });
+  assert.deepEqual(createComposerMessageInput(
+    "检查 @src/app.ts.bak 使用 $code-review-extra",
+    ["src/app.ts"],
+    ["code-review"],
+  ), {
+    text: "检查 @src/app.ts.bak 使用 $code-review-extra",
+    mentions: [],
+    explicitSkills: [],
+  });
+  assert.deepEqual(createComposerMessageInput(
+    "检查 @docs/My Report 中文.ts\n然后继续",
+    ["docs/My Report 中文.ts"],
+    [],
+  ).mentions, [{ kind: "file", path: "docs/My Report 中文.ts" }]);
+});
+
+test("命令面板按名称、描述、Slash 和快捷键过滤", () => {
+  const items = DESKTOP_COMMAND_REGISTRY.list().map((action) => ({
+    action,
+    enabled: true,
+  }));
+
+  assert.deepEqual(
+    filterCommandPaletteItems(items, "模型").map((item) => item.action.id),
+    ["session.model"],
+  );
+  assert.deepEqual(
+    filterCommandPaletteItems(items, "/permissions").map((item) => item.action.id),
+    ["session.permissions"],
+  );
+  assert.deepEqual(
+    filterCommandPaletteItems(items, "primary+k").map((item) => item.action.id),
+    ["chat.search"],
+  );
+});
+
+test("命令面板选择循环移动且空列表安全", () => {
+  assert.equal(movePaletteSelection(0, 1, 3), 1);
+  assert.equal(movePaletteSelection(2, 1, 3), 0);
+  assert.equal(movePaletteSelection(0, -1, 3), 2);
+  assert.equal(movePaletteSelection(0, 1, 0), -1);
+});
+
+test("桌面快捷键支持 Ctrl/Cmd 且忽略输入法和 Alt", () => {
+  assert.equal(resolveDesktopShortcut(keyboard("p", { ctrlKey: true, shiftKey: true })), "composer.commandPalette");
+  assert.equal(resolveDesktopShortcut(keyboard("k", { metaKey: true })), "chat.search");
+  assert.equal(resolveDesktopShortcut(keyboard("n", { ctrlKey: true })), "chat.new");
+  assert.equal(resolveDesktopShortcut(keyboard("o", { ctrlKey: true })), "output.copyLatest");
+  assert.equal(resolveDesktopShortcut(keyboard("n", { ctrlKey: true, isComposing: true })), undefined);
+  assert.equal(resolveDesktopShortcut(keyboard("k", { ctrlKey: true, altKey: true })), undefined);
+});
+
+test("复制优先使用当前 Runtime 的完整回答", () => {
+  const completed = session("completed");
+  completed.items.push({
+    id: "answer-1",
+    turnId: completed.turnId,
+    kind: "assistant",
+    round: 0,
+    status: "completed",
+    markdown: "Runtime 最新回答",
+  });
+
+  assert.equal(findLatestAssistantOutput([
+    { id: "m1", turnId: "old", role: "assistant", text: "历史回答", createdAt: new Date().toISOString() },
+  ], completed), "Runtime 最新回答");
+});
 
 test("安全 Markdown 支持常用块并把原始 HTML 保留为文本", () => {
   const blocks = parseSafeMarkdown([
@@ -402,8 +551,8 @@ test("产品双轮 Return 使用受控阶段按钮且返工状态不标红", () 
   assert.match(appSource, /产品生成第一轮 Return/);
   assert.match(appSource, /原产品 Thread 返工（Attempt 2）/);
   assert.match(appSource, /God 接收并单次汇总/);
-  assert.match(appSource, /工程角色实现项目/);
-  assert.match(appSource, /测试角色独立验收/);
+  assert.match(appSource, /负责人验收并驳回/);
+  assert.match(appSource, /负责人通过并 Return God/);
   assert.match(preloadSource, /desktop:advance-fixed-product/);
   assert.match(cssSource, /fixed-product-advance/);
   assert.doesNotMatch(cssSource, /rework[^}]*var\(--negative\)/s);
@@ -512,7 +661,8 @@ test("God 极简流程只在右侧活动栏展示并支持 AgentChat 快捷入�
   assert.match(app, /latestRunByThread\.get\(run\.threadId\)[\s\S]*run\.attempt >= previous\.attempt/);
   assert.match(app, /className="agent-flow-agent-latest" title=\{latestWork\}>\{latestWork\}/);
   assert.match(app, /item\.runId === run\.id \|\| matchesTask\(item\.taskId\)/);
-  assert.match(app, /item\.producerRunId === run\.id \|\| matchesTask\(item\.taskId\)/);
+  assert.match(app, /const boardTaskId = "taskId" in item && typeof item\.taskId === "string" \? item\.taskId : undefined/);
+  assert.match(app, /item\.producerRunId === run\.id \|\| matchesTask\(boardTaskId\)/);
   assert.match(app, /item\.childRunId === run\.id \|\| matchesTask\(item\.taskId\)/);
   assert.match(app, /Math\.max\(derivedCurrentStep, furthestStepByJob\.current\.get\(flowKey\) \?\? 1\)/);
   assert.doesNotMatch(app, /<AgentRunTree\b|<AgentNodeDetails\b/);
@@ -610,5 +760,24 @@ function commentary(
     round,
     status: "completed",
     markdown: "阶段说明",
+  };
+}
+
+function keyboard(
+  key: string,
+  overrides: Partial<Pick<KeyboardEvent,
+    "ctrlKey" | "metaKey" | "shiftKey" | "altKey" | "isComposing"
+  >> = {},
+): Pick<KeyboardEvent,
+  "key" | "ctrlKey" | "metaKey" | "shiftKey" | "altKey" | "isComposing"
+> {
+  return {
+    key,
+    ctrlKey: false,
+    metaKey: false,
+    shiftKey: false,
+    altKey: false,
+    isComposing: false,
+    ...overrides,
   };
 }
