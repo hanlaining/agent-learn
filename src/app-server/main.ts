@@ -27,6 +27,9 @@ import {
   ItemBudget,
 } from "../runtime/item-budget.js";
 import {
+  ModelInvocationStartupRecovery,
+} from "../runtime/model-invocation-startup-recovery.js";
+import {
   WorkspaceSandbox,
 } from "../sandbox/workspace-sandbox.js";
 import {
@@ -52,8 +55,13 @@ import {
   createWorkspaceTools,
 } from "../tools/workspace-tools.js";
 import {
+  applyAgentModeToTools,
+  applyRequirementGateToTools,
+  buildParentAgentInstructions,
   registerAppServerHandlers,
+  routeTeamConfigForExecutionKind,
 } from "./handlers.js";
+import { DEFAULT_AGENT_TEAM_CONFIG } from "../agents/agent-runtime.js";
 import { AgentRegistry } from "../agents/agent-registry.js";
 import { AgentRunStore } from "../agents/agent-run-store.js";
 import { MultiAgentScheduler } from "../agents/multi-agent-scheduler.js";
@@ -70,6 +78,7 @@ import { createRunAgentTool } from "../tools/run-agent-tool.js";
 import { createSharedBoardTools } from "../tools/shared-board-tools.js";
 import { createPrepareRequirementPlanTool } from "../tools/prepare-requirement-plan-tool.js";
 import { RequirementPlanWriter } from "../requirements/requirement-plan-writer.js";
+import { isRequirementConfirmed } from "../requirements/requirement.js";
 import type {
   RuntimeCapabilities,
   RuntimeModelCapability,
@@ -99,6 +108,8 @@ const {
   agentRunStore,
   agentRuntimeStore,
   requirementStore,
+  modelInvocationStore,
+  toolInvocationStore,
 } = loadedRuntimeState;
 const threadConfigs = new Map(
   loadedRuntimeState.threadConfigs.map((config) => [config.threadId, config]),
@@ -110,6 +121,7 @@ const persistRuntimeState = () => runtimePersistence.save(
   lifecycleStore, contextCheckpointStore, agentRunStore,
   [...threadConfigs.values()], agentRegistry?.list?.() ?? loadedRuntimeState.agentProfiles,
   [...runtimeSessions.values()], agentRuntimeStore, requirementStore,
+  modelInvocationStore, toolInvocationStore,
 );
 
 // 与当前 Codex 客户端的已验证配置对齐；仍可用 OPENAI_MODEL 覆盖。
@@ -239,6 +251,10 @@ const llmProvider = apiKey === undefined
       apiKey,
       model: configuredModel,
       baseUrl: apiBaseUrl,
+      // Model Invocation WAL 以一次 submitted 对应一次远端 dispatch。
+      // 网络错误、超时、429/5xx 均进入 outcome_unknown/显式处置，Provider
+      // 不得在同一 Invocation 内隐藏第二次 POST。
+      maxRetries: 0,
       usePreviousResponseId: providerInputPolicy.usePreviousResponseId,
       maxInputItems: providerInputPolicy.maxInputItems,
       webSearch: {
@@ -288,16 +304,28 @@ const agentLoop =
         }),
         toolRegistry: sharedToolRegistry,
         llm: llmProvider!,
+        modelInvocationWal: {
+          store: modelInvocationStore,
+          persist: persistRuntimeState,
+          provider: "openai_responses",
+          defaultModel: configuredModel,
+        },
+        toolInvocationWal: {
+          store: toolInvocationStore,
+          persist: persistRuntimeState,
+        },
         continueAfterAgentReturns: (turnId, childRunIds, continuation) =>
           runtimeCoordinator.continueParent(turnId, childRunIds, continuation),
         resolveExecutionContext: (turnId) => {
           const run = agentRunStore.getByTurn(turnId);
           const turn = lifecycleStore.getTurn(turnId);
           const task = run?.taskId === undefined ? undefined : agentRuntimeStore.getTask(run.taskId);
+          const job = run === undefined ? undefined : agentRuntimeStore.getJob(run.jobId);
           const profile = run === undefined ? undefined : agentRegistry.list().find((item) => item.id === run.agentProfileId);
           return { ...(turn === undefined ? {} : { threadId: turn.threadId }), ...(run === undefined ? {} : {
             jobId: run.jobId, agentId: run.id, agentName: profile?.name ?? run.agentProfileId,
-          }), ...(task === undefined ? {} : { taskId: task.id, taskTitle: task.title }) };
+          }), ...(job === undefined ? {} : { jobAttempt: job.attempt, workflowVersion: job.workflowVersion }),
+            ...(task === undefined ? {} : { taskId: task.id, taskTitle: task.title }) };
         },
       });
 
@@ -309,7 +337,8 @@ const workflowTeamCoordinator = agentLoop === undefined ? undefined : new Workfl
   runtimeStore: agentRuntimeStore,
   template: SOFTWARE_PRODUCT_DELIVERY_TEMPLATE,
   metrics: runtimeMetrics,
-  execute: async ({ threadId, profileId, prompt, allowedTools, formatRepair }) => {
+  execute: async ({ threadId, profileId, prompt, allowedTools, formatRepair,
+    jobId, jobAttempt, workflowVersion, stageId, stageAttempt }) => {
     const profile = agentRegistry.require(profileId);
     const turn = lifecycleStore.createTurn(threadId);
     lifecycleStore.appendItem(turn.id, "user_message", { text: prompt });
@@ -319,10 +348,38 @@ const workflowTeamCoordinator = agentLoop === undefined ? undefined : new Workfl
       instructions: `${profile.instructions}\n\n你是版本化 Workflow Template 中的叶子阶段 Agent。不得创建子 Agent，不得越过当前阶段职责；${formatRepair ? "本轮只修复结构化格式，不得调用工具。" : "只使用 Runtime 明确授予的工具。"}`,
       allowedTools,
       allowedSkills: [],
+      modelInvocationPurpose: formatRepair ? "format_repair" : "initial",
+      invocationContext: {
+        threadId,
+        jobId,
+        jobAttempt,
+        workflowVersion,
+        stageId,
+        stageAttempt,
+      },
     });
     const content = result.assistantMessage.content;
     return { turnId: turn.id, summary: typeof content === "object" && content !== null && "text" in content && typeof content.text === "string" ? content.text : "",
       toolCalls: result.turn.itemIds.filter((itemId) => lifecycleStore.getItem(itemId)?.type === "tool_call").length };
+  },
+  recoverModelExecution: (input) => {
+    const invocation = modelInvocationStore.list()
+      .filter((item) => item.jobId === input.jobId && item.jobAttempt === input.jobAttempt &&
+        item.workflowVersion === input.workflowVersion && item.stageId === input.stageId &&
+        item.stageAttempt === input.stageAttempt &&
+        ["response_received", "committed"].includes(item.status) &&
+        item.normalizedResult !== undefined && item.normalizedResult.functionCalls.length === 0 &&
+        item.normalizedResult.text.trim().length > 0)
+      .sort((left, right) => left.round - right.round || left.updatedAt.localeCompare(right.updatedAt))
+      .at(-1);
+    return invocation?.normalizedResult === undefined ? undefined : {
+      turnId: invocation.turnId,
+      summary: invocation.normalizedResult.text,
+      ...(invocation.status === "response_received" ? { invocationId: invocation.invocationId } : {}),
+    };
+  },
+  commitRecoveredModelExecution: (invocationId, targetCommitKey) => {
+    modelInvocationStore.markCommitted(invocationId, targetCommitKey);
   },
   modelInfo: (profileId) => {
     const profile = agentRegistry.require(profileId);
@@ -360,7 +417,6 @@ const workflowTeamCoordinator = agentLoop === undefined ? undefined : new Workfl
   },
   persist: () => persistRuntimeState(),
 });
-workflowTeamCoordinator?.recoverPersistedCheckpoints();
 const executionEngineRouter = workflowTeamCoordinator === undefined ? undefined : new ExecutionEngineRouter([
   new DynamicAgentExecutionEngine(agentRuntimeStore),
   new TeamWorkflowExecutionEngine(agentRuntimeStore, workflowTeamCoordinator, (context) => {
@@ -428,7 +484,8 @@ if (agentLoop !== undefined) {
       if (run !== undefined) events.emit({ type: "agent/run_updated", threadId, turnId, run });
     },
     persist: () => runtimePersistence.save(lifecycleStore, contextCheckpointStore,
-      agentRunStore, [...threadConfigs.values()], agentRegistry.list(), [...runtimeSessions.values()], agentRuntimeStore, requirementStore),
+      agentRunStore, [...threadConfigs.values()], agentRegistry.list(), [...runtimeSessions.values()], agentRuntimeStore, requirementStore,
+      modelInvocationStore, toolInvocationStore),
   });
   sharedToolRegistry.register(createRunAgentTool(() => multiAgentScheduler!));
 }
@@ -458,6 +515,39 @@ const runtimeCapabilities: RuntimeCapabilities = {
   }),
 };
 
+const modelInvocationStartupRecovery = new ModelInvocationStartupRecovery({
+  lifecycleStore,
+  modelInvocationStore,
+  toolInvocationStore,
+  persist: persistRuntimeState,
+  canReplayTurn: (turnId) => {
+    const turn = lifecycleStore.getTurn(turnId);
+    const thread = turn === undefined ? undefined : lifecycleStore.getThread(turn.threadId);
+    return thread?.kind !== "agent_internal";
+  },
+});
+const durableInterruptedTurnIds = [...new Set(
+  modelInvocationStore.list()
+    .filter((invocation) => lifecycleStore.getTurn(invocation.turnId)?.status === "interrupted")
+    .map((invocation) => invocation.turnId),
+)].filter((turnId) => !loadedRuntimeState.recoveredTurnIds.includes(turnId));
+const startupRecoveryPromise = modelInvocationStartupRecovery
+  .recover(loadedRuntimeState.recoveredTurnIds)
+  .then(async (results) => [
+    ...results,
+    ...await modelInvocationStartupRecovery.recover(durableInterruptedTurnIds),
+  ])
+  .then((results) => {
+    for (const result of results) {
+      if (result.action === "blocked") {
+        process.stderr.write(
+          `[app-server] model invocation recovery blocked for ${result.turnId}: ` +
+            `${result.diagnosticCode ?? "unknown"}\n`,
+        );
+      }
+    }
+  });
+
 registerAppServerHandlers(connection, {
   lifecycleStore,
   events,
@@ -471,6 +561,7 @@ registerAppServerHandlers(connection, {
   requirementStore,
   workspaceSandbox,
   skillNames: skillLoader.list().map((skill) => skill.name),
+  waitForStartupRecovery: () => startupRecoveryPromise,
   ...(executionEngineRouter === undefined ? {} : { executionEngineRouter }),
   ...(multiAgentScheduler === undefined ? {} : {
     cancelChildAgentRuns: (turnId: string) =>
@@ -488,10 +579,14 @@ registerAppServerHandlers(connection, {
     [...runtimeSessions.values()],
     agentRuntimeStore,
     requirementStore,
+    modelInvocationStore,
+    toolInvocationStore,
   ),
   // 日志写 stderr，避免污染 stdout 上的 JSONL 协议数据。
   log: (message) => process.stderr.write(message),
 });
+
+await startupRecoveryPromise;
 
 if (loadedRuntimeState.restored) {
   process.stderr.write(
@@ -524,19 +619,27 @@ if (interruptedRuntime.lostTasks.length > 0 || interruptedRuntime.pendingReturns
   process.stderr.write(`[app-server] recovered ${interruptedRuntime.lostTasks.length} lost Task lease(s) and ${interruptedRuntime.pendingReturns.length} pending Return(s)\n`);
 }
 
-if (agentLoop !== undefined && interruptedRuntime.pendingReturns.some((item) => !item.idempotencyKey.includes(":fixed:"))) {
-  void runtimeCoordinator.recoverPendingReturns(async (job, returns) => {
-    const turn = lifecycleStore.createTurn(job.threadId);
-    lifecycleStore.appendItem(turn.id, "runtime_message", { text: `Runtime 重启恢复：以下子 Agent 结果已经持久化并等待你自动继续。请直接综合并完成原任务，不要询问用户是否继续。\n${returns.map((item) => `- ${item.result.status}: ${item.result.summary}`).join("\n")}` });
-    const profile = agentRegistry.require("orchestrator");
-    const result = await agentLoop.run(turn.id, {
-      model: profile.defaultModel,
-      reasoningEffort: profile.reasoningEffort,
-      instructions: `${profile.instructions}\nRuntime 正在恢复已经持久化的 Return。只汇总这些结果，不得创建新任务或调用 run_agent。`,
-      allowedTools: ["*", "!run_agent"],
-    });
-    await persistRuntimeState(); return result;
-  }, (item) => !item.idempotencyKey.includes(":fixed:"));
+if (executionEngineRouter !== undefined) {
+  for (const job of agentRuntimeStore.listJobs().filter((item) =>
+    item.executionKind === "software_product_delivery" &&
+    item.workflowVersion === "software_product_delivery_v2" &&
+    !["completed", "partial", "failed", "cancelled"].includes(item.status))) {
+    await executionEngineRouter.recover(job.executionKind, job.id);
+  }
+}
+
+const isV2TeamReturn = (item: { jobId: string }): boolean => {
+  const job = agentRuntimeStore.getJob(item.jobId);
+  return job?.executionKind === "software_product_delivery" &&
+    job.workflowVersion === "software_product_delivery_v2";
+};
+const pendingDynamicReturnCount = agentRuntimeStore.listReturns().filter((item) =>
+  item.status === "ready" && !isV2TeamReturn(item)).length;
+
+if (pendingDynamicReturnCount > 0) {
+  process.stderr.write(
+    `[app-server] ${pendingDynamicReturnCount} dynamic Return(s) await explicit turn/run resume\n`,
+  );
 }
 
 if (agentLoop === undefined) {

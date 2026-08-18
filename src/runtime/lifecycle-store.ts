@@ -230,6 +230,31 @@ export class LifecycleStore {
     return turn;
   }
 
+  resumeInterruptedTurn(turnId: TurnId): Turn {
+    const turn = this.requireTurn(turnId);
+    if (turn.status !== "interrupted") {
+      throw new LifecycleError(
+        `Turn cannot be resumed from ${turn.status}: ${turnId}`,
+      );
+    }
+    turn.status = "in_progress";
+    delete turn.completedAt;
+    return turn;
+  }
+
+  completeInterruptedTurn(turnId: TurnId): Turn {
+    const turn = this.requireTurn(turnId);
+    if (turn.status === "completed") return turn;
+    if (turn.status !== "interrupted") {
+      throw new LifecycleError(
+        `Turn cannot be recovered as completed from ${turn.status}: ${turnId}`,
+      );
+    }
+    turn.status = "completed";
+    turn.completedAt = this.now();
+    return turn;
+  }
+
   getThread(threadId: ThreadId): Thread | undefined {
     return this.threads.get(threadId);
   }
