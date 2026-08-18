@@ -43,15 +43,15 @@ import type { AgentRunResult } from "../agents/agent-run.js";
 import type { AgentRuntimeStore } from "../agents/agent-runtime-store.js";
 import type { AgentRegistry } from "../agents/agent-registry.js";
 import type { WorkspaceSandbox } from "../sandbox/workspace-sandbox.js";
-import { DEFAULT_AGENT_TEAM_CONFIG, normalizeAgentTeamConfig } from "../agents/agent-runtime.js";
+import { DEFAULT_AGENT_TEAM_CONFIG, normalizeAgentTeamConfig, type AgentJobStatus, type AgentTeamConfig } from "../agents/agent-runtime.js";
 import type {
   PersistedRuntimeSession,
   PersistedThreadConfig,
 } from "../runtime/json-file-runtime-persistence.js";
 import type { RequirementStore } from "../requirements/requirement-store.js";
-import { ensureFixedSoftwareTeam } from "../agents/fixed-software-team.js";
-import { isRequirementConfirmed } from "../requirements/requirement.js";
-import type { FixedProductStage, FixedSoftwareTeamCoordinator } from "../agents/fixed-software-team-coordinator.js";
+import { isRequirementConfirmed, type RequirementExecutionKind, type RequirementExecutionState } from "../requirements/requirement.js";
+import type { FixedProductStage } from "../agents/fixed-software-team-coordinator.js";
+import type { ExecutionEngineRouter } from "../execution/execution-engine-router.js";
 
 export interface AppServerDependencies {
   lifecycleStore: LifecycleStore;
@@ -68,9 +68,9 @@ export interface AppServerDependencies {
   threadConfigs?: Map<string, PersistedThreadConfig>;
   runtimeSessions?: Map<string, PersistedRuntimeSession>;
   requirementStore?: RequirementStore;
-  fixedSoftwareTeamCoordinator?: FixedSoftwareTeamCoordinator;
   workspaceSandbox?: Pick<WorkspaceSandbox, "searchFiles" | "validateFilePath">;
   skillNames?: readonly string[];
+  executionEngineRouter?: ExecutionEngineRouter;
 }
 
 /**
@@ -98,9 +98,9 @@ export function registerAppServerHandlers(
     threadConfigs = new Map(),
     runtimeSessions = new Map(),
     requirementStore,
-    fixedSoftwareTeamCoordinator,
     workspaceSandbox,
     skillNames = [],
+    executionEngineRouter,
   } = dependencies;
 
   let clientInitialized = false;
@@ -204,19 +204,20 @@ export function registerAppServerHandlers(
     const job = agentRuntimeStore?.listJobs(params.threadId).sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
     if (job === undefined) return { tasks: [], edges: [], evidence: [], board: [], returns: [] };
     const tasks = agentRuntimeStore!.listTasks(job.id);
-    return { job, tasks, edges: agentRuntimeStore!.listEdges(job.id), evidence: tasks.flatMap((task) => agentRuntimeStore!.listEvidence(task.id)), board: agentRuntimeStore!.listBoard(job.id), returns: agentRuntimeStore!.listReturns(job.id), fixedProductStage: fixedSoftwareTeamCoordinator?.getStage(job.id) };
+    const engine = executionEngineRouter?.snapshot(job.executionKind, job.id);
+    return { job, tasks, edges: agentRuntimeStore!.listEdges(job.id), evidence: tasks.flatMap((task) => agentRuntimeStore!.listEvidence(task.id)), board: agentRuntimeStore!.listBoard(job.id), returns: agentRuntimeStore!.listReturns(job.id), stageCheckpoints: agentRuntimeStore!.listStageCheckpoints(job.id), stageMetrics: agentRuntimeStore!.listStageMetrics(job.id), fixedProductStage: engine?.stage, engine };
   });
 
   connection.onRequest("agent/fixed-product/advance", async (params) => {
     requireInitialized();
-    if (fixedSoftwareTeamCoordinator === undefined || agentRuntimeStore === undefined ||
+    if (executionEngineRouter === undefined || agentRuntimeStore === undefined ||
       !isRecord(params) || typeof params.threadId !== "string" || typeof params.expectedStage !== "string" ||
-      !["ready_first_return", "first_return_ready", "rework", "second_return_ready", "lead_return_ready", "completed"].includes(params.expectedStage)) {
+      !["ready_first_return", "first_return_ready", "rework", "second_return_ready", "engineering_ready", "engineering_return_ready", "quality_ready", "quality_return_ready", "lead_return_ready", "completed"].includes(params.expectedStage)) {
       throw new Error("Invalid fixed product advance request");
     }
     const job = agentRuntimeStore.listJobs(params.threadId).sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
     if (job === undefined || job.threadId !== params.threadId) throw new Error("Fixed product Job is unavailable");
-    return fixedSoftwareTeamCoordinator.advance(job.id, params.expectedStage as FixedProductStage);
+    return executionEngineRouter.advance(job.executionKind, job.id, params.expectedStage as FixedProductStage);
   });
 
   connection.onRequest("requirement/get", (params) => {
@@ -389,26 +390,40 @@ export function registerAppServerHandlers(
 
     const request = parseTurnRunParams(params);
     const turnFact = lifecycleStore.getTurn(request.turnId);
+    const turnUserInput = readTurnUserInput(lifecycleStore, request.turnId);
     const threadConfig = turnFact === undefined ? undefined : threadConfigs.get(turnFact.threadId);
     const profile = agentRegistry?.require(threadConfig?.agentProfileId ?? "orchestrator");
     const teamConfig = threadConfig?.agentTeam ?? DEFAULT_AGENT_TEAM_CONFIG;
     const requirement = turnFact === undefined ? undefined : requirementStore?.getActive(turnFact.threadId);
+    const executionKind = requirement?.executionKind ?? "software_change";
+    const jobTeamConfig = routeTeamConfigForExecutionKind(teamConfig, executionKind);
     const executionConfirmed = isRequirementConfirmed(requirement);
+    const retryRequested = requirement?.executionState === "failed_retryable" &&
+      isExplicitRequirementRetry(turnUserInput);
+    const executionRequested = executionConfirmed && requirement !== undefined &&
+      (requirement.executionState === "not_started" || requirement.executionState === "executing" || retryRequested);
     const existingRequirementJob = requirement === undefined ? undefined :
       agentRuntimeStore?.getJobByRequirement(requirement.id, requirement.revision);
-    agentRegistry?.requireAll(teamConfig.allowedProfiles);
-    if (teamConfig.independentReview) agentRegistry?.require("reviewer");
-    const rootRun = turnFact === undefined || requirement === undefined || !executionConfirmed
+    agentRegistry?.requireAll(jobTeamConfig.allowedProfiles);
+    if (jobTeamConfig.independentReview) agentRegistry?.require("reviewer");
+    if (executionRequested) executionEngineRouter?.validateStart(executionKind, jobTeamConfig.allowedTools ?? ["*"]);
+    const rootRun = turnFact === undefined || requirement === undefined || !executionRequested
       ? undefined
       : agentRunStore?.ensureRoot(turnFact.threadId, request.turnId, profile?.id,
           existingRequirementJob?.id ?? `job-${requirement.id}-v${requirement.revision}`);
-    const job = rootRun === undefined || turnFact === undefined || requirement === undefined ? undefined
+    let job = rootRun === undefined || turnFact === undefined || requirement === undefined ? undefined
       : agentRuntimeStore?.createJob({ threadId: turnFact.threadId, rootTurnId: request.turnId,
-          rootRunId: rootRun.rootRunId, configSnapshot: threadConfig?.agentTeam ?? DEFAULT_AGENT_TEAM_CONFIG,
+          rootRunId: rootRun.rootRunId, configSnapshot: jobTeamConfig, executionKind,
+          workflowVersion: executionKind === "software_product_delivery" ? "software_product_delivery_v2" : "dynamic_v1",
           requirementId: requirement.id, requirementRevision: requirement.revision });
+    if (job !== undefined && rootRun !== undefined && retryRequested && job.rootTurnId !== request.turnId) {
+      job = agentRuntimeStore?.startJobAttempt(job.id, request.turnId, rootRun.rootRunId);
+      if (job !== undefined) agentRunStore?.rebindAttempt(rootRun.id, request.turnId, job.attempt);
+    }
     if (job !== undefined && requirement !== undefined) requirementStore?.attachJob(requirement.id, job.id);
-    if (job !== undefined && rootRun !== undefined && agentRunStore !== undefined) {
-      ensureFixedSoftwareTeam(lifecycleStore, agentRunStore, rootRun);
+    if (job !== undefined && rootRun !== undefined && executionEngineRouter !== undefined) {
+      await executionEngineRouter.start({ jobId: job.id, threadId: job.threadId, rootRunId: rootRun.id,
+        executionKind: job.executionKind, workflowVersion: job.workflowVersion });
     }
     if (rootRun !== undefined) agentRunStore?.setStatus(rootRun.id, "running");
     if (job !== undefined) agentRuntimeStore?.setJobStatus(job.id, "running");
@@ -426,7 +441,7 @@ export function registerAppServerHandlers(
           executionConfirmed,
           requirement,
         ) }),
-        ...(profile === undefined ? {} : { allowedTools: applyRequirementGateToTools(applyAgentModeToTools(intersectCapabilities(profile.allowedTools, teamConfig.allowedTools), teamConfig.mode), executionConfirmed),
+        ...(profile === undefined ? {} : { allowedTools: applyRequirementGateToTools(applyAgentModeToTools(intersectCapabilities(profile.allowedTools, jobTeamConfig.allowedTools), teamConfig.mode), executionConfirmed),
           allowedSkills: intersectCapabilities(profile.allowedSkills, teamConfig.allowedSkills) }),
       });
 
@@ -443,25 +458,57 @@ export function registerAppServerHandlers(
       }
       if (job !== undefined) {
         const status = agentRuntimeStore?.reconcileJobStatus(job.id);
-        if (status === "completed" && requirement !== undefined) requirementStore?.setStatus(requirement.id, "completed");
+        const requirementState = requirementExecutionStateForJobStatus(status);
+        if (requirementState !== undefined && requirement !== undefined) {
+          requirementStore?.setExecutionState(requirement.id, requirementState);
+          const unfinishedTerminal = requirementState === "failed_retryable" ? "failed" : "cancelled";
+          agentRunStore?.closeActiveForJob(job.id, unfinishedTerminal,
+            "Job 已进入终态，未完成 Agent 已安全关闭");
+          agentRuntimeStore?.closeActiveTasks(job.id, unfinishedTerminal);
+        }
       }
 
       return result;
     } catch (error) {
+      const terminalStatus = lifecycleStore.getTurn(request.turnId)?.status === "timed_out"
+        ? "timed_out" as const
+        : lifecycleStore.getTurn(request.turnId)?.status === "interrupted"
+          ? "cancelled" as const
+          : "failed" as const;
       if (rootRun !== undefined) {
         agentRunStore?.complete(rootRun.id, {
           runId: rootRun.id,
-          status: lifecycleStore.getTurn(request.turnId)?.status === "timed_out"
-            ? "timed_out"
-            : lifecycleStore.getTurn(request.turnId)?.status === "interrupted"
-              ? "cancelled"
-              : "failed",
+          status: terminalStatus,
           summary: "主 Agent 未完成任务",
           safeError: "Agent 执行失败",
         });
       }
-      if (job !== undefined) agentRuntimeStore?.setJobStatus(job.id,
-        lifecycleStore.getTurn(request.turnId)?.status === "interrupted" ? "cancelled" : "failed");
+      if (job !== undefined) {
+        agentRunStore?.closeActiveForJob(job.id,
+          terminalStatus, "Job 已终结，未完成 Agent 已安全关闭", "父 Agent 未完成任务");
+        agentRuntimeStore?.closeActiveTasks(job.id,
+          terminalStatus === "cancelled" ? "cancelled" : "failed");
+        agentRuntimeStore?.failJob(job.id,
+          terminalStatus === "cancelled" ? "cancelled" : "failed", terminalStatus);
+        if (requirement !== undefined) {
+          requirementStore?.setExecutionState(requirement.id,
+            terminalStatus === "cancelled" ? "cancelled" : "failed_retryable");
+        }
+      }
+      if (turnFact !== undefined) {
+        const persisted = runtimeSessions.get(turnFact.threadId);
+        if (persisted?.session.turnId === request.turnId) {
+          runtimeSessions.set(turnFact.threadId, {
+            threadId: turnFact.threadId,
+            turnState: terminalStatus,
+            session: {
+              ...structuredClone(persisted.session),
+              status: terminalStatus,
+              completedAt: new Date().toISOString(),
+            },
+          });
+        }
+      }
       throw error;
     } finally {
       // completed、failed 都是需要恢复的终态；Checkpoint 也在这里一起保存。
@@ -562,7 +609,7 @@ export function buildParentAgentInstructions(
 ): string {
   if (!executionConfirmed) {
     const plan = requirement === undefined ? "当前尚未生成计划。" : `当前计划为 ${requirement.id} v${requirement.revision}：${requirement.planArtifact.path}。`;
-    return `${base}\n你必须遵循内置 clarify-before-execute 工作流：在父 Chat 中持续聊清一个完整需求，不得把每条用户消息当成新任务。确认前不得执行命令、修改业务文件、发布内容或创建子 Agent。需求完整时调用 prepare_requirement_plan 生成测试用例和 Markdown 计划，然后等待用户点击“确认执行”。${plan}`;
+    return `${base}\n你必须遵循内置 clarify-before-execute 工作流：在父 Chat 中持续聊清一个完整需求，不得把每条用户消息当成新任务。确认前不得执行命令、修改业务文件、发布内容或创建子 Agent。需求完整时调用 prepare_requirement_plan 生成测试用例和 Markdown 计划，并显式选择 executionKind：只读分析使用 analysis_only，修改现有软件使用 software_change，完整产品团队交付使用 software_product_delivery；然后等待用户点击“确认执行”。${plan}`;
   }
   if (mode === "off") {
     return `${base}\n当前 Chat 已关闭子 Agent。你必须独立完成本轮任务，不得创建或委派子 Agent。`;
@@ -578,6 +625,52 @@ export function applyRequirementGateToTools(tools: string[], confirmed: boolean)
   const blocked = ["run_agent", "run_command", "write_file", "read_shared_board", "publish_shared_result"];
   if (tools.includes("*")) return ["*", ...blocked.map((tool) => `!${tool}`)];
   return tools.filter((tool) => !blocked.includes(tool));
+}
+
+export function routeTeamConfigForExecutionKind(
+  config: AgentTeamConfig,
+  executionKind: RequirementExecutionKind,
+): AgentTeamConfig {
+  const normalized = normalizeAgentTeamConfig(config);
+  if (executionKind === "software_product_delivery") return normalized;
+  const workerProfiles = executionKind === "analysis_only"
+    ? ["investigator", "researcher"]
+    : ["coder", "tester", "investigator"];
+  const allowedProfiles = normalized.allowedProfiles.filter((profile) => workerProfiles.includes(profile));
+  if (normalized.independentReview && !allowedProfiles.includes("reviewer")) allowedProfiles.push("reviewer");
+  return {
+    ...normalized,
+    allowedProfiles,
+    ...(executionKind === "analysis_only" ? {
+      accessMode: "read_only" as const,
+      allowedTools: applyCapabilityExclusions(normalized.allowedTools ?? ["*"], ["write_file", "run_command"]),
+    } : {}),
+  };
+}
+
+export function shouldCreateFixedSoftwareTeam(executionKind: RequirementExecutionKind | undefined): boolean {
+  return executionKind === "software_product_delivery";
+}
+
+export function requirementExecutionStateForJobStatus(
+  status: AgentJobStatus | undefined,
+): RequirementExecutionState | undefined {
+  if (status === "completed") return "completed";
+  if (status === "failed" || status === "partial") return "failed_retryable";
+  if (status === "cancelled") return "cancelled";
+  return undefined;
+}
+
+export function isExplicitRequirementRetry(value: string): boolean {
+  const normalized = value.replace(/\s+/g, "").replace(/[。！!]$/, "");
+  return ["重试", "重新执行", "再次执行"].includes(normalized);
+}
+
+function applyCapabilityExclusions(tools: string[], excluded: string[]): string[] {
+  if (tools.includes("*")) {
+    return [...tools.filter((tool) => !excluded.includes(tool.replace(/^!/, ""))), ...excluded.map((tool) => `!${tool}`)];
+  }
+  return tools.filter((tool) => !excluded.includes(tool));
 }
 
 export function selectInitialChildProfile(

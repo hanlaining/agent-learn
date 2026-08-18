@@ -58,7 +58,14 @@ import { AgentRegistry } from "../agents/agent-registry.js";
 import { AgentRunStore } from "../agents/agent-run-store.js";
 import { MultiAgentScheduler } from "../agents/multi-agent-scheduler.js";
 import { AgentRuntimeCoordinator } from "../agents/agent-runtime-coordinator.js";
-import { FixedSoftwareTeamCoordinator } from "../agents/fixed-software-team-coordinator.js";
+import { ensureFixedSoftwareTeam } from "../agents/fixed-software-team.js";
+import { WorkflowTeamCoordinator } from "../execution/workflow-team-coordinator.js";
+import { WorkflowTemplateRegistry } from "../execution/workflows/workflow-template.js";
+import { SOFTWARE_PRODUCT_DELIVERY_TEMPLATE } from "../execution/workflows/software-product-delivery.js";
+import { DynamicAgentExecutionEngine } from "../execution/dynamic-agent-execution-engine.js";
+import { TeamWorkflowExecutionEngine } from "../execution/team-workflow-execution-engine.js";
+import { ExecutionEngineRouter } from "../execution/execution-engine-router.js";
+import { RuntimeMetricsLedger } from "../observability/runtime-metrics.js";
 import { createRunAgentTool } from "../tools/run-agent-tool.js";
 import { createSharedBoardTools } from "../tools/shared-board-tools.js";
 import { createPrepareRequirementPlanTool } from "../tools/prepare-requirement-plan-tool.js";
@@ -294,21 +301,32 @@ const agentLoop =
         },
       });
 
-const fixedSoftwareTeamCoordinator = agentLoop === undefined ? undefined : new FixedSoftwareTeamCoordinator({
+const workflowTemplates = new WorkflowTemplateRegistry();
+workflowTemplates.register(SOFTWARE_PRODUCT_DELIVERY_TEMPLATE);
+const runtimeMetrics = new RuntimeMetricsLedger((metric) => agentRuntimeStore.recordStageMetric(metric));
+const workflowTeamCoordinator = agentLoop === undefined ? undefined : new WorkflowTeamCoordinator({
   runStore: agentRunStore,
   runtimeStore: agentRuntimeStore,
-  execute: async ({ threadId, profileId, prompt }) => {
+  template: SOFTWARE_PRODUCT_DELIVERY_TEMPLATE,
+  metrics: runtimeMetrics,
+  execute: async ({ threadId, profileId, prompt, allowedTools, formatRepair }) => {
     const profile = agentRegistry.require(profileId);
     const turn = lifecycleStore.createTurn(threadId);
     lifecycleStore.appendItem(turn.id, "user_message", { text: prompt });
     const result = await agentLoop.run(turn.id, {
       model: profile.defaultModel,
       reasoningEffort: profile.reasoningEffort,
-      instructions: `${profile.instructions}\n\n这是固定团队 ST-B2 的受控叶子流程。不得创建子 Agent、不得调用工具，只返回当前职责所需的简洁可验收内容。`,
-      allowedTools: [], allowedSkills: [],
+      instructions: `${profile.instructions}\n\n你是版本化 Workflow Template 中的叶子阶段 Agent。不得创建子 Agent，不得越过当前阶段职责；${formatRepair ? "本轮只修复结构化格式，不得调用工具。" : "只使用 Runtime 明确授予的工具。"}`,
+      allowedTools,
+      allowedSkills: [],
     });
     const content = result.assistantMessage.content;
-    return { turnId: turn.id, summary: typeof content === "object" && content !== null && "text" in content && typeof content.text === "string" ? content.text : "固定团队阶段已完成" };
+    return { turnId: turn.id, summary: typeof content === "object" && content !== null && "text" in content && typeof content.text === "string" ? content.text : "",
+      toolCalls: result.turn.itemIds.filter((itemId) => lifecycleStore.getItem(itemId)?.type === "tool_call").length };
+  },
+  modelInfo: (profileId) => {
+    const profile = agentRegistry.require(profileId);
+    return { model: profile.defaultModel, ...(profile.reasoningEffort === undefined ? {} : { reasoningEffort: profile.reasoningEffort }) };
   },
   onRunUpdated: (runId) => {
     const run = agentRunStore.get(runId); const root = run === undefined ? undefined : agentRunStore.getRoot(runId);
@@ -318,9 +336,44 @@ const fixedSoftwareTeamCoordinator = agentLoop === undefined ? undefined : new F
     const requirementId = agentRuntimeStore.getJob(jobId)?.requirementId;
     if (requirementId !== undefined) requirementStore.setStatus(requirementId, "completed");
   },
+  requirement: (jobId) => {
+    const job = agentRuntimeStore.getJob(jobId);
+    const requirement = job?.requirementId === undefined ? undefined : requirementStore.get(job.requirementId);
+    if (requirement === undefined || requirement.revision !== job?.requirementRevision) throw new Error("Frozen Requirement is unavailable");
+    const prompt = JSON.stringify({
+      requirementId: requirement.id,
+      revision: requirement.revision,
+      executionKind: requirement.executionKind,
+      contentHash: requirement.planArtifact.contentHash,
+      title: requirement.title,
+      objective: requirement.objective,
+      scope: requirement.scope,
+      nonGoals: requirement.nonGoals,
+      constraints: requirement.constraints,
+      deliverables: requirement.deliverables,
+      acceptanceCriteria: requirement.acceptanceCriteria,
+      testCases: requirement.testCases,
+      executionSteps: requirement.executionSteps,
+    });
+    return { objective: requirement.objective, scope: requirement.scope, nonGoals: requirement.nonGoals,
+      deliverables: requirement.deliverables, acceptanceCriteria: requirement.acceptanceCriteria, prompt };
+  },
   persist: () => persistRuntimeState(),
 });
-fixedSoftwareTeamCoordinator?.recoverPersistedCheckpoints();
+workflowTeamCoordinator?.recoverPersistedCheckpoints();
+const executionEngineRouter = workflowTeamCoordinator === undefined ? undefined : new ExecutionEngineRouter([
+  new DynamicAgentExecutionEngine(agentRuntimeStore),
+  new TeamWorkflowExecutionEngine(agentRuntimeStore, workflowTeamCoordinator, (context) => {
+    const job = agentRuntimeStore.getJob(context.jobId);
+    if (job === undefined) throw new Error("Execution Job is unavailable");
+    workflowTemplates.requireForExecution(job.executionKind, "software_product_delivery", "v2", job.configSnapshot.allowedTools ?? ["*"]);
+    const rootRun = agentRunStore.get(context.rootRunId);
+    if (rootRun === undefined) throw new Error("Root Agent Run is unavailable");
+    ensureFixedSoftwareTeam(lifecycleStore, agentRunStore, rootRun);
+  }, (allowedTools) => {
+    workflowTemplates.requireForExecution("software_product_delivery", "software_product_delivery", "v2", allowedTools);
+  }),
+]);
 
 if (agentLoop !== undefined) {
   multiAgentScheduler = new MultiAgentScheduler({
@@ -416,9 +469,9 @@ registerAppServerHandlers(connection, {
   threadConfigs,
   runtimeSessions,
   requirementStore,
-  ...(fixedSoftwareTeamCoordinator === undefined ? {} : { fixedSoftwareTeamCoordinator }),
   workspaceSandbox,
   skillNames: skillLoader.list().map((skill) => skill.name),
+  ...(executionEngineRouter === undefined ? {} : { executionEngineRouter }),
   ...(multiAgentScheduler === undefined ? {} : {
     cancelChildAgentRuns: (turnId: string) =>
       multiAgentScheduler.cancelChildren(
@@ -454,6 +507,16 @@ if (loadedRuntimeState.recoveredTurnIds.length > 0) {
 }
 
 agentRuntimeStore.reconcilePersistedJobs();
+for (const job of agentRuntimeStore.listJobs().filter((item) =>
+  ["completed", "partial", "failed", "cancelled"].includes(item.status))) {
+  agentRunStore.closeActiveForJob(job.id, job.status === "failed" || job.status === "partial" ? "failed" : "cancelled",
+    "Runtime 恢复时关闭终态 Job 遗留的 Agent", job.failureCode);
+  agentRuntimeStore.closeActiveTasks(job.id, job.status === "failed" || job.status === "partial" ? "failed" : "cancelled");
+  if (job.requirementId !== undefined && requirementStore.get(job.requirementId) !== undefined) {
+    requirementStore.setExecutionState(job.requirementId,
+      job.status === "completed" ? "completed" : job.status === "cancelled" ? "cancelled" : "failed_retryable");
+  }
+}
 await persistRuntimeState();
 const interruptedRuntime = agentRuntimeStore.recoverInterruptedWork();
 if (interruptedRuntime.lostTasks.length > 0 || interruptedRuntime.pendingReturns.length > 0) {

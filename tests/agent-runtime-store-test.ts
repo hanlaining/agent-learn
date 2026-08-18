@@ -3,22 +3,23 @@ import test from "node:test";
 import { AgentRuntimeStore } from "../src/agents/agent-runtime-store.js";
 import { DEFAULT_AGENT_TEAM_CONFIG } from "../src/agents/agent-runtime.js";
 import { AgentRuntimeCoordinator } from "../src/agents/agent-runtime-coordinator.js";
+import { AgentRunStore } from "../src/agents/agent-run-store.js";
 
-test("confirmed fixed-team Job without executable Tasks remains in planning", () => {
+test("terminal Job without executable Tasks remains terminal", () => {
   const store = new AgentRuntimeStore();
   const job = store.createJob({ threadId: "chat-team", rootTurnId: "turn-team", rootRunId: "run-team", configSnapshot: DEFAULT_AGENT_TEAM_CONFIG });
   store.setJobStatus(job.id, "failed");
-  assert.equal(store.reconcileJobStatus(job.id), "planning");
-  assert.equal(store.getJob(job.id)?.status, "planning");
+  store.reconcilePersistedJobs();
+  assert.equal(store.getJob(job.id)?.status, "failed");
 });
 
-test("persisted fixed-team Job without Tasks is reconciled after Runtime restart", () => {
+test("persisted terminal Job without Tasks does not reopen after Runtime restart", () => {
   const store = new AgentRuntimeStore();
   const job = store.createJob({ threadId: "chat-team", rootTurnId: "turn-team", rootRunId: "run-team", configSnapshot: DEFAULT_AGENT_TEAM_CONFIG });
   store.setJobStatus(job.id, "failed");
   const restored = AgentRuntimeStore.fromSnapshot(store.exportSnapshot());
   restored.reconcilePersistedJobs();
-  assert.equal(restored.getJob(job.id)?.status, "planning");
+  assert.equal(restored.getJob(job.id)?.status, "failed");
 });
 
 function fixture() {
@@ -72,6 +73,25 @@ test("Shared Board 拒绝敏感内容，只共享结构化事实", () => {
   const entry = store.publishBoard({ jobId: job.id, producerRunId: "run-a", kind: "fact", title: "版本", summary: "Runtime v3", confidence: "confirmed", visibility: "job" });
   assert.equal(store.listBoard(job.id)[0]?.id, entry.id);
   assert.throws(() => store.publishBoard({ jobId: job.id, producerRunId: "run-a", kind: "fact", title: "token", summary: "secret token=abc", confidence: "confirmed", visibility: "job" }), /Sensitive/);
+});
+
+test("Shared Board 保留返工历史但当前视图只返回已通过的最新 attempt", () => {
+  const { store, job, task } = fixture();
+  const work = task("board-rework");
+  store.setTaskOwnerRun(work.id, "run-attempt-1", 1);
+  const first = store.publishBoard({ jobId: job.id, producerRunId: "run-attempt-1", taskId: work.id, attempt: 1,
+    kind: "summary", title: work.title, summary: "旧结果", confidence: "supported", visibility: "job" });
+  assert.deepEqual(store.listCurrentBoard(job.id), []);
+  store.setTaskOwnerRun(work.id, "run-attempt-2", 2);
+  store.setTaskStatus(work.id, "completed");
+  store.addEvidence({ jobId: job.id, taskId: work.id, runId: "run-attempt-2:review", kind: "review",
+    summary: "通过", producer: "reviewer", verdict: "passed" });
+  const second = store.publishBoard({ jobId: job.id, producerRunId: "run-attempt-2", taskId: work.id, attempt: 2,
+    kind: "summary", title: work.title, summary: "新结果", confidence: "confirmed", visibility: "job",
+    supersedesBoardEntryId: first.id });
+  assert.equal(store.listBoard(job.id).length, 2);
+  assert.equal(store.listBoard(job.id)[0]?.supersededByBoardEntryId, second.id);
+  assert.deepEqual(store.listCurrentBoard(job.id).map((item) => item.id), [second.id]);
 });
 
 test("Return Outbox 首次失败退避、重复创建幂等、重启恢复且仅消费一次", () => {
@@ -151,4 +171,41 @@ test("加载旧快照后会重新校正曾被错误标成 completed 的失败 Jo
   const restored = AgentRuntimeStore.fromSnapshot(store.exportSnapshot());
   restored.reconcilePersistedJobs();
   assert.equal(restored.getJob(job.id)?.status, "failed");
+});
+
+test("同一 Job 新 attempt 忽略旧失败 Task，并保留旧 Evidence", () => {
+  const { store, job, task } = fixture();
+  const first = task("attempt-one");
+  store.setTaskStatus(first.id, "failed");
+  store.addEvidence({ jobId: job.id, taskId: first.id, runId: first.ownerRunId, kind: "summary",
+    summary: "首轮失败证据", producer: "worker", verdict: "failed" });
+  store.failJob(job.id, "failed", "agent_failed");
+  const retried = store.startJobAttempt(job.id, "turn-retry", "run-retry");
+  assert.equal(retried.id, job.id);
+  assert.equal(retried.attempt, 2);
+  assert.equal(retried.rootTurnId, "turn-retry");
+  const second = task("attempt-two");
+  assert.equal(second.jobAttempt, 2);
+  store.setTaskStatus(second.id, "completed");
+  store.addEvidence({ jobId: job.id, taskId: second.id, runId: "review-second", kind: "review",
+    summary: "重试通过", producer: "reviewer", verdict: "passed" });
+  assert.equal(store.reconcileJobStatus(job.id), "completed");
+  assert.equal(store.listEvidence(first.id)[0]?.summary, "首轮失败证据");
+});
+
+test("Job 终态一次性关闭全部活动 Agent Run，已完成证据不倒退", () => {
+  const runs = new AgentRunStore();
+  const root = runs.ensureRoot("thread-close", "turn-close", "orchestrator", "job-close");
+  const completed = runs.create({ jobId: root.jobId, threadId: "child-done", turnId: "turn-done",
+    agentProfileId: "investigator", parentRunId: root.id, task: "已完成", depth: 1 });
+  const queued = runs.create({ jobId: root.jobId, threadId: "child-queued", turnId: "turn-queued",
+    agentProfileId: "reviewer", parentRunId: root.id, task: "仍排队", depth: 1 });
+  runs.complete(completed.id, { runId: completed.id, status: "completed", summary: "有效证据" });
+  runs.setStatus(root.id, "running");
+  const closed = runs.closeActiveForJob(root.jobId, "failed", "Job 失败", "可重试");
+  assert.deepEqual(closed.map((run) => run.id).sort(), [queued.id, root.id].sort());
+  assert.equal(runs.get(completed.id)?.status, "completed");
+  assert.equal(runs.get(completed.id)?.result?.summary, "有效证据");
+  assert.equal(runs.listForJob(root.jobId).some((run) =>
+    ["queued", "running", "waiting_children", "resuming"].includes(run.status)), false);
 });

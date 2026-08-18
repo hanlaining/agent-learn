@@ -4,7 +4,8 @@ import { AgentRuntimeStore } from "./agent-runtime-store.js";
 
 export const FIXED_PRODUCT_STAGES = [
   "ready_first_return", "first_return_ready", "rework",
-  "second_return_ready", "lead_return_ready", "completed",
+  "second_return_ready", "engineering_ready", "engineering_return_ready",
+  "quality_ready", "quality_return_ready", "lead_return_ready", "completed",
 ] as const;
 export type FixedProductStage = typeof FIXED_PRODUCT_STAGES[number];
 

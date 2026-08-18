@@ -18,7 +18,11 @@ export class RequirementStore {
     if (value === undefined) return store;
     if (value.version !== 1) throw new Error("Invalid requirement snapshot");
     store.sequence = value.sequence;
-    value.requirements.forEach((item) => store.requirements.set(item.id, structuredClone(item)));
+    value.requirements.forEach((item) => store.requirements.set(item.id, {
+      ...structuredClone(item),
+      executionKind: item.executionKind ?? "software_change",
+      executionState: item.executionState ?? executionStateFromStatus(item.status),
+    }));
     return store;
   }
 
@@ -43,6 +47,7 @@ export class RequirementStore {
       parentThreadId,
       revision: (current?.revision ?? 0) + 1,
       status: "planned",
+      executionState: "not_started",
       planArtifact: structuredClone(planArtifact),
       createdAt: current?.createdAt ?? timestamp,
       updatedAt: timestamp,
@@ -58,6 +63,7 @@ export class RequirementStore {
     }
     if (isRequirementConfirmed(item)) return structuredClone(item);
     item.status = "confirmed";
+    item.executionState = "not_started";
     item.confirmedRevision = revision;
     item.confirmedContentHash = contentHash;
     item.confirmedAt = this.now();
@@ -73,6 +79,7 @@ export class RequirementStore {
     }
     item.jobId = jobId;
     item.status = "executing";
+    item.executionState = "executing";
     item.updatedAt = this.now();
     return structuredClone(item);
   }
@@ -80,6 +87,15 @@ export class RequirementStore {
   setStatus(id: string, status: RequirementStatus): Requirement {
     const item = this.require(id);
     item.status = status;
+    item.executionState = executionStateFromStatus(status);
+    item.updatedAt = this.now();
+    return structuredClone(item);
+  }
+
+  setExecutionState(id: string, state: import("./requirement.js").RequirementExecutionState): Requirement {
+    const item = this.require(id);
+    item.executionState = state;
+    item.status = state === "not_started" ? "confirmed" : state;
     item.updatedAt = this.now();
     return structuredClone(item);
   }
@@ -117,4 +133,12 @@ export class RequirementStore {
     if (item === undefined) throw new Error(`Requirement not found: ${id}`);
     return item;
   }
+}
+
+function executionStateFromStatus(status: RequirementStatus): import("./requirement.js").RequirementExecutionState {
+  if (status === "executing") return "executing";
+  if (status === "completed") return "completed";
+  if (status === "failed_retryable") return "failed_retryable";
+  if (status === "cancelled") return "cancelled";
+  return "not_started";
 }
