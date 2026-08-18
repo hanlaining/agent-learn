@@ -93,6 +93,59 @@ export interface DesktopSnapshot {
   trash?: DesktopTrashThread[];
   agentRuntime?: DesktopAgentRuntimeView;
   requirement?: import("../requirements/requirement.js").Requirement;
+  outcomeUnknownInvocations?: DesktopOutcomeUnknownResolution[];
+}
+
+export type DesktopOutcomeUnknownState =
+  | "outcome_unknown"
+  | "retry_authorized"
+  | "external_result_recorded"
+  | "manual_required"
+  | "abandoned";
+
+export interface DesktopOutcomeUnknownResolution {
+  resolutionId: string;
+  invocationKind: "model" | "tool";
+  invocationId: string;
+  requestDigest: string;
+  identity: {
+    threadId: string;
+    turnId: string;
+    displayName: string;
+    provider?: string;
+    model?: string;
+    toolName?: string;
+    callId?: string;
+  };
+  sideEffectRisk: "none" | "possible" | "known";
+  state: DesktopOutcomeUnknownState;
+  version: number;
+  unknownReasonCode?: string;
+  externalResult?: { summary: string; value: unknown };
+  retryTicket?: { id: string; automaticReplay: false };
+  createdAt: string;
+  updatedAt: string;
+  audit: Array<{
+    id: string;
+    action: "confirm_not_executed_retry" | "record_external_result" | "mark_manual_required" | "abandon";
+    actorId: string;
+    reason: string;
+    fromState: DesktopOutcomeUnknownState;
+    toState: DesktopOutcomeUnknownState;
+    version: number;
+    occurredAt: string;
+  }>;
+}
+
+export interface DesktopResolveOutcomeUnknownInput {
+  resolutionId: string;
+  expectedVersion: number;
+  idempotencyKey: string;
+  resolution:
+    | { action: "confirm_not_executed_retry"; reason: string; toolSideEffectConfirmed?: boolean }
+    | { action: "record_external_result"; reason: string; externalResult: { summary: string; value: unknown } }
+    | { action: "mark_manual_required"; reason: string }
+    | { action: "abandon"; reason: string };
 }
 
 export interface DesktopTrashThread { id: string; title: string; deletedAt: string; trashExpiresAt: string; deleteBatchId?: string; }
@@ -248,7 +301,23 @@ export function isDesktopSnapshot(
     && Array.isArray(value.agentRuns)
     && value.agentRuns.every(isDesktopAgentRun)
     && (value.trash === undefined || Array.isArray(value.trash))
+    && (value.outcomeUnknownInvocations === undefined || (
+      Array.isArray(value.outcomeUnknownInvocations) &&
+      value.outcomeUnknownInvocations.every(isDesktopOutcomeUnknownResolution)
+    ))
   );
+}
+
+export function isDesktopOutcomeUnknownResolution(value: unknown): value is DesktopOutcomeUnknownResolution {
+  const states = ["outcome_unknown", "retry_authorized", "external_result_recorded", "manual_required", "abandoned"];
+  return isRecord(value) && typeof value.resolutionId === "string" &&
+    (value.invocationKind === "model" || value.invocationKind === "tool") &&
+    typeof value.invocationId === "string" && /^sha256:[a-f0-9]{64}$/u.test(String(value.requestDigest)) &&
+    isRecord(value.identity) && typeof value.identity.threadId === "string" &&
+    typeof value.identity.turnId === "string" && typeof value.identity.displayName === "string" &&
+    (value.sideEffectRisk === "none" || value.sideEffectRisk === "possible" || value.sideEffectRisk === "known") &&
+    states.includes(String(value.state)) && Number.isInteger(value.version) &&
+    typeof value.createdAt === "string" && typeof value.updatedAt === "string" && Array.isArray(value.audit);
 }
 
 export function isDesktopEvent(value: unknown): value is DesktopEvent {
