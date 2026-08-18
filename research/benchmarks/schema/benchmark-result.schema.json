@@ -1,0 +1,97 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agent-learn.local/schemas/gate-benchmark-result-v1.json",
+  "title": "God-Agent deterministic GATE benchmark report",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "benchmark", "fixtureSeed", "generatorVersion", "deterministic", "shard", "variants", "pricing", "methodology", "summaries", "cases"],
+  "properties": {
+    "schemaVersion": { "const": "gate-benchmark-result-v1" },
+    "benchmark": { "enum": ["GATE-30", "GATE-100"] },
+    "fixtureSeed": { "type": "integer" },
+    "generatorVersion": { "const": "gate-generator-v1" },
+    "deterministic": { "const": true },
+    "shard": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["index", "total"],
+      "properties": { "index": { "type": "integer", "minimum": 1 }, "total": { "type": "integer", "minimum": 1 } }
+    },
+    "variants": { "type": "array", "items": { "$ref": "#/$defs/variant" }, "minItems": 1, "uniqueItems": true },
+    "pricing": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["currency", "inputPerMillionTokens", "outputPerMillionTokens", "note"],
+      "properties": {
+        "currency": { "const": "USD" },
+        "inputPerMillionTokens": { "type": "number", "minimum": 0 },
+        "outputPerMillionTokens": { "type": "number", "minimum": 0 },
+        "note": { "type": "string" }
+      }
+    },
+    "methodology": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["provider", "latency", "cost"],
+      "properties": {
+        "provider": { "const": "deterministic-mock" },
+        "latency": { "type": "string" },
+        "cost": { "type": "string" }
+      }
+    },
+    "summaries": { "type": "array", "items": { "$ref": "#/$defs/summary" }, "minItems": 1 },
+    "cases": { "type": "array", "items": { "$ref": "#/$defs/case" } }
+  },
+  "$defs": {
+    "variant": { "enum": ["baseline", "no-wal", "no-recovery", "no-lease"] },
+    "rate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["count", "total", "rate"],
+      "properties": {
+        "count": { "type": "integer", "minimum": 0 },
+        "total": { "type": "integer", "minimum": 0 },
+        "rate": { "type": "number", "minimum": 0, "maximum": 1 }
+      }
+    },
+    "summary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["variant", "cases", "taskSuccess", "recoverySuccess", "duplicateModelCalls", "duplicateToolEffects", "unknownOutcomeRate", "evidenceCompleteness", "latencyMs", "tokens", "costEstimateUsd"],
+      "properties": {
+        "variant": { "$ref": "#/$defs/variant" },
+        "cases": { "type": "integer", "minimum": 0 },
+        "taskSuccess": { "$ref": "#/$defs/rate" },
+        "recoverySuccess": { "$ref": "#/$defs/rate" },
+        "duplicateModelCalls": { "type": "integer", "minimum": 0 },
+        "duplicateToolEffects": { "type": "integer", "minimum": 0 },
+        "unknownOutcomeRate": { "$ref": "#/$defs/rate" },
+        "evidenceCompleteness": { "type": "number", "minimum": 0, "maximum": 1 },
+        "latencyMs": {
+          "type": "object", "additionalProperties": false, "required": ["kind", "p50", "p95"],
+          "properties": { "kind": { "const": "deterministic-simulated" }, "p50": { "type": "number", "minimum": 0 }, "p95": { "type": "number", "minimum": 0 } }
+        },
+        "tokens": {
+          "type": "object", "additionalProperties": false, "required": ["input", "output", "total"],
+          "properties": { "input": { "type": "integer", "minimum": 0 }, "output": { "type": "integer", "minimum": 0 }, "total": { "type": "integer", "minimum": 0 } }
+        },
+        "costEstimateUsd": { "type": "number", "minimum": 0 }
+      }
+    },
+    "case": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["caseId", "caseIndex", "scenarioSeed", "category", "variant", "taskSuccess", "recoveryAttempted", "recoverySuccess", "modelCalls", "duplicateModelCalls", "toolEffects", "duplicateToolEffects", "unknownOutcome", "evidenceRequired", "evidenceProduced", "evidenceCompleteness", "latencyMs", "inputTokens", "outputTokens", "costEstimateUsd", "failureCodes", "trace"],
+      "properties": {
+        "caseId": { "type": "string" }, "caseIndex": { "type": "integer", "minimum": 0 }, "scenarioSeed": { "type": "integer", "minimum": 0 },
+        "category": { "enum": ["crash-recovery", "parent-child", "duplicate-delivery", "side-effect-safety", "completion-quality"] },
+        "variant": { "$ref": "#/$defs/variant" }, "taskSuccess": { "type": "boolean" }, "recoveryAttempted": { "type": "boolean" },
+        "recoverySuccess": { "type": ["boolean", "null"] }, "modelCalls": { "type": "integer", "minimum": 0 }, "duplicateModelCalls": { "type": "integer", "minimum": 0 },
+        "toolEffects": { "type": "integer", "minimum": 0 }, "duplicateToolEffects": { "type": "integer", "minimum": 0 }, "unknownOutcome": { "type": "boolean" },
+        "evidenceRequired": { "type": "integer", "minimum": 0 }, "evidenceProduced": { "type": "integer", "minimum": 0 }, "evidenceCompleteness": { "type": "number", "minimum": 0, "maximum": 1 },
+        "latencyMs": { "type": "number", "minimum": 0 }, "inputTokens": { "type": "integer", "minimum": 0 }, "outputTokens": { "type": "integer", "minimum": 0 },
+        "costEstimateUsd": { "type": "number", "minimum": 0 }, "failureCodes": { "type": "array", "items": { "type": "string" } }, "trace": { "type": "array", "items": { "type": "string" } }
+      }
+    }
+  }
+}
