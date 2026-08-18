@@ -4,6 +4,7 @@ import type {
 import type {
   DesktopEvent,
   DesktopMessageInput,
+  DesktopOutcomeUnknownResolution,
   DesktopPermissionDecision,
   DesktopPermissionRequest,
   DesktopModelSettings,
@@ -11,6 +12,7 @@ import type {
   DesktopSnapshot,
   DesktopReasoningEffort,
   DesktopWorkspaceSearchResult,
+  DesktopResolveOutcomeUnknownInput,
 } from "../desktop-types.js";
 
 declare module "*.css";
@@ -42,6 +44,7 @@ declare global {
       };
       desktop: {
         getSnapshot(): Promise<DesktopSnapshot>;
+        resolveOutcomeUnknown(input: DesktopResolveOutcomeUnknownInput): Promise<DesktopOutcomeUnknownResolution>;
         createThread(): Promise<DesktopSnapshot>;
         selectThread(threadId: string): Promise<DesktopSnapshot>;
         selectAgentThread(threadId?: string): Promise<DesktopSnapshot>;

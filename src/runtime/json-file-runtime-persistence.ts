@@ -26,6 +26,18 @@ import type { AgentRuntimeSnapshot, AgentTeamConfig } from "../agents/agent-runt
 import { isRuntimeSession, type RuntimeSession } from "./runtime-session.js";
 import { RequirementStore } from "../requirements/requirement-store.js";
 import type { RequirementSnapshot } from "../requirements/requirement.js";
+import {
+  ModelInvocationStore,
+} from "./model-invocation-store.js";
+import type {
+  ModelInvocationSnapshot,
+} from "./model-invocation.js";
+import {
+  ToolInvocationStore,
+} from "./tool-invocation-store.js";
+import type {
+  ToolInvocationSnapshot,
+} from "./tool-invocation.js";
 
 export interface PersistedThreadConfig {
   threadId: string;
@@ -42,7 +54,7 @@ export interface PersistedRuntimeSession {
 }
 
 export interface RuntimeStateSnapshot {
-  version: 4;
+  version: 6;
   lifecycle: LifecycleSnapshot;
   contextCheckpoints: ContextCheckpointSnapshot;
   threadConfigs: PersistedThreadConfig[];
@@ -51,6 +63,8 @@ export interface RuntimeStateSnapshot {
   agentRuntime: AgentRuntimeSnapshot;
   runtimeSessions: PersistedRuntimeSession[];
   requirements: RequirementSnapshot;
+  modelInvocations?: ModelInvocationSnapshot;
+  toolInvocations?: ToolInvocationSnapshot;
 }
 
 export interface LoadedRuntimeState {
@@ -59,6 +73,8 @@ export interface LoadedRuntimeState {
   agentRunStore: AgentRunStore;
   agentRuntimeStore: AgentRuntimeStore;
   requirementStore: RequirementStore;
+  modelInvocationStore: ModelInvocationStore;
+  toolInvocationStore: ToolInvocationStore;
   threadConfigs: PersistedThreadConfig[];
   agentProfiles: AgentProfile[];
   runtimeSessions: PersistedRuntimeSession[];
@@ -92,6 +108,8 @@ export class JsonFileRuntimePersistence {
           agentRunStore: new AgentRunStore(),
           agentRuntimeStore: new AgentRuntimeStore(),
           requirementStore: new RequirementStore(),
+          modelInvocationStore: new ModelInvocationStore(),
+          toolInvocationStore: new ToolInvocationStore(),
           threadConfigs: [],
           agentProfiles: [],
           runtimeSessions: [],
@@ -108,7 +126,8 @@ export class JsonFileRuntimePersistence {
 
       if (
         !isRecord(value) ||
-        (value.version !== 1 && value.version !== 2 && value.version !== 3 && value.version !== 4)
+        (value.version !== 1 && value.version !== 2 && value.version !== 3 &&
+          value.version !== 4 && value.version !== 5 && value.version !== 6)
       ) {
         throw new Error("Unsupported state version");
       }
@@ -120,15 +139,29 @@ export class JsonFileRuntimePersistence {
         ContextCheckpointStore.fromSnapshot(
           value.contextCheckpoints,
         );
-      const version2 = value.version === 2 || value.version === 3 || value.version === 4;
+      const version2 = value.version === 2 || value.version === 3 ||
+        value.version === 4 || value.version === 5 || value.version === 6;
       const agentRunStore = AgentRunStore.fromSnapshot(
         version2 ? value.agentRuns as AgentRunSnapshot : undefined,
       );
       const agentRuntimeStore = AgentRuntimeStore.fromSnapshot(
-        value.version === 3 || value.version === 4 ? value.agentRuntime as AgentRuntimeSnapshot : undefined,
+        value.version === 3 || value.version === 4 || value.version === 5 ||
+          value.version === 6
+          ? value.agentRuntime as AgentRuntimeSnapshot : undefined,
       );
       const requirementStore = RequirementStore.fromSnapshot(
-        value.version === 4 ? value.requirements as RequirementSnapshot : undefined,
+        value.version === 4 || value.version === 5 || value.version === 6
+          ? value.requirements as RequirementSnapshot : undefined,
+      );
+      const modelInvocationStore = ModelInvocationStore.fromSnapshot(
+        value.version === 5 || value.version === 6
+          ? value.modelInvocations as ModelInvocationSnapshot | undefined
+          : undefined,
+      );
+      const toolInvocationStore = ToolInvocationStore.fromSnapshot(
+        value.version === 6
+          ? value.toolInvocations as ToolInvocationSnapshot | undefined
+          : undefined,
       );
       const threadConfigs = version2 && Array.isArray(value.threadConfigs)
         ? value.threadConfigs as PersistedThreadConfig[] : [];
@@ -152,6 +185,8 @@ export class JsonFileRuntimePersistence {
           runtimeSessions,
           agentRuntimeStore,
           requirementStore,
+          modelInvocationStore,
+          toolInvocationStore,
         );
       }
 
@@ -161,6 +196,8 @@ export class JsonFileRuntimePersistence {
         agentRunStore,
         agentRuntimeStore,
         requirementStore,
+        modelInvocationStore,
+        toolInvocationStore,
         threadConfigs,
         agentProfiles,
         runtimeSessions,
@@ -188,9 +225,11 @@ export class JsonFileRuntimePersistence {
     runtimeSessions: PersistedRuntimeSession[] = [],
     agentRuntimeStore: AgentRuntimeStore = new AgentRuntimeStore(),
     requirementStore: RequirementStore = new RequirementStore(),
+    modelInvocationStore: ModelInvocationStore = new ModelInvocationStore(),
+    toolInvocationStore: ToolInvocationStore = new ToolInvocationStore(),
   ): Promise<void> {
     const snapshot: RuntimeStateSnapshot = {
-      version: 4,
+      version: 6,
       lifecycle: lifecycleStore.exportSnapshot(),
       contextCheckpoints:
         contextCheckpointStore.exportSnapshot(),
@@ -200,6 +239,8 @@ export class JsonFileRuntimePersistence {
       agentRuntime: agentRuntimeStore.exportSnapshot(),
       runtimeSessions: structuredClone(runtimeSessions),
       requirements: requirementStore.exportSnapshot(),
+      modelInvocations: modelInvocationStore.exportSnapshot(),
+      toolInvocations: toolInvocationStore.exportSnapshot(),
     };
     const operation = this.saveQueue.then(() =>
       this.writeSnapshot(snapshot),

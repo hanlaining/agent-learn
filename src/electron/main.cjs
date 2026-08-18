@@ -13,6 +13,7 @@ const GET_RUNTIME_STATUS_CHANNEL = "runtime:get-status";
 const RUNTIME_STATUS_CHANGED_CHANNEL =
   "runtime:status-changed";
 const DESKTOP_GET_SNAPSHOT_CHANNEL = "desktop:get-snapshot";
+const DESKTOP_RESOLVE_OUTCOME_UNKNOWN_CHANNEL = "desktop:resolve-outcome-unknown";
 const DESKTOP_CREATE_THREAD_CHANNEL = "desktop:create-thread";
 const DESKTOP_SELECT_THREAD_CHANNEL = "desktop:select-thread";
 const DESKTOP_SELECT_AGENT_THREAD_CHANNEL = "desktop:select-agent-thread";
@@ -226,6 +227,18 @@ ipcMain.handle(DESKTOP_GET_SNAPSHOT_CHANNEL, () =>
   ),
 );
 
+ipcMain.handle(DESKTOP_RESOLVE_OUTCOME_UNKNOWN_CHANNEL, (_event, input) =>
+  desktopCall(
+    () => {
+      if (!isSafeOutcomeUnknownResolutionInput(input)) {
+        throw new Error("Invalid outcome-unknown resolution");
+      }
+      return desktopController?.resolveOutcomeUnknown(input);
+    },
+    "处置已失效或无权限，请刷新后重试",
+  ),
+);
+
 ipcMain.handle(DESKTOP_CREATE_THREAD_CHANNEL, () =>
   desktopCall(
     () => desktopController?.createThread(),
@@ -384,6 +397,31 @@ function isSafeMessageInput(value) {
     Array.isArray(value.explicitSkills) && value.explicitSkills.length <= 20 &&
     value.explicitSkills.every((name) => typeof name === "string" && /^[a-z0-9]+(?:-[a-z0-9]+)*$/u.test(name))
   ));
+}
+
+function isSafeOutcomeUnknownResolutionInput(value) {
+  if (value === null || typeof value !== "object" || Array.isArray(value) ||
+    Object.keys(value).some((key) => !["resolutionId", "expectedVersion", "idempotencyKey", "resolution"].includes(key)) ||
+    typeof value.resolutionId !== "string" || !Number.isInteger(value.expectedVersion) ||
+    typeof value.idempotencyKey !== "string" || value.resolution === null ||
+    typeof value.resolution !== "object" || Array.isArray(value.resolution) ||
+    typeof value.resolution.action !== "string" || typeof value.resolution.reason !== "string") return false;
+  const allowed = value.resolution.action === "confirm_not_executed_retry"
+    ? ["action", "reason", "toolSideEffectConfirmed"]
+    : value.resolution.action === "record_external_result"
+      ? ["action", "reason", "externalResult"]
+      : ["action", "reason"];
+  if (Object.keys(value.resolution).some((key) => !allowed.includes(key))) return false;
+  if (value.resolution.action === "confirm_not_executed_retry") {
+    return value.resolution.toolSideEffectConfirmed === undefined || typeof value.resolution.toolSideEffectConfirmed === "boolean";
+  }
+  if (value.resolution.action === "record_external_result") {
+    const result = value.resolution.externalResult;
+    return result !== null && typeof result === "object" && !Array.isArray(result) &&
+      Object.keys(result).every((key) => key === "summary" || key === "value") &&
+      typeof result.summary === "string" && Object.hasOwn(result, "value");
+  }
+  return value.resolution.action === "mark_manual_required" || value.resolution.action === "abandon";
 }
 
 ipcMain.handle(DESKTOP_CANCEL_TURN_CHANNEL, () =>

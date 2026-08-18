@@ -7,6 +7,7 @@ const GET_RUNTIME_STATUS_CHANNEL = "runtime:get-status";
 const RUNTIME_STATUS_CHANGED_CHANNEL =
   "runtime:status-changed";
 const DESKTOP_GET_SNAPSHOT_CHANNEL = "desktop:get-snapshot";
+const DESKTOP_RESOLVE_OUTCOME_UNKNOWN_CHANNEL = "desktop:resolve-outcome-unknown";
 const DESKTOP_CREATE_THREAD_CHANNEL = "desktop:create-thread";
 const DESKTOP_SELECT_THREAD_CHANNEL = "desktop:select-thread";
 const DESKTOP_SELECT_AGENT_THREAD_CHANNEL = "desktop:select-agent-thread";
@@ -194,7 +195,63 @@ function sanitizeSnapshot(value) {
     trash: Array.isArray(value.trash) ? value.trash.slice(0, 500).flatMap((thread) => isRecord(thread) && typeof thread.id === "string" && typeof thread.deletedAt === "string" && typeof thread.trashExpiresAt === "string" ? [{ id: safeText(thread.id, 200), title: safeText(thread.title, 160) || "未命名 Chat", deletedAt: safeText(thread.deletedAt, 80), trashExpiresAt: safeText(thread.trashExpiresAt, 80), ...(typeof thread.deleteBatchId === "string" ? { deleteBatchId: safeText(thread.deleteBatchId, 200) } : {}) }] : []) : [],
     ...(isRecord(value.agentRuntime) ? { agentRuntime: sanitizeAgentRuntime(value.agentRuntime) } : {}),
     ...(isRecord(value.requirement) ? { requirement: JSON.parse(JSON.stringify(value.requirement)) } : {}),
+    outcomeUnknownInvocations: Array.isArray(value.outcomeUnknownInvocations)
+      ? value.outcomeUnknownInvocations.slice(0, 200).flatMap((record) => {
+          const safe = sanitizeOutcomeUnknownResolution(record);
+          return safe === undefined ? [] : [safe];
+        })
+      : [],
   });
+}
+
+function sanitizeOutcomeUnknownResolution(value) {
+  const states = ["outcome_unknown", "retry_authorized", "external_result_recorded", "manual_required", "abandoned"];
+  if (!isRecord(value) || typeof value.resolutionId !== "string" ||
+    !["model", "tool"].includes(value.invocationKind) || typeof value.invocationId !== "string" ||
+    typeof value.requestDigest !== "string" || !/^sha256:[a-f0-9]{64}$/.test(value.requestDigest) ||
+    !isRecord(value.identity) || typeof value.identity.threadId !== "string" ||
+    typeof value.identity.turnId !== "string" || typeof value.identity.displayName !== "string" ||
+    !["none", "possible", "known"].includes(value.sideEffectRisk) || !states.includes(value.state) ||
+    !Number.isInteger(value.version) || typeof value.createdAt !== "string" || typeof value.updatedAt !== "string") return undefined;
+  const identity = {
+    threadId: safeText(value.identity.threadId, 200),
+    turnId: safeText(value.identity.turnId, 200),
+    displayName: safeText(value.identity.displayName, 500),
+    ...(typeof value.identity.provider === "string" ? { provider: safeText(value.identity.provider, 120) } : {}),
+    ...(typeof value.identity.model === "string" ? { model: safeText(value.identity.model, 120) } : {}),
+    ...(typeof value.identity.toolName === "string" ? { toolName: safeText(value.identity.toolName, 120) } : {}),
+    ...(typeof value.identity.callId === "string" ? { callId: safeText(value.identity.callId, 200) } : {}),
+  };
+  const audit = Array.isArray(value.audit) ? value.audit.slice(-100).flatMap((item) =>
+    isRecord(item) && typeof item.id === "string" &&
+      ["confirm_not_executed_retry", "record_external_result", "mark_manual_required", "abandon"].includes(item.action) &&
+      typeof item.actorId === "string" && typeof item.reason === "string" && states.includes(item.fromState) &&
+      states.includes(item.toState) && Number.isInteger(item.version) && typeof item.occurredAt === "string"
+      ? [{
+          id: safeText(item.id, 200), action: item.action, actorId: safeText(item.actorId, 200),
+          reason: safeText(item.reason, 2_000), fromState: item.fromState, toState: item.toState,
+          version: item.version, occurredAt: safeText(item.occurredAt, 80),
+        }]
+      : []) : [];
+  return {
+    resolutionId: safeText(value.resolutionId, 200), invocationKind: value.invocationKind,
+    invocationId: safeText(value.invocationId, 200), requestDigest: value.requestDigest,
+    identity, sideEffectRisk: value.sideEffectRisk, state: value.state, version: value.version,
+    ...(typeof value.unknownReasonCode === "string" ? { unknownReasonCode: safeText(value.unknownReasonCode, 200) } : {}),
+    ...(isRecord(value.externalResult) && typeof value.externalResult.summary === "string"
+      ? { externalResult: { summary: safeText(value.externalResult.summary, 2_000), value: sanitizeJsonValue(value.externalResult.value) } }
+      : {}),
+    ...(isRecord(value.retryTicket) && typeof value.retryTicket.id === "string" && value.retryTicket.automaticReplay === false
+      ? { retryTicket: { id: safeText(value.retryTicket.id, 200), automaticReplay: false } }
+      : {}),
+    createdAt: safeText(value.createdAt, 80), updatedAt: safeText(value.updatedAt, 80), audit,
+  };
+}
+
+function sanitizeJsonValue(value) {
+  const text = JSON.stringify(value);
+  if (text === undefined || text.length > 256_000) throw new TypeError("JSON value is too large");
+  return JSON.parse(text);
 }
 
 function sanitizeAgentRuntime(value) {
@@ -694,6 +751,37 @@ contextBridge.exposeInMainWorld("godAgent", {
     getSnapshot: async () => sanitizeSnapshot(
       await invoke(DESKTOP_GET_SNAPSHOT_CHANNEL),
     ),
+    resolveOutcomeUnknown: async (input) => {
+      if (!isRecord(input) || typeof input.resolutionId !== "string" ||
+        !Number.isInteger(input.expectedVersion) || typeof input.idempotencyKey !== "string" ||
+        !isRecord(input.resolution) || typeof input.resolution.action !== "string" ||
+        typeof input.resolution.reason !== "string") throw new TypeError("Invalid outcome-unknown resolution");
+      const resolution = input.resolution.action === "record_external_result"
+        ? {
+            action: "record_external_result",
+            reason: safeText(input.resolution.reason, 2_000),
+            externalResult: {
+              summary: safeText(input.resolution.externalResult?.summary, 2_000),
+              value: sanitizeJsonValue(input.resolution.externalResult?.value),
+            },
+          }
+        : input.resolution.action === "confirm_not_executed_retry"
+          ? {
+              action: "confirm_not_executed_retry",
+              reason: safeText(input.resolution.reason, 2_000),
+              ...(input.resolution.toolSideEffectConfirmed === true ? { toolSideEffectConfirmed: true } : {}),
+            }
+          : ["mark_manual_required", "abandon"].includes(input.resolution.action)
+            ? { action: input.resolution.action, reason: safeText(input.resolution.reason, 2_000) }
+            : undefined;
+      if (resolution === undefined) throw new TypeError("Invalid outcome-unknown resolution action");
+      const safe = sanitizeOutcomeUnknownResolution(await invoke(DESKTOP_RESOLVE_OUTCOME_UNKNOWN_CHANNEL, {
+        resolutionId: safeText(input.resolutionId, 200), expectedVersion: input.expectedVersion,
+        idempotencyKey: safeText(input.idempotencyKey, 200), resolution,
+      }));
+      if (safe === undefined) throw new Error("处置结果无效");
+      return safe;
+    },
     createThread: async () => sanitizeSnapshot(
       await invoke(DESKTOP_CREATE_THREAD_CHANNEL),
     ),
