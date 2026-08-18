@@ -3,6 +3,7 @@ import type {
   LlmFunctionOutput,
   LlmMessage,
   LlmProvider,
+  LlmResponse,
   LlmStreamEvent,
 } from "../llm/types.js";
 import type {
@@ -33,6 +34,25 @@ import type {
 import type {
   TurnRunResult,
 } from "../runtime/turn-run.js";
+import {
+  createModelRequestDigest,
+  type ModelInvocation,
+  type ModelInvocationNormalizedResult,
+} from "../runtime/model-invocation.js";
+import type {
+  ModelInvocationStore,
+} from "../runtime/model-invocation-store.js";
+import {
+  createToolArgumentsDigest,
+  createToolInvocationId,
+} from "../runtime/tool-invocation.js";
+import type {
+  ToolInvocation,
+  ToolInvocationNormalizedResult,
+} from "../runtime/tool-invocation.js";
+import type {
+  ToolInvocationStore,
+} from "../runtime/tool-invocation-store.js";
 import {
   financeMonthlySummaryAgentTool,
 } from "../tools/finance-monthly-summary-tool.js";
@@ -73,6 +93,12 @@ const AGENT_INSTRUCTIONS = `
 `.trim();
 
 const SAFE_TOOL_COMMENTARY_FALLBACK = "正在检查相关实现……";
+const TOOL_ROUND_FINALIZATION_INSTRUCTIONS = `工具预算已经用尽。不得再调用任何工具；必须只依据当前对话中已有的 Return、Evidence 和工具结果，直接给用户输出完整最终答复。不要声称执行了尚未执行的工具。`;
+
+interface ModelRequestResult {
+  response: LlmResponse;
+  invocationId?: string;
+}
 
 export interface AgentLoopOptions {
   lifecycleStore: LifecycleStore;
@@ -91,8 +117,32 @@ export interface AgentLoopOptions {
   continueAfterAgentReturns?: <T>(turnId: TurnId, childRunIds: string[], continuation: () => Promise<T>) => Promise<T>;
   resolveExecutionContext?: (turnId: TurnId) => {
     threadId?: string; jobId?: string; agentId?: string; agentName?: string;
-    taskId?: string; taskTitle?: string;
+    taskId?: string; taskTitle?: string; jobAttempt?: number;
+    workflowVersion?: string; stageId?: string; stageAttempt?: number;
   } | undefined;
+  modelInvocationWal?: {
+    store: ModelInvocationStore;
+    persist: () => Promise<void>;
+    provider: string;
+    defaultModel: string;
+  };
+  toolInvocationWal?: {
+    store: ToolInvocationStore;
+    persist: () => Promise<void>;
+  };
+}
+
+export interface AgentInvocationContext {
+  threadId?: string;
+  jobId?: string;
+  agentId?: string;
+  agentName?: string;
+  taskId?: string;
+  taskTitle?: string;
+  jobAttempt?: number;
+  workflowVersion?: string;
+  stageId?: string;
+  stageAttempt?: number;
 }
 
 export interface AgentRunOptions {
@@ -101,6 +151,27 @@ export interface AgentRunOptions {
   instructions?: string;
   allowedTools?: string[];
   allowedSkills?: string[];
+  modelInvocationPurpose?: string;
+  invocationContext?: AgentInvocationContext;
+  finalResponseGuard?: {
+    reject: (text: string) => string | undefined;
+    repairInstructions: string;
+    maxRepairAttempts?: number;
+  };
+}
+
+export class ModelInvocationOutcomeUnknownError extends Error {
+  constructor(readonly invocationId: string, options?: ErrorOptions) {
+    super(`Model invocation outcome_unknown: ${invocationId}`, options);
+    this.name = "ModelInvocationOutcomeUnknownError";
+  }
+}
+
+export class ToolInvocationOutcomeUnknownError extends Error {
+  constructor(readonly toolInvocationId: string, options?: ErrorOptions) {
+    super(`Tool invocation outcome_unknown: ${toolInvocationId}`, options);
+    this.name = "ToolInvocationOutcomeUnknownError";
+  }
 }
 
 export class TurnCancelledError extends Error {
@@ -140,9 +211,15 @@ export class AgentLoop {
   private readonly instructions: string;
   private readonly continueAfterAgentReturns?: AgentLoopOptions["continueAfterAgentReturns"];
   private readonly resolveExecutionContext?: AgentLoopOptions["resolveExecutionContext"];
+  private readonly modelInvocationWal?: AgentLoopOptions["modelInvocationWal"];
+  private readonly toolInvocationWal?: AgentLoopOptions["toolInvocationWal"];
   private readonly activeTurns = new Map<
     TurnId,
     AbortController
+  >();
+  private readonly toolInvocationInFlight = new Map<
+    string,
+    Promise<LlmFunctionOutput>
   >();
 
   constructor(options: AgentLoopOptions) {
@@ -196,6 +273,11 @@ export class AgentLoop {
       : `${AGENT_INSTRUCTIONS}\n\n${options.additionalInstructions.trim()}`;
     this.continueAfterAgentReturns = options.continueAfterAgentReturns;
     this.resolveExecutionContext = options.resolveExecutionContext;
+    this.modelInvocationWal = options.modelInvocationWal;
+    this.toolInvocationWal = options.toolInvocationWal;
+    if (this.toolInvocationWal !== undefined && this.modelInvocationWal === undefined) {
+      throw new Error("Tool invocation WAL requires model invocation WAL");
+    }
 
     if (
       !Number.isInteger(this.turnTimeoutMs) ||
@@ -211,8 +293,13 @@ export class AgentLoop {
     turnId: TurnId,
     options: AgentRunOptions = {},
   ): Promise<TurnRunResult> {
+    const committedTurn = this.replayCommittedTurn(turnId);
+    if (committedTurn !== undefined) return committedTurn;
     if (this.activeTurns.has(turnId)) {
       throw new Error(`Turn is already running: ${turnId}`);
+    }
+    if (this.lifecycleStore.getTurn(turnId)?.status === "interrupted") {
+      this.lifecycleStore.resumeInterruptedTurn(turnId);
     }
 
     const controller = new AbortController();
@@ -246,6 +333,23 @@ export class AgentLoop {
     return true;
   }
 
+  private replayCommittedTurn(turnId: TurnId): TurnRunResult | undefined {
+    if (this.modelInvocationWal === undefined) return undefined;
+    const turn = this.lifecycleStore.getTurn(turnId);
+    if (turn?.status !== "completed") return undefined;
+    const hasCommittedAssistant = this.modelInvocationWal.store
+      .list("committed")
+      .some((invocation) => invocation.turnId === turnId &&
+        invocation.targetCommitKey === `turn:${turnId}:assistant`);
+    if (!hasCommittedAssistant) return undefined;
+    const assistantMessage = this.lifecycleStore.getItemsForTurn(turnId)
+      .findLast((item) => item.type === "assistant_message");
+    if (assistantMessage === undefined) {
+      throw new Error(`Committed model invocation has no Assistant item: ${turnId}`);
+    }
+    return { turn, assistantMessage };
+  }
+
   private async runActiveTurn(
     turnId: TurnId,
     signal: AbortSignal,
@@ -253,6 +357,19 @@ export class AgentLoop {
   ): Promise<TurnRunResult> {
     try {
       signal.throwIfAborted();
+      let modelInvocationRound = this.nextModelInvocationRound(turnId);
+      const invokeModel = (
+        eventRound: number,
+        purpose: string,
+        request: Omit<LlmCreateResponseRequest, "onEvent">,
+      ) => this.requestModel(
+        turnId,
+        eventRound,
+        () => modelInvocationRound++,
+        purpose,
+        request,
+        options.invocationContext,
+      );
       let input = this.contextBuilder.build(turnId);
       const tokenBudget = this.tokenBudget.assess(input);
       const itemBudget = this.itemBudget.assess(input);
@@ -263,10 +380,19 @@ export class AgentLoop {
         tokenBudget.shouldCompact ||
         itemBudget.shouldCompact
       ) {
-        input = await this.contextCompactor.compact(
-          input,
-          signal,
-        );
+        let compactionModelResult: ModelRequestResult | undefined;
+        input = this.modelInvocationWal === undefined
+          ? await this.contextCompactor.compact(input, signal)
+          : await this.contextCompactor.compact(input, signal, async (request) => {
+              compactionModelResult = await invokeModel(0, "compaction", request);
+              return compactionModelResult.response;
+            });
+        if (compactionModelResult !== undefined) {
+          await this.commitModelInvocation(
+            compactionModelResult,
+            `turn:${turnId}:compaction`,
+          );
+        }
         // Compaction 不是越过硬上限的许可证，替换历史必须重新接受双预算检查。
         this.itemBudget.assertWithinLimit(input);
         checkpointMessages = input;
@@ -281,9 +407,11 @@ export class AgentLoop {
         });
       }
 
-      let response = await this.requestModel(turnId, 0, {
+      let currentModelInput: readonly import("../llm/types.js").LlmInputItem[] = input;
+      let currentPreviousResponseId: string | undefined;
+      let modelResult = await invokeModel(0, options.modelInvocationPurpose ?? "initial", {
         instructions: options.instructions ?? this.instructions,
-        input,
+        input: currentModelInput,
         tools: this.toolRegistry.getDefinitions(options.allowedTools),
         signal,
         ...(options.model === undefined ? {} : { model: options.model }),
@@ -291,6 +419,8 @@ export class AgentLoop {
           ? {}
           : { reasoningEffort: options.reasoningEffort }),
       });
+      let response = modelResult.response;
+      let finalResponseRepairAttempts = 0;
 
       for (
         let round = 0;
@@ -302,6 +432,36 @@ export class AgentLoop {
             throw new Error(
               "LLM returned no final assistant text",
             );
+          }
+
+          const finalResponseGuard = options.finalResponseGuard;
+          const rejection = finalResponseGuard?.reject(response.text);
+          if (rejection !== undefined && finalResponseGuard !== undefined) {
+            const maxRepairAttempts = finalResponseGuard.maxRepairAttempts ?? 1;
+            if (finalResponseRepairAttempts >= maxRepairAttempts) {
+              throw new Error("LLM repeatedly returned an invalid final response");
+            }
+            finalResponseRepairAttempts += 1;
+            await this.commitModelInvocation(
+              modelResult,
+              `turn:${turnId}:format-rejected:${finalResponseRepairAttempts}`,
+            );
+            modelResult = await invokeModel(round, "format_repair", {
+              instructions: `${options.instructions ?? this.instructions}\n\n${finalResponseGuard.repairInstructions}\n上一份候选答复未通过检查：${rejection}`,
+              input: currentModelInput,
+              ...(currentPreviousResponseId === undefined
+                ? {}
+                : { previousResponseId: currentPreviousResponseId }),
+              tools: this.toolRegistry.getDefinitions(options.allowedTools),
+              signal,
+              ...(options.model === undefined ? {} : { model: options.model }),
+              ...(options.reasoningEffort === undefined
+                ? {}
+                : { reasoningEffort: options.reasoningEffort }),
+            });
+            response = modelResult.response;
+            round -= 1;
+            continue;
           }
 
           const assistantMessage =
@@ -330,6 +490,11 @@ export class AgentLoop {
             });
           }
 
+          await this.commitModelInvocation(
+            modelResult,
+            `turn:${turnId}:assistant`,
+          );
+
           this.events.emit({
             type: "turn/completed",
             turnId,
@@ -342,9 +507,48 @@ export class AgentLoop {
         }
 
         if (round === this.maxToolRounds) {
-          throw new Error(
-            `Agent exceeded ${this.maxToolRounds} tool rounds`,
+          const skippedOutputs = response.functionCalls.map((functionCall) => {
+            const failure = {
+              status: "failed" as const,
+              errorCode: "tool_round_limit",
+              message: "工具轮次预算已用尽，本次调用未执行。",
+              retryable: false,
+            };
+            this.ensureToolCallItem(turnId, functionCall);
+            this.ensureToolResultItem(turnId, functionCall, failure);
+            return {
+              callId: functionCall.callId,
+              name: functionCall.name,
+              arguments: functionCall.arguments,
+              output: JSON.stringify(failure),
+            } satisfies LlmFunctionOutput;
+          });
+          const safeSkippedOutputs = this.toolOutputLimiter.limit(skippedOutputs);
+          currentModelInput = safeSkippedOutputs;
+          currentPreviousResponseId = response.id;
+          await this.commitModelInvocation(
+            modelResult,
+            `turn:${turnId}:tool-round:${round}`,
           );
+          modelResult = await invokeModel(round + 1, "tool_continuation", {
+            instructions: `${options.instructions ?? this.instructions}\n\n${TOOL_ROUND_FINALIZATION_INSTRUCTIONS}`,
+            input: currentModelInput,
+            ...(currentPreviousResponseId === undefined
+              ? {}
+              : { previousResponseId: currentPreviousResponseId }),
+            tools: [],
+            signal,
+            ...(options.model === undefined ? {} : { model: options.model }),
+            ...(options.reasoningEffort === undefined
+              ? {}
+              : { reasoningEffort: options.reasoningEffort }),
+          });
+          response = modelResult.response;
+          if (response.functionCalls.length > 0 || response.text.length === 0) {
+            throw new Error("Agent finalization failed after tool round limit");
+          }
+          round -= 1;
+          continue;
         }
 
         // 无状态续轮会把每个逻辑 Tool Output 编码成完整的
@@ -362,7 +566,7 @@ export class AgentLoop {
           );
         }
 
-        const executeFunctionCall = async (
+        const executeFunctionCallLegacy = async (
           functionCall: (typeof response.functionCalls)[number],
         ): Promise<LlmFunctionOutput> => {
           const permissionDescription =
@@ -469,6 +673,24 @@ export class AgentLoop {
           };
         };
 
+        const executeFunctionCall = (
+          functionCall: (typeof response.functionCalls)[number],
+        ): Promise<LlmFunctionOutput> => {
+          if (this.toolInvocationWal === undefined) {
+            return executeFunctionCallLegacy(functionCall);
+          }
+          if (modelResult.invocationId === undefined) {
+            throw new Error("Tool invocation WAL requires a durable model invocation ID");
+          }
+          return this.executeFunctionCallWithWal({
+            turnId,
+            modelInvocationId: modelResult.invocationId,
+            functionCall,
+            signal,
+            options,
+          });
+        };
+
         // 模型一次委派多个子 Agent 时必须真正并行；普通工具仍保持确定性串行，
         // 避免多个写操作或权限弹窗互相竞争。
         const toolOutputs: LlmFunctionOutput[] =
@@ -485,10 +707,20 @@ export class AgentLoop {
         const safeToolOutputs =
           this.toolOutputLimiter.limit(toolOutputs);
 
-        const continuationRequest = () => this.requestModel(turnId, round + 1, {
+        currentModelInput = safeToolOutputs;
+        currentPreviousResponseId = response.id;
+
+        await this.commitModelInvocation(
+          modelResult,
+          `turn:${turnId}:tool-round:${round}`,
+        );
+
+        const continuationRequest = () => invokeModel(round + 1, "tool_continuation", {
             instructions: options.instructions ?? this.instructions,
-            input: safeToolOutputs,
-            previousResponseId: response.id,
+            input: currentModelInput,
+            ...(currentPreviousResponseId === undefined
+              ? {}
+              : { previousResponseId: currentPreviousResponseId }),
             tools: this.toolRegistry.getDefinitions(options.allowedTools),
             signal,
             ...(options.model === undefined ? {} : { model: options.model }),
@@ -497,9 +729,10 @@ export class AgentLoop {
               : { reasoningEffort: options.reasoningEffort }),
           });
         const childRunIds = readAgentReturnRunIds(toolOutputs);
-        response = this.continueAfterAgentReturns === undefined
+        modelResult = this.continueAfterAgentReturns === undefined
           ? await continuationRequest()
           : await this.continueAfterAgentReturns(turnId, childRunIds, continuationRequest);
+        response = modelResult.response;
       }
 
       throw new Error("Agent loop ended unexpectedly");
@@ -561,24 +794,91 @@ export class AgentLoop {
 
   private async requestModel(
     turnId: TurnId,
-    round: number,
+    eventRound: number,
+    allocateInvocationRound: () => number,
+    purpose: string,
     request: Omit<LlmCreateResponseRequest, "onEvent">,
-  ) {
+    invocationContext?: AgentInvocationContext,
+  ): Promise<ModelRequestResult> {
     // 所有业务模型请求（首次请求和每次 Tool 续轮）共用同一硬断言。
     this.itemBudget.assertWithinLimit(request.input);
 
     this.events.emit({
       type: "model/started",
       turnId,
-      round,
+      round: eventRound,
     });
 
-    const response = await this.llm.createResponse({
-      ...request,
-      onEvent: (event) => {
-        this.handleModelStreamEvent(turnId, round, event);
-      },
-    });
+    const wal = this.modelInvocationWal;
+    const providerRequest = request;
+    let invocationId: string | undefined;
+    let response: LlmResponse;
+
+    if (wal === undefined) {
+      response = await this.createProviderResponse(turnId, eventRound, providerRequest);
+    } else {
+      const turn = this.lifecycleStore.getTurn(turnId);
+      if (turn === undefined) throw new Error(`Turn not found: ${turnId}`);
+      const executionContext = invocationContext ?? this.resolveExecutionContext?.(turnId);
+      const model = providerRequest.model ?? wal.defaultModel;
+      const requestDigest = createModelRequestDigest(modelRequestDigestInput(providerRequest, model));
+      const persisted = wal.store.list()
+        .filter((candidate) => candidate.turnId === turnId && candidate.purpose === purpose &&
+          candidate.requestDigest === requestDigest && candidate.provider === wal.provider &&
+          candidate.model === model && candidate.previousResponseId === providerRequest.previousResponseId)
+        .sort((left, right) => right.round - left.round)[0];
+      const prepared = persisted ?? wal.store.prepare({
+        threadId: turn.threadId,
+        turnId,
+        round: allocateInvocationRound(),
+        purpose,
+        ...(executionContext?.jobId === undefined ? {} : { jobId: executionContext.jobId }),
+        ...(executionContext?.jobAttempt === undefined ? {} : { jobAttempt: executionContext.jobAttempt }),
+        ...(executionContext?.taskId === undefined ? {} : { taskId: executionContext.taskId }),
+        ...(executionContext?.agentId === undefined ? {} : { runId: executionContext.agentId }),
+        ...(executionContext?.workflowVersion === undefined ? {} : { workflowVersion: executionContext.workflowVersion }),
+        ...(executionContext?.stageId === undefined ? {} : { stageId: executionContext.stageId }),
+        ...(executionContext?.stageAttempt === undefined ? {} : { stageAttempt: executionContext.stageAttempt }),
+        requestDigest,
+        provider: wal.provider,
+        model,
+        ...(providerRequest.previousResponseId === undefined
+          ? {}
+          : { previousResponseId: providerRequest.previousResponseId }),
+      });
+      invocationId = prepared.invocationId;
+      if (persisted === undefined) await wal.persist();
+
+      if (prepared.status === "submitted") {
+        wal.store.markOutcomeUnknown(invocationId, "process_recovered_after_submit");
+        await wal.persist();
+        throw new ModelInvocationOutcomeUnknownError(invocationId);
+      }
+      if (prepared.status === "outcome_unknown") {
+        throw new ModelInvocationOutcomeUnknownError(invocationId);
+      }
+      if (prepared.status === "failed_terminal") {
+        throw new Error(`Model invocation is terminal: ${invocationId}`);
+      }
+      if (prepared.status === "response_received" || prepared.status === "committed") {
+        response = replayModelResponse(prepared);
+      } else {
+        wal.store.markSubmitted(invocationId);
+        await wal.persist();
+        try {
+          response = await this.createProviderResponse(turnId, eventRound, providerRequest);
+        } catch (error) {
+          wal.store.markOutcomeUnknown(invocationId, "provider_call_outcome_unknown");
+          await wal.persist();
+          throw new ModelInvocationOutcomeUnknownError(invocationId, { cause: error });
+        }
+        wal.store.recordResponse(invocationId, {
+          providerResponseId: response.id,
+          normalizedResult: normalizeModelResponse(response),
+        });
+        await wal.persist();
+      }
+    }
 
     if (
       response.text.length > 0 ||
@@ -587,7 +887,7 @@ export class AgentLoop {
       this.events.emit({
         type: "model/output_text_completed",
         turnId,
-        round,
+        round: eventRound,
         classification:
           response.functionCalls.length > 0
             ? "commentary"
@@ -603,11 +903,235 @@ export class AgentLoop {
     this.events.emit({
       type: "model/completed",
       turnId,
-      round,
+      round: eventRound,
       functionCallCount: response.functionCalls.length,
     });
 
-    return response;
+    return {
+      response,
+      ...(invocationId === undefined ? {} : { invocationId }),
+    };
+  }
+
+  private createProviderResponse(
+    turnId: TurnId,
+    eventRound: number,
+    request: Omit<LlmCreateResponseRequest, "onEvent">,
+  ): Promise<LlmResponse> {
+    return this.llm.createResponse({
+      ...request,
+      onEvent: (event) => this.handleModelStreamEvent(turnId, eventRound, event),
+    });
+  }
+
+  private nextModelInvocationRound(turnId: TurnId): number {
+    if (this.modelInvocationWal === undefined) return 0;
+    const rounds = this.modelInvocationWal.store.list()
+      .filter((invocation) => invocation.turnId === turnId)
+      .map((invocation) => invocation.round);
+    return rounds.length === 0 ? 0 : Math.max(...rounds) + 1;
+  }
+
+  private async commitModelInvocation(
+    result: ModelRequestResult,
+    targetCommitKey: string,
+  ): Promise<void> {
+    if (this.modelInvocationWal === undefined || result.invocationId === undefined) return;
+    this.modelInvocationWal.store.markCommitted(result.invocationId, targetCommitKey);
+    await this.modelInvocationWal.persist();
+  }
+
+  private executeFunctionCallWithWal(input: {
+    turnId: TurnId;
+    modelInvocationId: string;
+    functionCall: { callId: string; name: string; arguments: string };
+    signal: AbortSignal;
+    options: AgentRunOptions;
+  }): Promise<LlmFunctionOutput> {
+    const identity = {
+      modelInvocationId: input.modelInvocationId,
+      callId: input.functionCall.callId,
+      toolName: input.functionCall.name,
+      argumentsDigest: createToolArgumentsDigest(input.functionCall.arguments),
+    };
+    const toolInvocationId = createToolInvocationId(identity);
+    const existing = this.toolInvocationInFlight.get(toolInvocationId);
+    if (existing !== undefined) return existing;
+    const execution = this.executeFunctionCallWithWalOnce({
+      ...input,
+      identity,
+      toolInvocationId,
+    }).finally(() => {
+      if (this.toolInvocationInFlight.get(toolInvocationId) === execution) {
+        this.toolInvocationInFlight.delete(toolInvocationId);
+      }
+    });
+    this.toolInvocationInFlight.set(toolInvocationId, execution);
+    return execution;
+  }
+
+  private async executeFunctionCallWithWalOnce(input: {
+    turnId: TurnId;
+    modelInvocationId: string;
+    functionCall: { callId: string; name: string; arguments: string };
+    identity: {
+      modelInvocationId: string;
+      callId: string;
+      toolName: string;
+      argumentsDigest: string;
+    };
+    toolInvocationId: string;
+    signal: AbortSignal;
+    options: AgentRunOptions;
+  }): Promise<LlmFunctionOutput> {
+    const wal = this.toolInvocationWal!;
+    const targetCommitKey = `turn:${input.turnId}:tool:${input.functionCall.callId}`;
+    let invocation = wal.store.get(input.toolInvocationId);
+
+    if (invocation === undefined) {
+      const denied = await this.authorizeToolInvocation(input);
+      if (denied !== undefined) return denied;
+      this.ensureToolCallItem(input.turnId, input.functionCall);
+      invocation = wal.store.prepare({ ...input.identity, targetCommitKey });
+      await wal.persist();
+    } else {
+      invocation = wal.store.prepare({ ...input.identity, targetCommitKey });
+    }
+
+    if (invocation.status === "executing") {
+      wal.store.markOutcomeUnknown(
+        invocation.toolInvocationId,
+        "process_recovered_during_tool_execution",
+      );
+      await wal.persist();
+      throw new ToolInvocationOutcomeUnknownError(invocation.toolInvocationId);
+    }
+    if (invocation.status === "outcome_unknown") {
+      throw new ToolInvocationOutcomeUnknownError(invocation.toolInvocationId);
+    }
+    if (invocation.status === "committed") {
+      return replayToolResult(invocation, input.functionCall);
+    }
+    if (invocation.status === "result_received") {
+      const output = replayToolResult(invocation, input.functionCall);
+      this.ensureToolCallItem(input.turnId, input.functionCall);
+      this.ensureToolResultItem(input.turnId, input.functionCall, invocation.result);
+      wal.store.markCommitted(invocation.toolInvocationId, targetCommitKey);
+      await wal.persist();
+      return output;
+    }
+
+    this.ensureToolCallItem(input.turnId, input.functionCall);
+    wal.store.markExecuting(invocation.toolInvocationId);
+    await wal.persist();
+    this.events.emit({
+      type: "tool/started",
+      turnId: input.turnId,
+      callId: input.functionCall.callId,
+      toolName: input.functionCall.name,
+    });
+
+    let normalizedResult: ToolInvocationNormalizedResult;
+    try {
+      const result = await this.toolRegistry.execute(
+        input.functionCall.name,
+        input.functionCall.arguments,
+        input.signal,
+        input.turnId,
+        input.options.allowedTools,
+      );
+      normalizedResult = { result: result.result, output: result.output };
+    } catch (error) {
+      wal.store.markOutcomeUnknown(
+        invocation.toolInvocationId,
+        "tool_execution_outcome_unknown",
+      );
+      await wal.persist();
+      throw new ToolInvocationOutcomeUnknownError(
+        invocation.toolInvocationId,
+        { cause: error },
+      );
+    }
+
+    invocation = wal.store.recordResult(invocation.toolInvocationId, normalizedResult);
+    await wal.persist();
+    this.ensureToolResultItem(input.turnId, input.functionCall, invocation.result);
+    wal.store.markCommitted(invocation.toolInvocationId, targetCommitKey);
+    await wal.persist();
+    this.events.emit({
+      type: "tool/completed",
+      turnId: input.turnId,
+      callId: input.functionCall.callId,
+      toolName: input.functionCall.name,
+    });
+    return replayToolResult(invocation, input.functionCall);
+  }
+
+  private async authorizeToolInvocation(input: {
+    turnId: TurnId;
+    functionCall: { callId: string; name: string; arguments: string };
+    signal: AbortSignal;
+    options: AgentRunOptions;
+  }): Promise<LlmFunctionOutput | undefined> {
+    const call = input.functionCall;
+    if (!this.toolRegistry.isAllowed(call.name, input.options.allowedTools)) {
+      throw new Error(`Tool is not allowed for this Agent: ${call.name}`);
+    }
+    if (call.name === "read_skill" && !isSkillAllowed(call.arguments, input.options.allowedSkills)) {
+      throw new Error("Skill is not allowed for this Agent");
+    }
+    const permission = this.toolRegistry.requiresPermission(call.name)
+      ? await this.requestToolPermission(
+          input.turnId,
+          call.callId,
+          call.name,
+          call.arguments,
+          this.toolRegistry.getPermissionDescription(call.name, call.arguments),
+          input.signal,
+          input.options,
+        )
+      : { decision: "allow" as const };
+    if (permission.decision === "allow") return undefined;
+    const denial = { status: "denied", reason: permission.reason ?? "Permission denied" };
+    this.ensureToolCallItem(input.turnId, call);
+    this.ensureToolResultItem(input.turnId, call, denial);
+    return {
+      callId: call.callId,
+      name: call.name,
+      arguments: call.arguments,
+      output: JSON.stringify(denial),
+    };
+  }
+
+  private ensureToolCallItem(
+    turnId: TurnId,
+    functionCall: { callId: string; name: string; arguments: string },
+  ): void {
+    const exists = this.lifecycleStore.getItemsForTurn(turnId).some((item) =>
+      item.type === "tool_call" && hasCallId(item.content, functionCall.callId));
+    if (!exists) {
+      this.lifecycleStore.appendItem(turnId, "tool_call", {
+        callId: functionCall.callId,
+        name: functionCall.name,
+        arguments: functionCall.arguments,
+      });
+    }
+  }
+
+  private ensureToolResultItem(
+    turnId: TurnId,
+    functionCall: { callId: string; name: string },
+    result: unknown,
+  ): void {
+    const exists = this.lifecycleStore.getItemsForTurn(turnId).some((item) =>
+      item.type === "tool_result" && hasCallId(item.content, functionCall.callId));
+    if (!exists) {
+      this.lifecycleStore.appendItem(turnId, "tool_result", {
+        callId: functionCall.callId,
+        name: functionCall.name,
+        result,
+      });
+    }
   }
 
   private async requestToolPermission(
@@ -742,6 +1266,63 @@ export class AgentLoop {
     });
   }
 
+}
+
+function modelRequestDigestInput(
+  request: Omit<LlmCreateResponseRequest, "onEvent">,
+  model: string,
+): unknown {
+  return {
+    model,
+    instructions: request.instructions,
+    input: request.input,
+    tools: request.tools,
+    allowHostedTools: request.allowHostedTools ?? true,
+    reasoningEffort: request.reasoningEffort ?? null,
+    previousResponseId: request.previousResponseId ?? null,
+  };
+}
+
+function normalizeModelResponse(response: LlmResponse): ModelInvocationNormalizedResult {
+  return {
+    text: response.text,
+    functionCalls: response.functionCalls.map((call) => ({
+      callId: call.callId,
+      name: call.name,
+      arguments: call.arguments,
+    })),
+  };
+}
+
+function replayModelResponse(invocation: ModelInvocation): LlmResponse {
+  if (invocation.providerResponseId === undefined || invocation.normalizedResult === undefined) {
+    throw new Error(`Model invocation response is incomplete: ${invocation.invocationId}`);
+  }
+  return {
+    id: invocation.providerResponseId,
+    text: invocation.normalizedResult.text,
+    functionCalls: invocation.normalizedResult.functionCalls.map((call) => ({ ...call })),
+  };
+}
+
+function replayToolResult(
+  invocation: Pick<ToolInvocation, "result" | "output" | "toolInvocationId">,
+  functionCall: { callId: string; name: string; arguments: string },
+): LlmFunctionOutput {
+  if (invocation.output === undefined || invocation.result === undefined) {
+    throw new Error(`Tool invocation result is incomplete: ${invocation.toolInvocationId}`);
+  }
+  return {
+    callId: functionCall.callId,
+    name: functionCall.name,
+    arguments: functionCall.arguments,
+    output: invocation.output,
+  };
+}
+
+function hasCallId(value: unknown, callId: string): boolean {
+  return typeof value === "object" && value !== null &&
+    "callId" in value && value.callId === callId;
 }
 
 function isSkillAllowed(argumentsJson: string, allowedSkills: readonly string[] = ["*"]): boolean {

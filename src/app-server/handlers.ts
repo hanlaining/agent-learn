@@ -71,6 +71,7 @@ export interface AppServerDependencies {
   workspaceSandbox?: Pick<WorkspaceSandbox, "searchFiles" | "validateFilePath">;
   skillNames?: readonly string[];
   executionEngineRouter?: ExecutionEngineRouter;
+  waitForStartupRecovery?: () => Promise<void>;
 }
 
 /**
@@ -101,6 +102,7 @@ export function registerAppServerHandlers(
     workspaceSandbox,
     skillNames = [],
     executionEngineRouter,
+    waitForStartupRecovery = async () => undefined,
   } = dependencies;
 
   let clientInitialized = false;
@@ -138,6 +140,7 @@ export function registerAppServerHandlers(
 
   connection.onRequest("thread/start", async () => {
     requireInitialized();
+    await waitForStartupRecovery();
 
     // Thread 是持久会话容器；这里只创建容器，还没有启动 Turn。
     const thread = lifecycleStore.createThread();
@@ -210,6 +213,7 @@ export function registerAppServerHandlers(
 
   connection.onRequest("agent/fixed-product/advance", async (params) => {
     requireInitialized();
+    await waitForStartupRecovery();
     if (executionEngineRouter === undefined || agentRuntimeStore === undefined ||
       !isRecord(params) || typeof params.threadId !== "string" || typeof params.expectedStage !== "string" ||
       !["ready_first_return", "first_return_ready", "rework", "second_return_ready", "engineering_ready", "engineering_return_ready", "quality_ready", "quality_return_ready", "lead_return_ready", "completed"].includes(params.expectedStage)) {
@@ -325,6 +329,7 @@ export function registerAppServerHandlers(
 
   connection.onRequest("turn/start", async (params) => {
     requireInitialized();
+    await waitForStartupRecovery();
 
     // 第一道边界：验证来自 JSON-RPC 的不可信参数。
     const request = parseTurnStartParams(params);
@@ -381,6 +386,7 @@ export function registerAppServerHandlers(
 
   connection.onRequest("turn/run", async (params) => {
     requireInitialized();
+    await waitForStartupRecovery();
 
     if (agentLoop === undefined) {
       throw new Error(

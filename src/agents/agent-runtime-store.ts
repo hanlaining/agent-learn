@@ -42,12 +42,21 @@ export class AgentRuntimeStore {
     value.edges.forEach((item) => store.edges.set(item.id, structuredClone(item)));
     value.evidence.forEach((item) => store.evidence.set(item.id, structuredClone(item)));
     value.board.forEach((item) => store.board.set(item.id, structuredClone(item)));
+    value.returnReceipts.forEach((id) => store.returnReceipts.add(id));
     value.returns.forEach((item) => {
       const restored = structuredClone(item);
-      if (restored.status === "delivering") restored.status = "ready";
+      if (store.returnReceipts.has(restored.idempotencyKey)) {
+        restored.status = "consumed";
+        restored.consumedAt ??= store.now();
+        delete restored.nextAttemptAt;
+      } else if (restored.status === "delivering") {
+        // claim 本身没有业务副作用。没有 receipt 的遗留 claim 在重启后回到
+        // outbox，但启动流程不得因此自动执行父模型 continuation。
+        restored.status = "ready";
+        delete restored.nextAttemptAt;
+      }
       store.returns.set(restored.id, restored);
     });
-    value.returnReceipts.forEach((id) => store.returnReceipts.add(id));
     value.stageCheckpoints?.forEach((item) => store.stageCheckpoints.set(item.idempotencyKey, structuredClone(item)));
     value.stageMetrics?.forEach((item) => store.recordStageMetric(item));
     store.validateReferences();
@@ -114,6 +123,10 @@ export class AgentRuntimeStore {
   reconcileJobStatus(jobId: string): AgentJobStatus {
     const job = this.requireJob(jobId);
     if (job.status === "cancelled") return job.status;
+    if (job.executionKind === "software_product_delivery" && job.workflowVersion === "software_product_delivery_v2") {
+      if (["failed", "partial"].includes(job.status)) return job.status;
+      return this.reconcileSoftwareProductDeliveryJob(job);
+    }
     const returns = this.listReturns(jobId);
     if (returns.some((item) => item.status === "ready" || item.status === "delivering")) {
       this.setJobStatus(jobId, "waiting_returns");
@@ -228,12 +241,18 @@ export class AgentRuntimeStore {
     return { lostTasks: this.recoverExpiredLeases(at), pendingReturns: this.listReturns().filter((item) => item.status === "ready") };
   }
 
-  reconcilePersistedJobs(): AgentJob[] {
+  reconcilePersistedJobs(jobId?: string): AgentJob[] {
     for (const job of this.jobs.values()) {
+      if (jobId !== undefined && job.id !== jobId) continue;
       if (["partial", "failed", "cancelled"].includes(job.status)) continue;
       const hasCurrentTasks = this.listTasks(job.id).some((task) =>
         task.parentTaskId === undefined && task.jobAttempt === job.attempt);
-      if (job.status !== "completed" || hasCurrentTasks) this.reconcileJobStatus(job.id);
+      const hasCurrentWorkflowCheckpoints = job.executionKind === "software_product_delivery" &&
+        job.workflowVersion === "software_product_delivery_v2" &&
+        this.listStageCheckpoints(job.id).some((checkpoint) => checkpoint.jobAttempt === job.attempt);
+      if (job.status !== "completed" || hasCurrentTasks || hasCurrentWorkflowCheckpoints) {
+        this.reconcileJobStatus(job.id);
+      }
     }
     return this.listJobs();
   }
@@ -307,7 +326,18 @@ export class AgentRuntimeStore {
     const item = this.returns.get(id); if (item === undefined || item.status !== "ready" || (item.nextAttemptAt !== undefined && item.nextAttemptAt > this.now())) return undefined;
     item.status = "delivering"; item.attempts += 1; return copy(item);
   }
-  retryReturn(id: string, delayMs: number): void { const item = this.requireReturn(id); item.status = "ready"; item.nextAttemptAt = new Date(Date.parse(this.now()) + delayMs).toISOString(); }
+  retryReturn(id: string, delayMs: number): void {
+    const item = this.requireReturn(id);
+    if (item.status !== "delivering") throw new Error("Only a delivering Return can be retried");
+    item.status = "ready";
+    item.nextAttemptAt = new Date(Date.parse(this.now()) + delayMs).toISOString();
+  }
+  failReturn(id: string): void {
+    const item = this.requireReturn(id);
+    if (item.status === "consumed") return;
+    item.status = "failed";
+    delete item.nextAttemptAt;
+  }
   consumeReturn(id: string): boolean {
     const item = this.requireReturn(id); if (this.returnReceipts.has(item.idempotencyKey)) return false;
     if (item.status !== "delivering") throw new Error("Return is not delivering");
@@ -391,6 +421,64 @@ export class AgentRuntimeStore {
 
   exportSnapshot(): AgentRuntimeSnapshot {
     return { version: 1, sequence: this.sequence, jobs: this.listJobs(), tasks: [...this.tasks.values()].map(copy), edges: [...this.edges.values()].map(copy), evidence: [...this.evidence.values()].map(copy), board: [...this.board.values()].map(copy), returns: this.listReturns(), returnReceipts: [...this.returnReceipts], stageCheckpoints: this.listStageCheckpoints(), stageMetrics: this.listStageMetrics() };
+  }
+
+  private reconcileSoftwareProductDeliveryJob(job: AgentJob): AgentJobStatus {
+    const checkpoints = this.listStageCheckpoints(job.id).filter((item) => item.jobAttempt === job.attempt);
+    const currentTasks = this.listTasks(job.id).filter((item) => item.jobAttempt === job.attempt);
+    const returns = this.listReturns(job.id).filter((item) => item.jobAttempt === undefined || item.jobAttempt === job.attempt);
+    if (checkpoints.some((item) => item.status === "failed_terminal") ||
+      currentTasks.some((item) => ["failed", "cancelled", "lost"].includes(item.status))) {
+      this.setJobStatus(job.id, "failed");
+      return "failed";
+    }
+    const requiredStages = ["product", "engineering", "quality", "lead", "return_god"];
+    const stagesCompleted = requiredStages.every((stageId) =>
+      checkpoints.some((item) => item.stageId === stageId && item.status === "completed"));
+    const leadReturnConsumed = returns.some((item) => item.stageId === "lead" && item.status === "consumed");
+    if (stagesCompleted && leadReturnConsumed) {
+      const currentEvidence = currentTasks.flatMap((task) => this.listEvidence(task.id));
+      const evidenceById = new Map(currentEvidence.map((item) => [item.id, item]));
+      const completedCheckpoints = checkpoints.filter((item) => item.status === "completed");
+      const checkpointsHaveEvidence = completedCheckpoints.every((checkpoint) =>
+        currentEvidence.some((item) =>
+          item.idempotencyKey === `${checkpoint.idempotencyKey}:evidence` &&
+          item.jobId === job.id && item.jobAttempt === job.attempt &&
+          item.workflowVersion === job.workflowVersion && item.stageId === checkpoint.stageId &&
+          item.stageAttempt === checkpoint.stageAttempt));
+      const returnsHaveValidEvidence = completedCheckpoints
+        .filter((checkpoint) => checkpoint.stageId !== "return_god")
+        .every((checkpoint) => {
+          const envelope = returns.find((item) => item.idempotencyKey === checkpoint.idempotencyKey);
+          return envelope !== undefined && envelope.result.evidenceIds.length > 0 &&
+            envelope.result.evidenceIds.every((evidenceId) => {
+              const evidence = evidenceById.get(evidenceId);
+              return evidence !== undefined && evidence.jobId === job.id &&
+                evidence.jobAttempt === job.attempt && evidence.workflowVersion === job.workflowVersion;
+            });
+        });
+      if (!checkpointsHaveEvidence || !returnsHaveValidEvidence) {
+        this.failJob(job.id, "failed", "terminal_state_inconsistent");
+        return "failed";
+      }
+      this.setJobStatus(job.id, "completed");
+      return "completed";
+    }
+    if (returns.some((item) => item.status === "ready" || item.status === "delivering")) {
+      this.setJobStatus(job.id, "waiting_returns");
+      return "waiting_returns";
+    }
+    if (currentTasks.some((item) => item.status === "rework" || item.status === "reviewing") ||
+      checkpoints.some((item) => item.status === "validating")) {
+      this.setJobStatus(job.id, "reviewing");
+      return "reviewing";
+    }
+    if (currentTasks.length === 0 && checkpoints.length === 0) {
+      this.setJobStatus(job.id, "planning");
+      return "planning";
+    }
+    this.setJobStatus(job.id, "running");
+    return "running";
   }
 
   private hasCycle(jobId: string): boolean {
