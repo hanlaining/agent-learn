@@ -52,6 +52,11 @@ import type { RequirementStore } from "../requirements/requirement-store.js";
 import { isRequirementConfirmed, type RequirementExecutionKind, type RequirementExecutionState } from "../requirements/requirement.js";
 import type { FixedProductStage } from "../agents/fixed-software-team-coordinator.js";
 import type { ExecutionEngineRouter } from "../execution/execution-engine-router.js";
+import type { OutcomeUnknownResolutionService } from "../runtime/outcome-unknown-resolution-service.js";
+import type {
+  OutcomeUnknownActor,
+  ResolveOutcomeUnknownInput,
+} from "../runtime/outcome-unknown-resolution.js";
 
 export interface AppServerDependencies {
   lifecycleStore: LifecycleStore;
@@ -71,6 +76,9 @@ export interface AppServerDependencies {
   workspaceSandbox?: Pick<WorkspaceSandbox, "searchFiles" | "validateFilePath">;
   skillNames?: readonly string[];
   executionEngineRouter?: ExecutionEngineRouter;
+  outcomeUnknownResolutionService?: OutcomeUnknownResolutionService;
+  resolveOutcomeUnknownActor?: () => OutcomeUnknownActor | undefined;
+  refreshOutcomeUnknownFromRuntime?: () => void | Promise<void>;
 }
 
 /**
@@ -101,6 +109,9 @@ export function registerAppServerHandlers(
     workspaceSandbox,
     skillNames = [],
     executionEngineRouter,
+    outcomeUnknownResolutionService,
+    resolveOutcomeUnknownActor = () => undefined,
+    refreshOutcomeUnknownFromRuntime = () => undefined,
   } = dependencies;
 
   let clientInitialized = false;
@@ -134,6 +145,30 @@ export function registerAppServerHandlers(
     // Client 明确确认握手完成后，才开放 Runtime 和业务方法。
     clientInitialized = true;
     log("[app-server] client initialized\n");
+  });
+
+  connection.onRequest("invocation/outcome-unknown/list", async (params) => {
+    requireInitialized();
+    if (outcomeUnknownResolutionService === undefined) return [];
+    const actor = resolveOutcomeUnknownActor();
+    if (actor === undefined) throw new Error("Outcome-unknown operator is unavailable");
+    if (!isRecord(params) || Object.keys(params).some((key) => key !== "threadId") ||
+      (params.threadId !== undefined && typeof params.threadId !== "string")) {
+      throw new Error("Invalid outcome-unknown list request");
+    }
+    await refreshOutcomeUnknownFromRuntime();
+    return outcomeUnknownResolutionService.list(actor, params.threadId as string | undefined);
+  });
+
+  connection.onRequest("invocation/outcome-unknown/resolve", async (params) => {
+    requireInitialized();
+    if (outcomeUnknownResolutionService === undefined) {
+      throw new Error("Outcome-unknown resolution is unavailable");
+    }
+    const actor = resolveOutcomeUnknownActor();
+    if (actor === undefined) throw new Error("Outcome-unknown operator is unavailable");
+    await refreshOutcomeUnknownFromRuntime();
+    return outcomeUnknownResolutionService.resolve(actor, parseOutcomeUnknownResolutionRequest(params));
   });
 
   connection.onRequest("thread/start", async () => {
@@ -693,6 +728,74 @@ function readTurnUserInput(lifecycleStore: LifecycleStore, turnId: string): stri
     "text" in item.content && typeof item.content.text === "string"
     ? item.content.text
     : "执行用户当前任务并返回可验证结果";
+}
+
+function parseOutcomeUnknownResolutionRequest(value: unknown): ResolveOutcomeUnknownInput {
+  if (!isRecord(value) || !hasOnlyKeys(value, ["resolutionId", "expectedVersion", "idempotencyKey", "resolution"]) ||
+    typeof value.resolutionId !== "string" || !Number.isInteger(value.expectedVersion) ||
+    typeof value.idempotencyKey !== "string" || !isRecord(value.resolution) ||
+    typeof value.resolution.action !== "string" || typeof value.resolution.reason !== "string") {
+    throw new Error("Invalid outcome-unknown resolution request");
+  }
+  const base = {
+    resolutionId: value.resolutionId,
+    expectedVersion: value.expectedVersion as number,
+    idempotencyKey: value.idempotencyKey,
+  };
+  switch (value.resolution.action) {
+    case "confirm_not_executed_retry":
+      if (!hasOnlyKeys(value.resolution, ["action", "reason", "toolSideEffectConfirmed"]) ||
+        (value.resolution.toolSideEffectConfirmed !== undefined && typeof value.resolution.toolSideEffectConfirmed !== "boolean")) {
+        throw new Error("Invalid outcome-unknown retry resolution");
+      }
+      return {
+        ...base,
+        resolution: {
+          action: "confirm_not_executed_retry",
+          reason: value.resolution.reason,
+          ...(value.resolution.toolSideEffectConfirmed === undefined
+            ? {}
+            : { toolSideEffectConfirmed: value.resolution.toolSideEffectConfirmed }),
+        },
+      };
+    case "record_external_result":
+      if (!hasOnlyKeys(value.resolution, ["action", "reason", "externalResult"]) ||
+        !isRecord(value.resolution.externalResult) ||
+        !hasOnlyKeys(value.resolution.externalResult, ["summary", "value"]) ||
+        typeof value.resolution.externalResult.summary !== "string" ||
+        !("value" in value.resolution.externalResult)) {
+        throw new Error("Invalid outcome-unknown external result");
+      }
+      return {
+        ...base,
+        resolution: {
+          action: "record_external_result",
+          reason: value.resolution.reason,
+          externalResult: {
+            summary: value.resolution.externalResult.summary,
+            value: value.resolution.externalResult.value,
+          },
+        },
+      };
+    case "mark_manual_required":
+    case "abandon":
+      if (!hasOnlyKeys(value.resolution, ["action", "reason"])) {
+        throw new Error("Invalid outcome-unknown terminal resolution");
+      }
+      return {
+        ...base,
+        resolution: {
+          action: value.resolution.action,
+          reason: value.resolution.reason,
+        },
+      };
+    default:
+      throw new Error("Invalid outcome-unknown resolution action");
+  }
+}
+
+function hasOnlyKeys(value: Record<string, unknown>, allowed: readonly string[]): boolean {
+  return Object.keys(value).every((key) => allowed.includes(key));
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

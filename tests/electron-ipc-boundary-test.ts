@@ -73,7 +73,7 @@ test("Preload 在 IPC 前拒绝未知字段、空文本、超长文本和非法�
   assert.deepEqual(invocations, []);
 });
 
-test("Main IPC 自己拒绝非法发送和非法搜索，不调用 DesktopController", async () => {
+test("Main IPC 自己拒绝非法发送、搜索和伪造 outcome_unknown 身份", async () => {
   const source = await readFile("src/electron/main.cjs", "utf8");
   const handlers = new Map<string, (_event: unknown, value: unknown) => Promise<unknown>>();
   const inertPromise = { then() { return this; }, catch() { return this; } };
@@ -100,6 +100,7 @@ test("Main IPC 自己拒绝非法发送和非法搜索，不调用 DesktopContro
 
   const send = handlers.get("desktop:send-message")!;
   const search = handlers.get("desktop:search-workspace-files")!;
+  const resolveOutcomeUnknown = handlers.get("desktop:resolve-outcome-unknown")!;
   for (const invalid of [
     "text", { text: "" }, { text: "x".repeat(32_001) }, { text: "ok", extra: 1 },
     { text: "ok", mentions: [{ kind: "file", path: "bad\npath" }] },
@@ -110,6 +111,15 @@ test("Main IPC 自己拒绝非法发送和非法搜索，不调用 DesktopContro
   }
   const result = await search(undefined, "x".repeat(241)) as { ok: boolean };
   assert.equal(result.ok, false);
+  const forged = await resolveOutcomeUnknown(undefined, {
+    resolutionId: "outcome-resolution-1",
+    expectedVersion: 1,
+    idempotencyKey: "forged-ipc",
+    invocationId: "forged",
+    requestDigest: `sha256:${"0".repeat(64)}`,
+    resolution: { action: "abandon", reason: "伪造身份" },
+  }) as { ok: boolean };
+  assert.equal(forged.ok, false);
 });
 
 async function loadPreloadForRejectionTests(): Promise<{
