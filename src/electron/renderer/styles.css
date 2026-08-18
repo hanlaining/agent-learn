@@ -476,7 +476,18 @@ button { color: inherit; }
 .requirement-actions { display: flex !important; justify-content: flex-start !important; gap: 10px !important; }
 .requirement-card button.secondary { border: 1px solid var(--border-color); background: transparent; color: var(--main-text); }
 .agent-thread-back { margin: 4px 0 16px; padding: 8px 12px; border: 1px solid var(--border-color); border-radius: 8px; background: transparent; color: var(--main-text); cursor: pointer; }
-.agent-thread-context { display: flex; align-items: center; gap: 12px; margin: 4px 0 16px; }
+.agent-thread-context {
+  position: sticky;
+  z-index: 4;
+  top: 0;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 4px 0 16px;
+  padding: 6px 0 12px;
+  background: color-mix(in srgb, var(--app-background) 96%, transparent);
+  backdrop-filter: blur(12px);
+}
 .agent-thread-context .agent-thread-back { flex: 0 0 auto; margin: 0; }
 .agent-thread-context > span { display: grid; min-width: 0; gap: 3px; }
 .agent-thread-context > span strong { font-size: 13px; }
@@ -534,11 +545,15 @@ button { color: inherit; }
 }
 
 .workspace-header {
+  position: sticky;
+  z-index: 5;
+  top: 0;
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
   padding: 0 11px;
   border-bottom: 1px solid var(--border-color);
+  background: var(--app-background);
 }
 
 .workspace-title, .workspace-actions {
