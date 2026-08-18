@@ -23,6 +23,11 @@ import {
 import {
   JsonFileRuntimePersistence,
 } from "../runtime/json-file-runtime-persistence.js";
+import { OutcomeUnknownResolutionStore } from "../runtime/outcome-unknown-resolution-store.js";
+import {
+  OutcomeUnknownResolutionService,
+  type OutcomeUnknownRuntimeSources,
+} from "../runtime/outcome-unknown-resolution-service.js";
 import {
   ItemBudget,
 } from "../runtime/item-budget.js";
@@ -101,6 +106,17 @@ const runtimePersistence = new JsonFileRuntimePersistence(
   process.env.AGENT_STATE_PATH ??
     join(defaultStateRoot, "god-agent", "runtime-state.json"),
 );
+const outcomeUnknownResolutionStore = await OutcomeUnknownResolutionStore.open({
+  statePath: process.env.AGENT_OUTCOME_UNKNOWN_STATE_PATH ??
+    join(defaultStateRoot, "god-agent", "outcome-unknown-resolutions.json"),
+});
+const outcomeUnknownResolutionService = new OutcomeUnknownResolutionService(
+  outcomeUnknownResolutionStore,
+);
+type OptionalInvocationRuntimeState = {
+  modelInvocationStore?: { list(status?: string): OutcomeUnknownRuntimeSources["modelInvocations"] };
+  toolInvocationStore?: { list(status?: string): OutcomeUnknownRuntimeSources["toolInvocations"] };
+};
 const loadedRuntimeState = await runtimePersistence.load();
 const {
   lifecycleStore,
@@ -559,6 +575,21 @@ registerAppServerHandlers(connection, {
   threadConfigs,
   runtimeSessions,
   requirementStore,
+  outcomeUnknownResolutionService,
+  // App Server 仅由本机桌面 Main Process 拉起；操作者身份由服务端固定，RPC 参数不能覆盖。
+  resolveOutcomeUnknownActor: () => ({
+    id: "local-desktop-operator",
+    permissions: ["invocation:view", "invocation:resolve"],
+  }),
+  refreshOutcomeUnknownFromRuntime: async () => {
+    // 兼容上一阶段 WAL 独立合入：当前基线没有这些 Store，合入后自动只读同步。
+    const invocationState = loadedRuntimeState as typeof loadedRuntimeState & OptionalInvocationRuntimeState;
+    if (invocationState.modelInvocationStore === undefined || invocationState.toolInvocationStore === undefined) return;
+    await outcomeUnknownResolutionService.syncFromRuntimeSources({
+      modelInvocations: invocationState.modelInvocationStore.list(),
+      toolInvocations: invocationState.toolInvocationStore.list(),
+    });
+  },
   workspaceSandbox,
   skillNames: skillLoader.list().map((skill) => skill.name),
   waitForStartupRecovery: () => startupRecoveryPromise,

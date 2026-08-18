@@ -40,6 +40,9 @@ import {
   isRuntimeCapabilities,
   type RuntimeCapabilities,
 } from "../src/app-server/runtime-capabilities.js";
+import { OutcomeUnknownResolutionStore } from "../src/runtime/outcome-unknown-resolution-store.js";
+import { OutcomeUnknownResolutionService } from "../src/runtime/outcome-unknown-resolution-service.js";
+import type { OutcomeUnknownActor } from "../src/runtime/outcome-unknown-resolution.js";
 
 function createTestAppServer(options: {
   saveState?: () => void | Promise<void>;
@@ -53,6 +56,8 @@ function createTestAppServer(options: {
     validateFilePath(path: string): Promise<string>;
   };
   skillNames?: string[];
+  outcomeUnknownResolutionService?: OutcomeUnknownResolutionService;
+  resolveOutcomeUnknownActor?: () => OutcomeUnknownActor | undefined;
 } = {}) {
   const clientToServer: string[] = [];
   const serverToClient: string[] = [];
@@ -101,6 +106,12 @@ function createTestAppServer(options: {
       : { agentRegistry: options.agentRegistry }),
     ...(options.workspaceSandbox === undefined ? {} : { workspaceSandbox: options.workspaceSandbox }),
     ...(options.skillNames === undefined ? {} : { skillNames: options.skillNames }),
+    ...(options.outcomeUnknownResolutionService === undefined
+      ? {}
+      : { outcomeUnknownResolutionService: options.outcomeUnknownResolutionService }),
+    ...(options.resolveOutcomeUnknownActor === undefined
+      ? {}
+      : { resolveOutcomeUnknownActor: options.resolveOutcomeUnknownActor }),
   });
 
   // 测试中手动搬运 JSONL，模拟真实的 Client ↔ App Server 双向通道。
@@ -117,6 +128,95 @@ function createTestAppServer(options: {
     flushClientRequest,
   };
 }
+
+test("outcome_unknown API 只接受服务端 resolutionId/version，不允许伪造 Invocation identity 或 digest", async () => {
+  const resolutionStore = new OutcomeUnknownResolutionStore();
+  const resolutionService = new OutcomeUnknownResolutionService(resolutionStore);
+  await resolutionService.registerFromRuntime({
+    invocationKind: "model",
+    invocationId: "model-invocation-api-1",
+    requestDigest: `sha256:${"b".repeat(64)}`,
+    identity: {
+      threadId: "thread-api-1",
+      turnId: "turn-api-1",
+      displayName: "生成回复",
+      provider: "openai",
+      model: "gpt-5.6-sol",
+    },
+    sideEffectRisk: "none",
+  });
+  const actor: OutcomeUnknownActor = {
+    id: "desktop-user",
+    permissions: ["invocation:view", "invocation:resolve"],
+  };
+  const app = createTestAppServer({
+    outcomeUnknownResolutionService: resolutionService,
+    resolveOutcomeUnknownActor: () => actor,
+  });
+  await completeHandshake(app);
+
+  const listPromise = app.client.sendRequest("invocation/outcome-unknown/list", { threadId: "thread-api-1" });
+  await app.flushClientRequest();
+  const records = await listPromise as Array<{ resolutionId: string; version: number; audit: unknown[] }>;
+  assert.equal(records.length, 1);
+
+  const forged = app.client.sendRequest("invocation/outcome-unknown/resolve", {
+    resolutionId: records[0]!.resolutionId,
+    expectedVersion: records[0]!.version,
+    idempotencyKey: "forged-api-request",
+    invocationId: "forged",
+    requestDigest: `sha256:${"0".repeat(64)}`,
+    resolution: { action: "abandon", reason: "非法字段" },
+  });
+  const forgedRejected = assert.rejects(forged);
+  await app.flushClientRequest();
+  await forgedRejected;
+  assert.equal(resolutionService.list(actor)[0]?.audit.length, 0);
+
+  const resolvePromise = app.client.sendRequest("invocation/outcome-unknown/resolve", {
+    resolutionId: records[0]!.resolutionId,
+    expectedVersion: records[0]!.version,
+    idempotencyKey: "valid-api-request",
+    resolution: { action: "abandon", reason: "人工决定停止" },
+  });
+  await app.flushClientRequest();
+  const resolved = await resolvePromise as { state: string; audit: unknown[] };
+  assert.equal(resolved.state, "abandoned");
+  assert.equal(resolved.audit.length, 1);
+});
+
+test("outcome_unknown API 使用服务端操作者权限并拒绝无权限请求", async () => {
+  const resolutionService = new OutcomeUnknownResolutionService(new OutcomeUnknownResolutionStore());
+  await resolutionService.registerFromRuntime({
+    invocationKind: "tool",
+    invocationId: "tool-invocation-api-1",
+    requestDigest: `sha256:${"c".repeat(64)}`,
+    identity: {
+      threadId: "thread-api-2",
+      turnId: "turn-api-2",
+      displayName: "写入外部系统",
+      toolName: "external_write",
+      callId: "call-api-2",
+    },
+    sideEffectRisk: "known",
+  });
+  const app = createTestAppServer({
+    outcomeUnknownResolutionService: resolutionService,
+    resolveOutcomeUnknownActor: () => ({ id: "viewer", permissions: ["invocation:view"] }),
+  });
+  await completeHandshake(app);
+  const [record] = resolutionService.list({ id: "operator", permissions: ["invocation:view"] });
+  assert.ok(record);
+  const request = app.client.sendRequest("invocation/outcome-unknown/resolve", {
+    resolutionId: record.resolutionId,
+    expectedVersion: record.version,
+    idempotencyKey: "denied-api-request",
+    resolution: { action: "abandon", reason: "无权限" },
+  });
+  const rejected = assert.rejects(request);
+  await app.flushClientRequest();
+  await rejected;
+});
 
 test("turn/start 直接 RPC 拒绝未知字段、超长输入和非法 Skill 名", async () => {
   const app = createTestAppServer();
