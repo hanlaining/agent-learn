@@ -1,0 +1,21 @@
+{
+  "schemaVersion": "gate-fixture-v1",
+  "name": "GATE-100",
+  "caseCount": 100,
+  "seed": 20260818,
+  "generatorVersion": "gate-generator-v1",
+  "categoryAllocation": {
+    "crash-recovery": 20,
+    "parent-child": 20,
+    "duplicate-delivery": 20,
+    "side-effect-safety": 20,
+    "completion-quality": 20
+  },
+  "variants": ["baseline", "no-wal", "no-recovery", "no-lease"],
+  "pricing": {
+    "currency": "USD",
+    "inputPerMillionTokens": 2,
+    "outputPerMillionTokens": 8,
+    "note": "Pinned comparison-only mock rates; not current vendor pricing."
+  }
+}
