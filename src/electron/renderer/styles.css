@@ -1277,6 +1277,43 @@ button { color: inherit; }
 
 .inspector-empty { padding: 9px 3px; color: var(--muted-text); font-size: 9px; line-height: 1.55; }
 
+.outcome-unknown-panel { display: grid; gap: 7px; margin-bottom: 8px; padding: 9px; border: 1px solid #e7c982; border-radius: 10px; background: #fffaf0; }
+.outcome-unknown-panel > header { display: flex; align-items: center; justify-content: space-between; color: #7b5411; font-size: 10px; }
+.outcome-unknown-panel > header span { display: flex; align-items: center; gap: 5px; font-weight: 700; }
+.outcome-unknown-panel > header svg { width: 13px; height: 13px; }
+.outcome-unknown-panel > header b { display: grid; min-width: 18px; height: 18px; place-items: center; border-radius: 9px; background: #f4dfad; font-size: 9px; }
+.outcome-unknown-panel > p { margin: 0; color: #755e32; font-size: 9px; line-height: 1.5; }
+.outcome-unknown-card { overflow: hidden; border: 1px solid #eadfca; border-radius: 8px; background: var(--raised-background); }
+.outcome-unknown-card[data-state="retry_authorized"], .outcome-unknown-card[data-state="external_result_recorded"] { border-color: #bdd9c2; }
+.outcome-unknown-heading { display: grid; width: 100%; grid-template-columns: minmax(0, 1fr) auto 14px; align-items: center; gap: 6px; padding: 8px; border: 0; background: transparent; color: var(--main-text); text-align: left; cursor: pointer; }
+.outcome-unknown-heading > span { display: grid; min-width: 0; gap: 2px; }
+.outcome-unknown-heading strong, .outcome-unknown-heading small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.outcome-unknown-heading strong { font-size: 10px; }
+.outcome-unknown-heading small { color: var(--muted-text); font-size: 8px; }
+.outcome-unknown-heading i { color: #8a5a12; font-size: 8px; font-style: normal; }
+.outcome-unknown-heading svg { width: 12px; height: 12px; transition: transform .16s ease; }
+.outcome-unknown-heading[aria-expanded="true"] svg { transform: rotate(90deg); }
+.outcome-unknown-details { display: grid; gap: 8px; padding: 0 8px 8px; border-top: 1px solid var(--border-color); }
+.outcome-unknown-details dl { display: grid; gap: 4px; margin: 8px 0 0; }
+.outcome-unknown-details dl > div { display: grid; grid-template-columns: 72px minmax(0, 1fr); gap: 5px; font-size: 8px; }
+.outcome-unknown-details dt { color: var(--muted-text); }
+.outcome-unknown-details dd { min-width: 0; margin: 0; overflow-wrap: anywhere; color: var(--main-text); }
+.outcome-external-result, .outcome-retry-ticket { display: grid; gap: 2px; padding: 7px; border-radius: 6px; background: #edf7ef; font-size: 8px; }
+.outcome-audit summary { color: var(--muted-text); font-size: 8px; cursor: pointer; }
+.outcome-audit > div { display: grid; gap: 2px; padding: 6px 0; border-bottom: 1px solid var(--border-color); font-size: 8px; }
+.outcome-audit > div span, .outcome-audit > div small { color: var(--muted-text); }
+.outcome-resolution-form { display: grid; gap: 7px; }
+.outcome-resolution-form > label { display: grid; gap: 3px; color: var(--muted-text); font-size: 8px; }
+.outcome-resolution-form input:not([type="checkbox"]), .outcome-resolution-form textarea { width: 100%; min-width: 0; padding: 6px; border: 1px solid var(--border-color); border-radius: 6px; outline: 0; background: var(--raised-background); color: var(--main-text); font: inherit; resize: vertical; }
+.outcome-side-effect-confirm { grid-template-columns: 14px minmax(0, 1fr) !important; align-items: start; color: #7b5411 !important; line-height: 1.45; }
+.outcome-side-effect-confirm input { margin: 1px 0 0; }
+.outcome-form-error { color: var(--negative); font-size: 8px; }
+.outcome-resolution-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 5px; }
+.outcome-resolution-actions button { min-height: 30px; padding: 5px; border: 1px solid var(--border-color); border-radius: 6px; background: var(--soft-background); color: var(--main-text); font-size: 8px; cursor: pointer; }
+.outcome-resolution-actions button:first-child { border-color: #c69a43; background: #fff5dc; }
+.outcome-resolution-actions button.danger { color: var(--negative); }
+.outcome-resolution-actions button:disabled { opacity: .4; cursor: default; }
+
 .extension-list { display: grid; }
 .extension-row {
   display: grid;

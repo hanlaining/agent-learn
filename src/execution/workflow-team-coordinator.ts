@@ -1,4 +1,5 @@
 import type { AgentRunResult } from "../agents/agent-run.js";
+import type { AgentStageCheckpoint } from "../agents/agent-runtime.js";
 import { AgentRunStore } from "../agents/agent-run-store.js";
 import { AgentRuntimeStore } from "../agents/agent-runtime-store.js";
 import type { FixedProductStage } from "../agents/fixed-software-team-coordinator.js";
@@ -24,6 +25,7 @@ export interface WorkflowTeamExecution {
   turnId: string;
   summary: string;
   toolCalls?: number;
+  invocationId?: string;
 }
 
 export interface WorkflowTeamCoordinatorOptions {
@@ -38,15 +40,35 @@ export interface WorkflowTeamCoordinatorOptions {
     attempt: number;
     allowedTools: string[];
     formatRepair: boolean;
+    jobId: string;
+    jobAttempt: number;
+    workflowVersion: string;
+    stageId: string;
+    stageAttempt: number;
   }): Promise<WorkflowTeamExecution>;
+  recoverModelExecution?(input: {
+    jobId: string;
+    jobAttempt: number;
+    workflowVersion: string;
+    stageId: string;
+    stageAttempt: number;
+  }): WorkflowTeamExecution | undefined;
+  commitRecoveredModelExecution?(invocationId: string, targetCommitKey: string): void;
   requirement(jobId: string): WorkflowRequirementContext;
   modelInfo?(profileId: TeamProfile): { model: string; reasoningEffort?: string };
   persist?: () => void | Promise<void>;
   onRunUpdated?: (runId: string) => void;
   onCompleted?: (jobId: string) => void;
+  onFailed?: (jobId: string) => void;
 }
 
 const FORMAT_CONTRACT = `只返回一个 JSON 对象，不要 Markdown：{"status":"completed|failed|blocked","summary":"简洁结论","deliverables":["交付物"],"evidence":["可验证证据"],"blockers":[],"nextStageRecommendation":"continue|retry|block|complete","contractVersion":"${STAGE_RESULT_CONTRACT_VERSION}"}`;
+
+export type WorkflowRecoveryDecision =
+  | { kind: "resume_stage"; stage: FixedProductStage }
+  | { kind: "deliver_return"; stage: FixedProductStage }
+  | { kind: "wait"; reason: "active" | "backoff" | "no_progress" }
+  | { kind: "terminal"; status: "completed" | "failed" | "partial" | "cancelled" };
 
 export class WorkflowTeamCoordinator {
   private readonly activeJobs = new Set<string>();
@@ -56,9 +78,10 @@ export class WorkflowTeamCoordinator {
     this.metrics = options.metrics ?? new RuntimeMetricsLedger();
   }
 
-  recoverPersistedCheckpoints(): number {
+  recoverPersistedCheckpoints(jobId?: string): number {
     let recovered = 0;
     for (const job of this.options.runtimeStore.listJobs()) {
+      if (jobId !== undefined && job.id !== jobId) continue;
       if (job.executionKind !== "software_product_delivery" || job.workflowVersion !== `${this.options.template.id}_${this.options.template.version}`) continue;
       const runs = this.options.runStore.listForJob(job.id);
       if (runs.length === 0 || ["completed", "failed", "partial", "cancelled"].includes(job.status)) continue;
@@ -72,13 +95,13 @@ export class WorkflowTeamCoordinator {
 
   getStage(jobId: string): FixedProductStage {
     const job = this.options.runtimeStore.getJob(jobId);
-    if (job?.status === "completed") return "completed";
-    const returns = this.options.runtimeStore.listReturns(jobId);
-    const leadReturn = returns.find((item) => item.stageId === "lead");
-    if (leadReturn?.status === "consumed") return "completed";
-    if (leadReturn !== undefined) return "lead_return_ready";
+    if (job === undefined || ["completed", "failed", "partial", "cancelled"].includes(job.status)) return "completed";
+    const returns = this.options.runtimeStore.listReturns(jobId)
+      .filter((item) => (item.jobAttempt === undefined || item.jobAttempt === job.attempt) && ["ready", "delivering"].includes(item.status));
     const qualityReturn = returns.find((item) => item.stageId === "quality" && item.jobAttempt === job?.attempt);
     if (qualityReturn !== undefined) return "quality_return_ready";
+    const leadReturn = returns.find((item) => item.stageId === "lead");
+    if (leadReturn !== undefined) return "lead_return_ready";
     const qualityTask = this.taskFor(jobId, "quality_role");
     if (qualityTask !== undefined) return "quality_ready";
     const engineeringReturn = returns.find((item) => item.stageId === "engineering" && item.jobAttempt === job?.attempt);
@@ -90,6 +113,49 @@ export class WorkflowTeamCoordinator {
     if (productReturns.some((item) => item.businessAttempt === 2)) return "second_return_ready";
     if (productReturns.length > 0) return "first_return_ready";
     return "ready_first_return";
+  }
+
+  recoveryDecision(jobId: string): WorkflowRecoveryDecision {
+    const job = this.options.runtimeStore.getJob(jobId);
+    if (job === undefined) return { kind: "terminal", status: "failed" };
+    if (["completed", "failed", "partial", "cancelled"].includes(job.status)) {
+      return { kind: "terminal", status: job.status as "completed" | "failed" | "partial" | "cancelled" };
+    }
+    if (this.activeJobs.has(jobId)) return { kind: "wait", reason: "active" };
+    const now = new Date().toISOString();
+    const pendingBackoff = this.options.runtimeStore.listReturns(jobId).some((item) =>
+      (item.jobAttempt === undefined || item.jobAttempt === job.attempt) && item.status === "ready" &&
+      item.nextAttemptAt !== undefined && item.nextAttemptAt > now);
+    if (pendingBackoff) return { kind: "wait", reason: "backoff" };
+    const stage = this.getStage(jobId);
+    if (["first_return_ready", "second_return_ready", "engineering_return_ready", "quality_return_ready", "lead_return_ready"].includes(stage)) {
+      return { kind: "deliver_return", stage };
+    }
+    if (stage === "completed") {
+      const status = this.options.runtimeStore.getJob(jobId)?.status;
+      return { kind: "terminal", status: status === "failed" || status === "partial" || status === "cancelled" ? status : "completed" };
+    }
+    return { kind: "resume_stage", stage };
+  }
+
+  canAdvanceWithoutModel(jobId: string, stage: FixedProductStage): boolean {
+    const job = this.options.runtimeStore.getJob(jobId);
+    if (job === undefined || ["completed", "failed", "partial", "cancelled"].includes(job.status)) return true;
+    if (["first_return_ready", "second_return_ready", "engineering_return_ready"].includes(stage)) return true;
+    if (stage === "quality_return_ready") {
+      const hasLeadReturn = this.options.runtimeStore.listReturns(jobId).some((item) => item.stageId === "lead" &&
+        item.jobAttempt === job.attempt && ["ready", "delivering", "consumed"].includes(item.status));
+      if (hasLeadReturn) return true;
+      return this.hasPersistedStageEvidence(jobId, "lead", job.attempt) ||
+        this.hasRecoverableModelExecution(jobId, "lead", job.attempt);
+    }
+    if (stage === "lead_return_ready") return this.hasPersistedStageEvidence(jobId, "return_god", job.attempt) ||
+      this.hasRecoverableModelExecution(jobId, "return_god", job.attempt);
+    const stageId = stage === "ready_first_return" || stage === "rework" ? "product"
+      : stage === "engineering_ready" ? "engineering"
+        : stage === "quality_ready" ? "quality" : undefined;
+    return stageId !== undefined && (this.hasPersistedStageEvidence(jobId, stageId, job.attempt, true) ||
+      this.hasRecoverableModelExecution(jobId, stageId, job.attempt));
   }
 
   async advance(jobId: string, expectedStage: FixedProductStage): Promise<{ stage: FixedProductStage; changed: boolean }> {
@@ -193,7 +259,12 @@ export class WorkflowTeamCoordinator {
 
   private async runEngineering(jobId: string): Promise<void> {
     const team = this.team(jobId); const parent = this.ensureTask(jobId, "product_role");
-    const task = this.ensureTask(jobId, "engineering_role", parent.id);
+    let task = this.ensureTask(jobId, "engineering_role", parent.id);
+    if (task.status === "rework") {
+      this.options.runtimeStore.setTaskOwnerRun(task.id, team.engineering.id, task.attempt + 1);
+      this.options.runStore.setStatus(team.engineering.id, "resuming");
+      task = this.options.runtimeStore.getTask(task.id)!;
+    }
     await this.runWorkerStage({
       jobId, stageId: "engineering", profileId: "engineering_role", runId: team.engineering.id, threadId: team.engineering.threadId,
       taskId: task.id, parentRunId: team.lead.id, attempt: task.attempt, kind: "artifact", producer: "worker",
@@ -206,9 +277,20 @@ export class WorkflowTeamCoordinator {
     const envelope = this.requireReturn(jobId, "engineering", task.attempt); const claimed = this.options.runtimeStore.claimReturn(envelope.id);
     if (claimed === undefined) throw new RuntimeFailure("return_delivery_failed", "Engineering Return is unavailable", true);
     const result = parseStageResult(claimed.result.summary);
-    if (result.status !== "completed" || result.evidence.length === 0 || result.blockers.length > 0) {
-      this.options.runtimeStore.retryReturn(envelope.id, 0);
-      throw new RuntimeFailure("stage_contract_failed", "Engineering business acceptance failed", true);
+    if (!isSuccessfulStageResult(result)) {
+      if (task.attempt < task.maxAttempts) {
+        this.options.runtimeStore.consumeReturn(envelope.id);
+        this.options.runtimeStore.setTaskStatus(task.id, "rework");
+        this.options.runStore.setStatus(team.engineering.id, "resuming");
+        this.options.runtimeStore.setJobStatus(jobId, "reviewing");
+        await this.options.persist?.();
+        return;
+      }
+      this.options.runtimeStore.failReturn(envelope.id);
+      this.options.runtimeStore.setTaskStatus(task.id, "failed");
+      this.failWorkflow(jobId, "stage_retry_exhausted", "Engineering business acceptance failed");
+      await this.options.persist?.();
+      return;
     }
     this.options.runtimeStore.consumeReturn(envelope.id);
     this.options.runtimeStore.setTaskStatus(task.id, "completed");
@@ -219,7 +301,12 @@ export class WorkflowTeamCoordinator {
 
   private async runQuality(jobId: string): Promise<void> {
     const team = this.team(jobId); const engineering = this.ensureTask(jobId, "engineering_role");
-    const task = this.ensureTask(jobId, "quality_role", engineering.id);
+    let task = this.ensureTask(jobId, "quality_role", engineering.id);
+    if (task.status === "rework") {
+      this.options.runtimeStore.setTaskOwnerRun(task.id, team.quality.id, task.attempt + 1);
+      this.options.runStore.setStatus(team.quality.id, "resuming");
+      task = this.options.runtimeStore.getTask(task.id)!;
+    }
     await this.runWorkerStage({
       jobId, stageId: "quality", profileId: "quality_role", runId: team.quality.id, threadId: team.quality.threadId,
       taskId: task.id, parentRunId: team.lead.id, attempt: task.attempt, kind: "test", producer: "reviewer",
@@ -231,52 +318,219 @@ export class WorkflowTeamCoordinator {
     const team = this.team(jobId); const task = this.ensureTask(jobId, "quality_role");
     const envelope = this.requireReturn(jobId, "quality", task.attempt); const claimed = this.options.runtimeStore.claimReturn(envelope.id);
     if (claimed === undefined) throw new RuntimeFailure("return_delivery_failed", "Quality Return is unavailable", true);
-    const result = parseStageResult(claimed.result.summary);
-    if (result.status !== "completed" || result.evidence.length === 0 || result.blockers.length > 0) {
-      this.options.runtimeStore.retryReturn(envelope.id, 0);
-      throw new RuntimeFailure("stage_contract_failed", "Quality acceptance failed", true);
+    const existingLeadReturn = this.options.runtimeStore.listReturns(jobId).find((item) => item.stageId === "lead" &&
+      item.jobAttempt === team.job.attempt && ["ready", "delivering", "consumed"].includes(item.status));
+    if (existingLeadReturn !== undefined) {
+      this.options.runtimeStore.consumeReturn(envelope.id);
+      this.options.runtimeStore.reconcileJobStatus(jobId);
+      await this.options.persist?.();
+      return;
     }
-    this.options.runtimeStore.consumeReturn(envelope.id); this.options.runtimeStore.setTaskStatus(task.id, "completed");
-    const stage = this.options.runtimeStore.beginStage(jobId, "lead", 2); const stageTemplate = this.stage("lead");
-    const leadResult = await this.executeStructured({ jobId, checkpointKey: stage.idempotencyKey, stageId: "lead", profileId: "software_team_lead", threadId: team.lead.threadId,
-      attempt: stage.stageAttempt, allowedTools: stageTemplate.allowedTools,
-      prompt: `只汇总已有 Product、Engineering、Quality 合法证据一次，不重新读取文件或执行 Worker 工作。\n\nQuality Return:\n${claimed.result.summary}` });
-    this.options.runtimeStore.setStageStatus(stage.idempotencyKey, "validating");
-    const review = this.options.runtimeStore.addEvidence({ jobId, taskId: task.id, runId: team.lead.id, kind: "review", summary: leadResult.result.summary, producer: "reviewer", verdict: "passed",
-      idempotencyKey: `${stage.idempotencyKey}:evidence`, jobAttempt: team.job.attempt, workflowVersion: team.job.workflowVersion, stageId: "lead", stageAttempt: stage.stageAttempt });
-    this.options.runtimeStore.createReturn({ jobId, rootRunId: team.root.rootRunId, parentRunId: team.root.id, childRunId: team.lead.id, taskId: task.id, sequence: 4,
-      result: { status: "completed", summary: JSON.stringify(leadResult.result), evidenceIds: [...claimed.result.evidenceIds, review.id], boardEntryIds: [] },
-      idempotencyKey: stage.idempotencyKey, jobAttempt: team.job.attempt, workflowVersion: team.job.workflowVersion, stageId: "lead", stageAttempt: stage.stageAttempt });
-    this.options.runtimeStore.setStageStatus(stage.idempotencyKey, "completed"); this.options.runtimeStore.setJobStatus(jobId, "waiting_returns"); await this.options.persist?.();
+    const result = parseStageResult(claimed.result.summary);
+    if (!isSuccessfulStageResult(result)) {
+      if (task.attempt < task.maxAttempts) {
+        this.options.runtimeStore.consumeReturn(envelope.id);
+        this.options.runtimeStore.setTaskStatus(task.id, "rework");
+        this.options.runStore.setStatus(team.quality.id, "resuming");
+        this.options.runtimeStore.setJobStatus(jobId, "reviewing");
+        await this.options.persist?.();
+        return;
+      }
+      this.options.runtimeStore.failReturn(envelope.id);
+      this.options.runtimeStore.setTaskStatus(task.id, "failed");
+      this.failWorkflow(jobId, "stage_retry_exhausted", "Quality business acceptance failed");
+      await this.options.persist?.();
+      return;
+    }
+    const savedLeadCheckpoint = this.options.runtimeStore.listStageCheckpoints(jobId)
+      .filter((item) => item.jobAttempt === team.job.attempt && item.stageId === "lead" &&
+        ["running", "validating", "completed"].includes(item.status)).at(-1);
+    const savedLeadEvidence = savedLeadCheckpoint === undefined ? undefined : this.options.runtimeStore.listEvidence(task.id)
+      .find((item) => item.idempotencyKey === `${savedLeadCheckpoint.idempotencyKey}:evidence`);
+    if (savedLeadCheckpoint !== undefined && savedLeadEvidence !== undefined) {
+      const savedLeadResult = parseStageResult(savedLeadEvidence.summary);
+      if (!isSuccessfulStageResult(savedLeadResult)) {
+        this.options.runtimeStore.failReturn(envelope.id);
+        this.failWorkflow(jobId, "stage_contract_failed", "Persisted Lead evidence is invalid");
+        await this.options.persist?.();
+        throw new RuntimeFailure("stage_contract_failed", "Persisted Lead evidence is invalid", false);
+      }
+      if (savedLeadCheckpoint.status === "running") {
+        this.options.runtimeStore.setStageStatus(savedLeadCheckpoint.idempotencyKey, "validating");
+      }
+      const review = this.options.runtimeStore.addEvidence({ jobId, taskId: task.id, runId: team.lead.id, kind: "review", summary: JSON.stringify(savedLeadResult), producer: "reviewer", verdict: "passed",
+        idempotencyKey: `${savedLeadCheckpoint.idempotencyKey}:evidence`, jobAttempt: team.job.attempt, workflowVersion: team.job.workflowVersion, stageId: "lead", stageAttempt: savedLeadCheckpoint.stageAttempt });
+      this.options.runtimeStore.createReturn({ jobId, rootRunId: team.root.rootRunId, parentRunId: team.root.id, childRunId: team.lead.id, taskId: task.id, sequence: 4,
+        result: { status: "completed", summary: JSON.stringify(savedLeadResult), evidenceIds: [...claimed.result.evidenceIds, review.id], boardEntryIds: [] },
+        idempotencyKey: savedLeadCheckpoint.idempotencyKey, jobAttempt: team.job.attempt, workflowVersion: team.job.workflowVersion, stageId: "lead", stageAttempt: savedLeadCheckpoint.stageAttempt });
+      if (savedLeadCheckpoint.status !== "completed") {
+        this.options.runtimeStore.setStageStatus(savedLeadCheckpoint.idempotencyKey, "completed");
+      }
+      this.options.runtimeStore.setTaskStatus(task.id, "completed");
+      this.options.runtimeStore.setJobStatus(jobId, "waiting_returns");
+      await this.options.persist?.();
+      this.options.runtimeStore.consumeReturn(envelope.id);
+      await this.options.persist?.();
+      return;
+    }
+    if (savedLeadCheckpoint?.status === "completed") {
+      this.options.runtimeStore.failReturn(envelope.id);
+      this.failWorkflow(jobId, "stage_contract_failed", "Completed Lead stage has no recoverable evidence");
+      await this.options.persist?.();
+      throw new RuntimeFailure("stage_contract_failed", "Completed Lead stage has no recoverable evidence", false);
+    }
+    this.options.runtimeStore.setTaskStatus(task.id, "completed");
+    const stageTemplate = this.stage("lead");
+    let stage: AgentStageCheckpoint | undefined;
+    try {
+      stage = this.options.runtimeStore.beginStage(jobId, "lead", stageTemplate.retryPolicy.maxBusinessAttempts);
+      const leadResult = await this.executeStructured({ jobId, checkpointKey: stage.idempotencyKey, stageId: "lead", profileId: "software_team_lead", threadId: team.lead.threadId,
+        attempt: stage.stageAttempt, allowedTools: stageTemplate.allowedTools,
+        prompt: `只汇总已有 Product、Engineering、Quality 合法证据一次，不重新读取文件或执行 Worker 工作。\n\nQuality Return:\n${claimed.result.summary}` });
+      if (!isSuccessfulStageResult(leadResult.result)) {
+        throw new RuntimeFailure("stage_contract_failed", "Lead business acceptance failed", true);
+      }
+      this.options.runtimeStore.setStageStatus(stage.idempotencyKey, "validating");
+      const review = this.options.runtimeStore.addEvidence({ jobId, taskId: task.id, runId: team.lead.id, kind: "review", summary: JSON.stringify(leadResult.result), producer: "reviewer", verdict: "passed",
+        idempotencyKey: `${stage.idempotencyKey}:evidence`, jobAttempt: team.job.attempt, workflowVersion: team.job.workflowVersion, stageId: "lead", stageAttempt: stage.stageAttempt });
+      this.options.runtimeStore.createReturn({ jobId, rootRunId: team.root.rootRunId, parentRunId: team.root.id, childRunId: team.lead.id, taskId: task.id, sequence: 4,
+        result: { status: "completed", summary: JSON.stringify(leadResult.result), evidenceIds: [...claimed.result.evidenceIds, review.id], boardEntryIds: [] },
+        idempotencyKey: stage.idempotencyKey, jobAttempt: team.job.attempt, workflowVersion: team.job.workflowVersion, stageId: "lead", stageAttempt: stage.stageAttempt });
+      this.options.runtimeStore.setStageStatus(stage.idempotencyKey, "completed");
+      this.options.runtimeStore.setJobStatus(jobId, "waiting_returns");
+      if (leadResult.invocationId !== undefined) {
+        this.options.commitRecoveredModelExecution?.(
+          leadResult.invocationId,
+          `${stage.idempotencyKey}:evidence`,
+        );
+      }
+      this.metrics.finish(stage);
+      // 先提交 Lead Evidence/Return/Checkpoint，再 ack Quality。
+      // 如果进程在两次持久化之间退出，下一次 acceptQuality 只补 ack，绝不重跑 Lead。
+      await this.options.persist?.();
+      this.options.runtimeStore.consumeReturn(envelope.id);
+      await this.options.persist?.();
+    } catch (error) {
+      const currentQualityReturn = this.options.runtimeStore.listReturns(jobId).find((item) => item.id === envelope.id);
+      const committedLeadReturn = this.options.runtimeStore.listReturns(jobId).find((item) => item.stageId === "lead" &&
+        item.jobAttempt === team.job.attempt && ["ready", "delivering", "consumed"].includes(item.status));
+      const currentLeadStage = stage === undefined ? undefined : this.options.runtimeStore.listStageCheckpoints(jobId)
+        .find((item) => item.idempotencyKey === stage!.idempotencyKey);
+      if (currentQualityReturn?.status === "consumed") {
+        // ack 已完成，保存失败不能把 Return 回退为 ready。
+        await this.options.persist?.();
+        throw error;
+      }
+      if (committedLeadReturn !== undefined && currentLeadStage?.status === "completed") {
+        if (currentQualityReturn?.status === "delivering") this.options.runtimeStore.retryReturn(envelope.id, 0);
+        this.options.runtimeStore.setJobStatus(jobId, "waiting_returns");
+        await this.options.persist?.();
+        throw error;
+      }
+      const code = classifyRuntimeFailure(error);
+      const terminal = stage === undefined || stage.stageAttempt >= stageTemplate.retryPolicy.maxBusinessAttempts;
+      if (stage !== undefined) {
+        this.setStageFailure(stage, terminal, code);
+        this.metrics.finish(stage, { primaryFailureCode: code });
+      }
+      if (terminal) {
+        this.options.runtimeStore.failReturn(envelope.id);
+        this.failWorkflow(jobId, code, "Lead stage failed");
+      } else {
+        this.options.runtimeStore.retryReturn(envelope.id, 0);
+        this.options.runStore.setStatus(team.lead.id, "resuming");
+        this.options.runtimeStore.setJobStatus(jobId, "waiting_returns");
+      }
+      await this.options.persist?.();
+      throw error;
+    }
   }
 
   private async deliver(jobId: string): Promise<void> {
     const team = this.team(jobId); const task = this.ensureTask(jobId, "quality_role");
-    const envelope = this.options.runtimeStore.listReturns(jobId).find((item) => item.stageId === "lead");
+    const envelope = this.options.runtimeStore.listReturns(jobId).find((item) => item.stageId === "lead" &&
+      item.jobAttempt === team.job.attempt && ["ready", "delivering"].includes(item.status));
     if (envelope === undefined) throw new RuntimeFailure("return_delivery_failed", "Lead Return is unavailable", true);
-    const claimed = this.options.runtimeStore.claimReturn(envelope.id);
-    if (claimed === undefined) throw new RuntimeFailure("return_delivery_failed", "Lead Return cannot be claimed", true);
-    const stage = this.options.runtimeStore.beginStage(jobId, "return_god", 2);
+    let stage: AgentStageCheckpoint | undefined;
     try {
-      const deliveryModel = this.options.modelInfo?.("orchestrator");
-      this.metrics.start({ jobId: team.job.id, jobAttempt: team.job.attempt, workflowVersion: team.job.workflowVersion,
-        stageId: "return_god", stageAttempt: stage.stageAttempt, ...(deliveryModel === undefined ? {} : deliveryModel) });
-      const execution = await this.options.execute({ threadId: team.job.threadId, profileId: "orchestrator", attempt: stage.stageAttempt, allowedTools: [], formatRepair: false,
-        prompt: `团队工作已经完成。只根据负责人 Return 向用户交付一次最终结果；不要重复读取文件、执行任务或再次委派。\n\n${claimed.result.summary}` });
-      this.metrics.increment(stage, "modelCalls");
-      for (let index = 0; index < (execution.toolCalls ?? 0); index += 1) this.metrics.increment(stage, "toolCalls");
-      this.options.runtimeStore.setStageStatus(stage.idempotencyKey, "validating");
+      const claimed = this.options.runtimeStore.claimReturn(envelope.id);
+      if (claimed === undefined) throw new RuntimeFailure("return_delivery_failed", "Lead Return cannot be claimed", true);
+      stage = this.options.runtimeStore.beginStage(jobId, "return_god", 2);
+      const deliveryEvidenceKey = `${stage.idempotencyKey}:evidence`;
+      const savedDeliveryEvidence = this.options.runtimeStore.listEvidence(task.id)
+        .find((item) => item.idempotencyKey === deliveryEvidenceKey);
+      let finalSummary: string;
+      if (savedDeliveryEvidence !== undefined) {
+        finalSummary = savedDeliveryEvidence.summary;
+      } else {
+        if (stage.status === "completed") {
+          throw new RuntimeFailure("stage_contract_failed", "Completed final delivery has no recoverable evidence", false);
+        }
+        const deliveryModel = this.options.modelInfo?.("orchestrator");
+        this.metrics.start({ jobId: team.job.id, jobAttempt: team.job.attempt, workflowVersion: team.job.workflowVersion,
+          stageId: "return_god", stageAttempt: stage.stageAttempt, ...(deliveryModel === undefined ? {} : deliveryModel) });
+        const execution = this.options.recoverModelExecution?.({
+          jobId: team.job.id, jobAttempt: team.job.attempt, workflowVersion: team.job.workflowVersion,
+          stageId: "return_god", stageAttempt: stage.stageAttempt,
+        }) ?? await this.options.execute({ threadId: team.job.threadId, profileId: "orchestrator", attempt: stage.stageAttempt, allowedTools: [], formatRepair: false,
+          jobId: team.job.id, jobAttempt: team.job.attempt, workflowVersion: team.job.workflowVersion, stageId: "return_god", stageAttempt: stage.stageAttempt,
+          prompt: `团队工作已经完成。只根据负责人 Return 向用户交付一次最终结果；不要重复读取文件、执行任务或再次委派。\n\n${claimed.result.summary}` });
+        if (execution.invocationId === undefined) {
+          this.metrics.increment(stage, "modelCalls");
+          for (let index = 0; index < (execution.toolCalls ?? 0); index += 1) this.metrics.increment(stage, "toolCalls");
+        }
+        finalSummary = execution.summary;
+        if (stage.status === "running") this.options.runtimeStore.setStageStatus(stage.idempotencyKey, "validating");
+        this.options.runtimeStore.addEvidence({ jobId, taskId: task.id, runId: team.root.id, kind: "summary", summary: finalSummary,
+          producer: "runtime", verdict: "supported", idempotencyKey: deliveryEvidenceKey, jobAttempt: team.job.attempt,
+          workflowVersion: team.job.workflowVersion, stageId: "return_god", stageAttempt: stage.stageAttempt });
+        if (execution.invocationId !== undefined) {
+          this.options.commitRecoveredModelExecution?.(execution.invocationId, deliveryEvidenceKey);
+        }
+        // 先持久化最终模型结果；后续 ack/终态保存失败时可只补提交，不重跑模型。
+        await this.options.persist?.();
+      }
       this.options.runtimeStore.consumeReturn(envelope.id);
       const result: AgentRunResult = { runId: team.lead.id, taskId: task.id, status: "completed", summary: claimed.result.summary };
       this.options.runStore.complete(team.lead.id, result);
-      this.options.runStore.complete(team.root.id, { ...result, runId: team.root.id, summary: execution.summary });
-      this.options.runtimeStore.setStageStatus(stage.idempotencyKey, "completed"); this.options.runtimeStore.setJobStatus(jobId, "completed");
+      this.options.runStore.complete(team.root.id, { ...result, runId: team.root.id, summary: finalSummary });
+      const currentStage = this.options.runtimeStore.listStageCheckpoints(jobId).find((item) => item.idempotencyKey === stage!.idempotencyKey);
+      if (currentStage?.status !== "completed") this.options.runtimeStore.setStageStatus(stage.idempotencyKey, "completed");
+      this.options.runtimeStore.setJobStatus(jobId, "completed");
       this.metrics.finish(stage, { terminalStates: { job: "completed", requirement: "completed", task: "completed", agentRun: "completed", return: "consumed" } });
       this.options.onCompleted?.(jobId); this.notify(team.root.id, team.lead.id); await this.options.persist?.();
     } catch (error) {
-      this.options.runtimeStore.retryReturn(envelope.id, 0);
-      this.options.runtimeStore.setStageStatus(stage.idempotencyKey, stage.stageAttempt >= 2 ? "failed_terminal" : "failed_retryable", classifyRuntimeFailure(error));
-      this.metrics.finish(stage, { primaryFailureCode: classifyRuntimeFailure(error) }); await this.options.persist?.(); throw error;
+      const currentReturn = this.options.runtimeStore.listReturns(jobId).find((item) => item.id === envelope.id);
+      const currentStage = stage === undefined ? undefined : this.options.runtimeStore.listStageCheckpoints(jobId)
+        .find((item) => item.idempotencyKey === stage!.idempotencyKey);
+      const savedDeliveryEvidence = stage === undefined ? undefined : this.options.runtimeStore.listEvidence(task.id)
+        .find((item) => item.idempotencyKey === `${stage!.idempotencyKey}:evidence`);
+      if (currentReturn?.status === "consumed" && currentStage?.status === "completed" &&
+        this.options.runtimeStore.getJob(jobId)?.status === "completed") {
+        await this.options.persist?.();
+        throw error;
+      }
+      if (savedDeliveryEvidence !== undefined && currentStage !== undefined && ["validating", "completed"].includes(currentStage.status)) {
+        if (currentReturn?.status === "delivering") this.options.runtimeStore.retryReturn(envelope.id, 0);
+        this.options.runtimeStore.setJobStatus(jobId, "waiting_returns");
+        await this.options.persist?.();
+        throw error;
+      }
+      const code = classifyRuntimeFailure(error);
+      const terminal = stage === undefined ||
+        (error instanceof RuntimeFailure && !error.retryable) || stage.stageAttempt >= 2;
+      if (stage !== undefined) {
+        this.setStageFailure(stage, terminal, code);
+        this.metrics.finish(stage, { primaryFailureCode: code });
+      }
+      if (terminal) {
+        this.options.runtimeStore.failReturn(envelope.id);
+        this.failWorkflow(jobId, code, "Final delivery failed");
+      } else {
+        this.options.runtimeStore.retryReturn(envelope.id, 0);
+        this.options.runtimeStore.setJobStatus(jobId, "waiting_returns");
+      }
+      await this.options.persist?.(); throw error;
     }
   }
 
@@ -285,17 +539,23 @@ export class WorkflowTeamCoordinator {
     const checkpoint = this.options.runtimeStore.beginStage(input.jobId, input.stageId, template.retryPolicy.maxBusinessAttempts, input.attempt > 1);
     const evidenceKey = `${checkpoint.idempotencyKey}:evidence`;
     const existingEvidence = this.options.runtimeStore.listEvidence(input.taskId).find((item) => item.idempotencyKey === evidenceKey);
+    if (checkpoint.status === "completed" && existingEvidence === undefined) {
+      this.options.runtimeStore.setTaskStatus(input.taskId, "failed");
+      this.failWorkflow(input.jobId, "stage_contract_failed", `Completed ${input.stageId} stage has no recoverable evidence`);
+      await this.options.persist?.();
+      throw new RuntimeFailure("stage_contract_failed", `Completed ${input.stageId} stage has no recoverable evidence`, false);
+    }
     try {
       this.options.runtimeStore.setTaskStatus(input.taskId, "running"); this.options.runStore.setStatus(input.runId, "running"); await this.options.persist?.();
-      let result: StageResult; let turnId: string;
+      let result: StageResult; let turnId: string; let recoveredInvocationId: string | undefined;
       if (existingEvidence !== undefined) {
         result = parseStageResult(existingEvidence.summary); turnId = this.options.runStore.get(input.runId)?.turnId ?? input.threadId;
       } else {
         const execution = await this.executeStructured({ jobId: input.jobId, checkpointKey: checkpoint.idempotencyKey, stageId: input.stageId, profileId: input.profileId,
           threadId: input.threadId, attempt: checkpoint.stageAttempt, allowedTools: template.allowedTools, prompt: input.prompt });
-        result = execution.result; turnId = execution.turnId;
+        result = execution.result; turnId = execution.turnId; recoveredInvocationId = execution.invocationId;
       }
-      this.options.runtimeStore.setStageStatus(checkpoint.idempotencyKey, "validating");
+      if (checkpoint.status === "running") this.options.runtimeStore.setStageStatus(checkpoint.idempotencyKey, "validating");
       this.options.runStore.rebindAttempt(input.runId, turnId, input.attempt);
       const evidence = this.options.runtimeStore.addEvidence({ jobId: input.jobId, taskId: input.taskId, runId: input.runId, kind: input.kind,
         summary: JSON.stringify(result), producer: input.producer, verdict: result.status === "completed" ? "supported" : "failed",
@@ -306,7 +566,13 @@ export class WorkflowTeamCoordinator {
         result: { status: result.status === "completed" ? "completed" : "failed", summary: JSON.stringify(result), evidenceIds: [evidence.id], boardEntryIds: [] },
         idempotencyKey: checkpoint.idempotencyKey, jobAttempt: team.job.attempt, workflowVersion: team.job.workflowVersion, stageId: input.stageId,
         stageAttempt: checkpoint.stageAttempt, businessAttempt: input.attempt });
-      this.options.runtimeStore.setStageStatus(checkpoint.idempotencyKey, "completed"); this.options.runtimeStore.setJobStatus(input.jobId, "waiting_returns");
+      const currentCheckpoint = this.options.runtimeStore.listStageCheckpoints(input.jobId)
+        .find((item) => item.idempotencyKey === checkpoint.idempotencyKey);
+      if (currentCheckpoint?.status !== "completed") this.options.runtimeStore.setStageStatus(checkpoint.idempotencyKey, "completed");
+      this.options.runtimeStore.setJobStatus(input.jobId, "waiting_returns");
+      if (recoveredInvocationId !== undefined) {
+        this.options.commitRecoveredModelExecution?.(recoveredInvocationId, evidenceKey);
+      }
       this.metrics.finish(checkpoint); this.notify(input.runId); await this.options.persist?.();
     } catch (error) {
       const code = classifyRuntimeFailure(error); const terminal = checkpoint.stageAttempt >= template.retryPolicy.maxBusinessAttempts;
@@ -322,25 +588,34 @@ export class WorkflowTeamCoordinator {
     }
   }
 
-  private async executeStructured(input: { jobId: string; checkpointKey: string; stageId: string; profileId: TeamProfile; threadId: string; prompt: string; attempt: number; allowedTools: string[] }): Promise<{ result: StageResult; turnId: string }> {
+  private async executeStructured(input: { jobId: string; checkpointKey: string; stageId: string; profileId: TeamProfile; threadId: string; prompt: string; attempt: number; allowedTools: string[] }): Promise<{ result: StageResult; turnId: string; invocationId?: string }> {
     const job = this.options.runtimeStore.getJob(input.jobId)!;
     const checkpoint = this.options.runtimeStore.listStageCheckpoints(input.jobId).find((item) => item.idempotencyKey === input.checkpointKey)!;
     const modelInfo = this.options.modelInfo?.(input.profileId);
     this.metrics.start({ jobId: job.id, jobAttempt: job.attempt, workflowVersion: job.workflowVersion,
       stageId: input.stageId, stageAttempt: checkpoint.stageAttempt, ...(modelInfo === undefined ? {} : modelInfo) });
-    const first = await this.options.execute({ threadId: input.threadId, profileId: input.profileId, prompt: `${input.prompt}\n\n${FORMAT_CONTRACT}`, attempt: input.attempt, allowedTools: input.allowedTools, formatRepair: false });
-    this.metrics.increment(checkpoint, "modelCalls");
-    for (let index = 0; index < (first.toolCalls ?? 0); index += 1) this.metrics.increment(checkpoint, "toolCalls");
+    const first = this.options.recoverModelExecution?.({
+      jobId: job.id, jobAttempt: job.attempt, workflowVersion: job.workflowVersion,
+      stageId: input.stageId, stageAttempt: checkpoint.stageAttempt,
+    }) ?? await this.options.execute({ threadId: input.threadId, profileId: input.profileId, prompt: `${input.prompt}\n\n${FORMAT_CONTRACT}`, attempt: input.attempt, allowedTools: input.allowedTools, formatRepair: false,
+      jobId: job.id, jobAttempt: job.attempt, workflowVersion: job.workflowVersion, stageId: input.stageId, stageAttempt: checkpoint.stageAttempt });
+    if (first.invocationId === undefined) {
+      this.metrics.increment(checkpoint, "modelCalls");
+      for (let index = 0; index < (first.toolCalls ?? 0); index += 1) this.metrics.increment(checkpoint, "toolCalls");
+    }
     let lastTurnId = first.turnId;
+    let recoveredInvocationId = first.invocationId;
     const parsed = await parseStageResultWithRepair(first.summary, async (invalid) => {
       const repair = await this.options.execute({ threadId: input.threadId, profileId: input.profileId,
         prompt: `仅修复下面输出的 JSON 格式以满足合同，不改变业务结论。tools=[]。\n\n${FORMAT_CONTRACT}\n\n无效输出：\n${invalid}`,
-        attempt: input.attempt, allowedTools: [], formatRepair: true });
-      lastTurnId = repair.turnId; this.metrics.increment(checkpoint, "modelCalls");
+        attempt: input.attempt, allowedTools: [], formatRepair: true,
+        jobId: job.id, jobAttempt: job.attempt, workflowVersion: job.workflowVersion, stageId: input.stageId, stageAttempt: checkpoint.stageAttempt });
+      lastTurnId = repair.turnId; recoveredInvocationId = repair.invocationId; this.metrics.increment(checkpoint, "modelCalls");
       for (let index = 0; index < (repair.toolCalls ?? 0); index += 1) this.metrics.increment(checkpoint, "toolCalls");
       return repair.summary;
     });
-    return { result: parsed.result, turnId: lastTurnId };
+    return { result: parsed.result, turnId: lastTurnId,
+      ...(recoveredInvocationId === undefined ? {} : { invocationId: recoveredInvocationId }) };
   }
 
   private stage(id: string) {
@@ -350,10 +625,58 @@ export class WorkflowTeamCoordinator {
   }
 
   private requireReturn(jobId: string, stageId: string, attempt: number) {
-    const item = this.options.runtimeStore.listReturns(jobId).find((candidate) => candidate.stageId === stageId && candidate.businessAttempt === attempt);
+    const job = this.options.runtimeStore.getJob(jobId);
+    const item = this.options.runtimeStore.listReturns(jobId).find((candidate) => candidate.stageId === stageId &&
+      candidate.businessAttempt === attempt && candidate.jobAttempt === job?.attempt && ["ready", "delivering"].includes(candidate.status));
     if (item === undefined) throw new RuntimeFailure("return_delivery_failed", `${stageId} Return is unavailable`, true);
     return item;
   }
 
+  private setStageFailure(checkpoint: AgentStageCheckpoint, terminal: boolean, failureCode: string): void {
+    const current = this.options.runtimeStore.listStageCheckpoints(checkpoint.jobId)
+      .find((item) => item.idempotencyKey === checkpoint.idempotencyKey);
+    if (current === undefined || !["running", "validating"].includes(current.status)) return;
+    this.options.runtimeStore.setStageStatus(checkpoint.idempotencyKey, terminal ? "failed_terminal" : "failed_retryable", failureCode);
+  }
+
+  private hasPersistedStageEvidence(jobId: string, stageId: string, jobAttempt: number, requireCompleted = false): boolean {
+    const checkpoint = this.options.runtimeStore.listStageCheckpoints(jobId)
+      .filter((item) => item.jobAttempt === jobAttempt && item.stageId === stageId &&
+        (!requireCompleted || item.status === "completed")).at(-1);
+    if (checkpoint === undefined) return false;
+    return this.options.runtimeStore.listTasks(jobId).some((task) =>
+      this.options.runtimeStore.listEvidence(task.id).some((item) => item.idempotencyKey === `${checkpoint.idempotencyKey}:evidence`));
+  }
+
+  private hasRecoverableModelExecution(jobId: string, stageId: string, jobAttempt: number): boolean {
+    const job = this.options.runtimeStore.getJob(jobId);
+    const checkpoint = this.options.runtimeStore.listStageCheckpoints(jobId)
+      .filter((item) => item.jobAttempt === jobAttempt && item.stageId === stageId)
+      .at(-1);
+    if (job === undefined || checkpoint === undefined) return false;
+    return this.options.recoverModelExecution?.({
+      jobId,
+      jobAttempt,
+      workflowVersion: job.workflowVersion,
+      stageId,
+      stageAttempt: checkpoint.stageAttempt,
+    }) !== undefined;
+  }
+
+  private failWorkflow(jobId: string, failureCode: string, summary: string): void {
+    const alreadyTerminal = ["failed", "cancelled"].includes(this.options.runtimeStore.getJob(jobId)?.status ?? "");
+    this.options.runtimeStore.failJob(jobId, "failed", failureCode);
+    this.options.runtimeStore.closeActiveTasks(jobId, "failed");
+    const closed = this.options.runStore.closeActiveForJob(jobId, "failed", summary, failureCode);
+    if (!alreadyTerminal) this.options.onFailed?.(jobId);
+    this.notify(...closed.map((run) => run.id));
+  }
+
   private notify(...runIds: string[]): void { for (const runId of runIds) this.options.onRunUpdated?.(runId); }
+}
+
+function isSuccessfulStageResult(result: StageResult): boolean {
+  return result.status === "completed" && result.deliverables.length > 0 &&
+    result.evidence.length > 0 && result.blockers.length === 0 &&
+    !["retry", "block"].includes(result.nextStageRecommendation);
 }

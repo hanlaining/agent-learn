@@ -32,6 +32,8 @@ import type {
   DesktopEvent,
   DesktopMessage,
   DesktopMessageInput,
+  DesktopOutcomeUnknownResolution,
+  DesktopResolveOutcomeUnknownInput,
   DesktopSendResult,
   DesktopSnapshot,
   DesktopAgentConfig,
@@ -69,6 +71,8 @@ export interface DesktopRuntimeClient {
   listRuntimeSessions(): Promise<Array<{
     threadId: string; turnState: DesktopTurnState; session: RuntimeSession;
   }>>;
+  listOutcomeUnknown?(threadId?: string): Promise<DesktopOutcomeUnknownResolution[]>;
+  resolveOutcomeUnknown?(input: DesktopResolveOutcomeUnknownInput): Promise<DesktopOutcomeUnknownResolution>;
   setRuntimeSession(threadId: string, turnState: DesktopTurnState, session: RuntimeSession): Promise<void>;
   cancelTurn(turnId: string): Promise<TurnCancelResult>;
   onAgentEvent(listener: (event: AgentEvent) => void): () => void;
@@ -203,6 +207,7 @@ export class DesktopController {
       : this.runsByThread.get(this.activeThreadId);
     const agentRuntime = this.activeThreadId === undefined ? undefined : await this.runtime.getAgentRuntime?.(this.activeThreadId);
     const requirement = this.activeThreadId === undefined ? undefined : await this.runtime.getRequirement?.(this.activeThreadId);
+    const outcomeUnknownInvocations = await this.runtime.listOutcomeUnknown?.(this.activeThreadId) ?? [];
 
     return {
       threads: sorted,
@@ -233,10 +238,18 @@ export class DesktopController {
       trash: trashThreads.map((thread) => ({ id: thread.id, title: thread.title ?? "未命名 Chat", deletedAt: thread.deletedAt!, trashExpiresAt: thread.trashExpiresAt!, ...(thread.deleteBatchId === undefined ? {} : { deleteBatchId: thread.deleteBatchId }) })),
       ...(agentRuntime === undefined ? {} : { agentRuntime: agentRuntime as import("./desktop-types.js").DesktopAgentRuntimeView }),
       ...(requirement === undefined ? {} : { requirement }),
+      outcomeUnknownInvocations,
       ...(activeRun === undefined
         ? {}
         : { runtimeSession: cloneRuntimeSession(activeRun.session) }),
     };
+  }
+
+  async resolveOutcomeUnknown(input: DesktopResolveOutcomeUnknownInput): Promise<DesktopOutcomeUnknownResolution> {
+    if (this.runtime.resolveOutcomeUnknown === undefined) {
+      throw new Error("Outcome-unknown resolution is unavailable");
+    }
+    return this.runtime.resolveOutcomeUnknown(input);
   }
 
   async createThread(): Promise<DesktopSnapshot> {
