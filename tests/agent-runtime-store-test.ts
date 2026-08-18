@@ -103,6 +103,32 @@ test("Return Outbox 首次失败退避、重复创建幂等、重启恢复且仅
   assert.equal(pending.status, "ready"); assert.ok(restored.claimReturn(pending.id)); assert.equal(restored.consumeReturn(pending.id), true); assert.equal(restored.consumeReturn(pending.id), false);
 });
 
+test("Return 快照存在 receipt 时即使遗留 delivering 也按 consumed 恢复", () => {
+  const { store, job, task } = fixture();
+  const child = task("receipt-wins");
+  const envelope = store.createReturn({
+    jobId: job.id,
+    rootRunId: "run-root",
+    parentRunId: "run-root",
+    childRunId: "run-child",
+    taskId: child.id,
+    sequence: 1,
+    result: { status: "completed", summary: "done", evidenceIds: [], boardEntryIds: [] },
+    idempotencyKey: `${job.id}:receipt-wins`,
+  });
+  store.claimReturn(envelope.id);
+  store.consumeReturn(envelope.id);
+  const snapshot = store.exportSnapshot();
+  snapshot.returns[0]!.status = "delivering";
+  delete snapshot.returns[0]!.consumedAt;
+
+  const restored = AgentRuntimeStore.fromSnapshot(snapshot);
+
+  assert.equal(restored.listReturns(job.id)[0]?.status, "consumed");
+  assert.equal(restored.claimReturn(envelope.id), undefined);
+  assert.equal(restored.recoverInterruptedWork().pendingReturns.length, 0);
+});
+
 test("父 continuation 首次失败自动重试，成功持久化后才 Ack", async () => {
   const { store, job, task } = fixture(); const child = task("child");
   const envelope = store.createReturn({ jobId: job.id, rootRunId: "run-root", parentRunId: "run-root", childRunId: "run-child", taskId: child.id, sequence: 1, result: { status: "completed", summary: "done", evidenceIds: [], boardEntryIds: [] }, idempotencyKey: `${job.id}:run-child` });
