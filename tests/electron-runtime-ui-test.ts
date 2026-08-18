@@ -590,6 +590,13 @@ test("固定软件团队 UI 展示 God、负责人、三角色和真实 Thread �
   assert.match(source, /← 返回 God/);
 });
 
+test("工作区标题与真实 Agent 上下文在会话滚动时保持固定", () => {
+  const styles = readFileSync(resolve("src/electron/renderer/styles.css"), "utf8");
+  assert.match(styles, /\.workspace-header \{[\s\S]*?position: sticky;[\s\S]*?z-index: 5;[\s\S]*?top: 0;[\s\S]*?background: var\(--app-background\);/);
+  assert.match(styles, /\.agent-thread-context \{[\s\S]*?position: sticky;[\s\S]*?z-index: 4;[\s\S]*?top: 0;[\s\S]*?backdrop-filter: blur\(12px\);/);
+  assert.match(styles, /\.conversation-scroll \{[\s\S]*?overflow: auto;/);
+});
+
 test("产品双轮 Return 使用受控阶段按钮且返工状态不标红", () => {
   const appSource = readFileSync(resolve("src/electron/renderer/App.tsx"), "utf8");
   const cssSource = readFileSync(resolve("src/electron/renderer/styles.css"), "utf8");
