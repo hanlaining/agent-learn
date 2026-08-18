@@ -50,6 +50,8 @@ import type {
 } from "../runtime-status.js";
 import type {
   DesktopEvent,
+  DesktopOutcomeUnknownResolution,
+  DesktopResolveOutcomeUnknownInput,
   DesktopPermissionRequest,
   DesktopThreadSummary,
 } from "../desktop-types.js";
@@ -1169,6 +1171,18 @@ export function App() {
             {inspectorTab === "activity" && (
               <div className="inspector-list inspector-agent-runtime">
                 <div className="inspector-summary"><Activity />当前 Turn · {formatThreadState(ui.snapshot?.turnState ?? "idle")} · {activeAgentCount} Agents</div>
+                <OutcomeUnknownPanel
+                  records={ui.snapshot?.outcomeUnknownInvocations ?? []}
+                  resolve={async (input) => {
+                    dispatch({ type: "clear-error" });
+                    try {
+                      const record = await window.godAgent.desktop.resolveOutcomeUnknown(input);
+                      dispatch({ type: "outcome-unknown-updated", record });
+                    } catch (error) {
+                      dispatch({ type: "error", message: readError(error) });
+                    }
+                  }}
+                />
                 {(ui.snapshot?.agentRuns.length ?? 0) > 0 && (
                   <AgentFlowProgress
                     runs={ui.snapshot!.agentRuns}
@@ -1254,6 +1268,153 @@ export function App() {
 }
 
 type AgentFlowStepState = "done" | "active" | "waiting" | "rework";
+
+function OutcomeUnknownPanel({ records, resolve }: {
+  records: DesktopOutcomeUnknownResolution[];
+  resolve: (input: DesktopResolveOutcomeUnknownInput) => Promise<void>;
+}) {
+  const [selectedId, setSelectedId] = useState<string>();
+  const [reason, setReason] = useState("");
+  const [externalSummary, setExternalSummary] = useState("");
+  const [externalJson, setExternalJson] = useState("{}");
+  const [toolSideEffectConfirmed, setToolSideEffectConfirmed] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [formError, setFormError] = useState<string>();
+  if (records.length === 0) return null;
+
+  async function submit(
+    record: DesktopOutcomeUnknownResolution,
+    action: DesktopResolveOutcomeUnknownInput["resolution"]["action"],
+  ) {
+    if (reason.trim().length === 0) {
+      setFormError("请填写处置原因，便于审计。");
+      return;
+    }
+    let resolution: DesktopResolveOutcomeUnknownInput["resolution"];
+    if (action === "record_external_result") {
+      if (externalSummary.trim().length === 0) {
+        setFormError("请填写外部结果摘要。");
+        return;
+      }
+      try {
+        resolution = {
+          action,
+          reason,
+          externalResult: { summary: externalSummary, value: JSON.parse(externalJson) as unknown },
+        };
+      } catch {
+        setFormError("外部结果详情必须是有效 JSON。");
+        return;
+      }
+    } else if (action === "confirm_not_executed_retry") {
+      resolution = { action, reason, ...(toolSideEffectConfirmed ? { toolSideEffectConfirmed: true } : {}) };
+    } else {
+      resolution = { action, reason };
+    }
+    setFormError(undefined);
+    setBusy(true);
+    try {
+      await resolve({
+        resolutionId: record.resolutionId,
+        expectedVersion: record.version,
+        idempotencyKey: `desktop:${record.resolutionId}:${record.version}:${action}`,
+        resolution,
+      });
+      setSelectedId(undefined);
+      setReason("");
+      setExternalSummary("");
+      setExternalJson("{}");
+      setToolSideEffectConfirmed(false);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <section className="outcome-unknown-panel" aria-label="结果未知调用处置">
+      <header>
+        <span><Shield />结果未知调用</span>
+        <b>{records.filter((record) => record.state === "outcome_unknown" || record.state === "manual_required").length}</b>
+      </header>
+      <p>默认不会自动重放。身份与请求摘要来自 Runtime，只读且不可修改。</p>
+      {records.map((record) => {
+        const actionable = record.state === "outcome_unknown" || record.state === "manual_required";
+        const expanded = selectedId === record.resolutionId;
+        return (
+          <article className="outcome-unknown-card" data-state={record.state} key={record.resolutionId}>
+            <button type="button" className="outcome-unknown-heading" aria-expanded={expanded} onClick={() => {
+              setSelectedId(expanded ? undefined : record.resolutionId);
+              setFormError(undefined);
+            }}>
+              <span><strong>{record.identity.displayName}</strong><small>{record.invocationKind === "tool" ? `Tool · ${record.identity.toolName}` : `Model · ${record.identity.model ?? record.identity.provider ?? "未知模型"}`}</small></span>
+              <i>{formatOutcomeUnknownState(record.state)}</i>
+              <ChevronRight />
+            </button>
+            {expanded && (
+              <div className="outcome-unknown-details">
+                <dl>
+                  <div><dt>Invocation</dt><dd>{record.invocationId}</dd></div>
+                  <div><dt>请求摘要</dt><dd title={record.requestDigest}>{record.requestDigest.slice(0, 23)}…</dd></div>
+                  <div><dt>Chat / Turn</dt><dd>{record.identity.threadId} / {record.identity.turnId}</dd></div>
+                  <div><dt>副作用风险</dt><dd>{formatSideEffectRisk(record.sideEffectRisk)}</dd></div>
+                  <div><dt>版本</dt><dd>v{record.version}</dd></div>
+                </dl>
+                {record.externalResult !== undefined && <div className="outcome-external-result"><strong>已录入外部结果</strong><span>{record.externalResult.summary}</span></div>}
+                {record.retryTicket !== undefined && <div className="outcome-retry-ticket"><strong>已授权重试</strong><span>票据 {record.retryTicket.id} · 不会自动重放</span></div>}
+                {record.audit.length > 0 && (
+                  <details className="outcome-audit">
+                    <summary>审计记录（{record.audit.length}）</summary>
+                    {record.audit.map((audit) => <div key={audit.id}><strong>{formatOutcomeAction(audit.action)}</strong><span>{audit.actorId} · {new Date(audit.occurredAt).toLocaleString()}</span><small>{audit.reason}</small></div>)}
+                  </details>
+                )}
+                {actionable && (
+                  <div className="outcome-resolution-form">
+                    <label>处置原因<input value={reason} maxLength={2_000} onChange={(event) => setReason(event.target.value)} placeholder="写明外部核对依据" /></label>
+                    <label>外部结果摘要<input value={externalSummary} maxLength={2_000} onChange={(event) => setExternalSummary(event.target.value)} placeholder="仅录入结果时填写" /></label>
+                    <label>外部结果详情（JSON）<textarea value={externalJson} onChange={(event) => setExternalJson(event.target.value)} rows={3} /></label>
+                    {record.invocationKind === "tool" && record.sideEffectRisk !== "none" && (
+                      <label className="outcome-side-effect-confirm"><input type="checkbox" checked={toolSideEffectConfirmed} onChange={(event) => setToolSideEffectConfirmed(event.target.checked)} />我已从外部系统确认该 Tool 的副作用没有发生</label>
+                    )}
+                    {formError !== undefined && <small className="outcome-form-error">{formError}</small>}
+                    <div className="outcome-resolution-actions">
+                      <button type="button" disabled={busy} onClick={() => void submit(record, "confirm_not_executed_retry")}>确认未执行后重试</button>
+                      <button type="button" disabled={busy} onClick={() => void submit(record, "record_external_result")}>录入外部结果并提交</button>
+                      <button type="button" disabled={busy || record.state === "manual_required"} onClick={() => void submit(record, "mark_manual_required")}>需人工处理</button>
+                      <button type="button" className="danger" disabled={busy} onClick={() => void submit(record, "abandon")}>放弃</button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+          </article>
+        );
+      })}
+    </section>
+  );
+}
+
+function formatOutcomeUnknownState(state: DesktopOutcomeUnknownResolution["state"]): string {
+  return ({
+    outcome_unknown: "等待处置",
+    retry_authorized: "已授权重试",
+    external_result_recorded: "已录入结果",
+    manual_required: "需人工处理",
+    abandoned: "已放弃",
+  })[state];
+}
+
+function formatSideEffectRisk(risk: DesktopOutcomeUnknownResolution["sideEffectRisk"]): string {
+  return risk === "none" ? "无" : risk === "known" ? "已知副作用" : "可能有副作用";
+}
+
+function formatOutcomeAction(action: DesktopOutcomeUnknownResolution["audit"][number]["action"]): string {
+  return ({
+    confirm_not_executed_retry: "确认未执行并授权重试",
+    record_external_result: "录入外部结果",
+    mark_manual_required: "标记人工处理",
+    abandon: "放弃",
+  })[action];
+}
 
 function AgentFlowProgress({ runs, runtime, requirement, activeAgentThreadId, openAgent, advance }: {
   runs: import("../desktop-types.js").DesktopAgentRun[];

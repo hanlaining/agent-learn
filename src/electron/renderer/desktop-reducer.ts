@@ -1,6 +1,7 @@
 import type {
   DesktopActivity,
   DesktopEvent,
+  DesktopOutcomeUnknownResolution,
   DesktopSnapshot,
 } from "../desktop-types.js";
 import type {
@@ -19,6 +20,7 @@ export interface DesktopUiState {
 export type DesktopUiAction =
   | { type: "snapshot"; snapshot: DesktopSnapshot }
   | { type: "event"; event: DesktopEvent }
+  | { type: "outcome-unknown-updated"; record: DesktopOutcomeUnknownResolution }
   | { type: "error"; message: string }
   | { type: "clear-error" };
 
@@ -58,6 +60,18 @@ export function desktopReducer(
 
   if (state.snapshot === undefined) {
     return state;
+  }
+
+  if (action.type === "outcome-unknown-updated") {
+    const current = state.snapshot.outcomeUnknownInvocations ?? [];
+    const index = current.findIndex((record) => record.resolutionId === action.record.resolutionId);
+    const outcomeUnknownInvocations = [...current];
+    if (index === -1) outcomeUnknownInvocations.push(action.record);
+    else outcomeUnknownInvocations[index] = action.record;
+    return {
+      ...state,
+      snapshot: { ...state.snapshot, outcomeUnknownInvocations },
+    };
   }
 
   const event = action.event;

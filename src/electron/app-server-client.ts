@@ -45,8 +45,11 @@ import {
   type RuntimeStatus,
 } from "./runtime-status.js";
 import {
+  isDesktopOutcomeUnknownResolution,
   isDesktopWorkspaceSearchResult,
   type DesktopMessageInput,
+  type DesktopOutcomeUnknownResolution,
+  type DesktopResolveOutcomeUnknownInput,
   type DesktopWorkspaceSearchResult,
 } from "./desktop-types.js";
 
@@ -204,6 +207,25 @@ export class AppServerClient {
     const value = await this.sendRequest("workspace/search-files", { query });
     if (!isDesktopWorkspaceSearchResult(value)) {
       throw new Error("Invalid workspace/search-files response");
+    }
+    return value;
+  }
+
+  async listOutcomeUnknown(threadId?: string): Promise<DesktopOutcomeUnknownResolution[]> {
+    const value = await this.sendRequest(
+      "invocation/outcome-unknown/list",
+      threadId === undefined ? {} : { threadId },
+    );
+    if (!Array.isArray(value) || !value.every(isDesktopOutcomeUnknownResolution)) {
+      throw new Error("Invalid invocation/outcome-unknown/list response");
+    }
+    return value;
+  }
+
+  async resolveOutcomeUnknown(input: DesktopResolveOutcomeUnknownInput): Promise<DesktopOutcomeUnknownResolution> {
+    const value = await this.sendRequest("invocation/outcome-unknown/resolve", input);
+    if (!isDesktopOutcomeUnknownResolution(value)) {
+      throw new Error("Invalid invocation/outcome-unknown/resolve response");
     }
     return value;
   }

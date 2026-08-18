@@ -11,7 +11,11 @@ import {
   DesktopController,
   type DesktopRuntimeClient,
 } from "../src/electron/desktop-controller.js";
-import type { DesktopMessageInput } from "../src/electron/desktop-types.js";
+import type {
+  DesktopMessageInput,
+  DesktopOutcomeUnknownResolution,
+  DesktopResolveOutcomeUnknownInput,
+} from "../src/electron/desktop-types.js";
 
 test("DesktopController 仅转发目录中存在的显式 Skill 与去重文件", async () => {
   const runtime = new FakeDesktopRuntime();
@@ -37,6 +41,24 @@ test("DesktopController 工作区搜索限制查询并原样转发安全结果",
   });
   assert.equal(runtime.lastWorkspaceQuery, "app");
   await assert.rejects(() => controller.searchWorkspaceFiles("x".repeat(241)), /Invalid/);
+});
+
+test("DesktopController 按当前 Chat 展示 outcome_unknown 并只转发处置动作", async () => {
+  const runtime = new FakeDesktopRuntime();
+  const controller = new DesktopController(runtime);
+  const snapshot = await controller.getSnapshot();
+  assert.equal(runtime.lastOutcomeUnknownThreadId, "thread-1");
+  assert.equal(snapshot.outcomeUnknownInvocations?.[0]?.identity.displayName, "写入外部系统");
+  const record = snapshot.outcomeUnknownInvocations![0]!;
+  const input: DesktopResolveOutcomeUnknownInput = {
+    resolutionId: record.resolutionId,
+    expectedVersion: record.version,
+    idempotencyKey: "desktop-controller-resolution",
+    resolution: { action: "abandon", reason: "用户决定停止" },
+  };
+  const resolved = await controller.resolveOutcomeUnknown(input);
+  assert.deepEqual(runtime.lastOutcomeUnknownInput, input);
+  assert.equal(resolved.state, "abandoned");
 });
 import type {
   Item,
@@ -371,6 +393,8 @@ class FakeDesktopRuntime implements DesktopRuntimeClient {
   readonly savedConfigs: import("../src/electron/desktop-types.js").DesktopAgentConfig[] = [];
   lastStartContext: Omit<DesktopMessageInput, "text"> | undefined;
   lastWorkspaceQuery: string | undefined;
+  lastOutcomeUnknownThreadId: string | undefined;
+  lastOutcomeUnknownInput: DesktopResolveOutcomeUnknownInput | undefined;
   private readonly listeners = new Set<(event: AgentEvent) => void>();
 
   private readonly thread: Thread = {
@@ -450,6 +474,18 @@ class FakeDesktopRuntime implements DesktopRuntimeClient {
   }
   async listRuntimeSessions() { return []; }
   async setRuntimeSession() {}
+  async listOutcomeUnknown(threadId?: string): Promise<DesktopOutcomeUnknownResolution[]> {
+    this.lastOutcomeUnknownThreadId = threadId;
+    return [outcomeUnknownRecord()];
+  }
+  async resolveOutcomeUnknown(input: DesktopResolveOutcomeUnknownInput): Promise<DesktopOutcomeUnknownResolution> {
+    this.lastOutcomeUnknownInput = structuredClone(input);
+    const record = outcomeUnknownRecord();
+    return { ...record, state: "abandoned", version: 2, audit: [{
+      id: "audit-1", action: "abandon", actorId: "desktop-user", reason: "用户决定停止",
+      fromState: "outcome_unknown", toState: "abandoned", version: 2, occurredAt: "2026-08-18T08:01:00.000Z",
+    }] };
+  }
 
   async selectModel(model: string): Promise<RuntimeCapabilities> {
     this.capabilities.currentModel = model;
@@ -540,6 +576,25 @@ class FakeDesktopRuntime implements DesktopRuntimeClient {
       listener(event);
     }
   }
+}
+
+function outcomeUnknownRecord(): DesktopOutcomeUnknownResolution {
+  return {
+    resolutionId: "outcome-resolution-1",
+    invocationKind: "tool",
+    invocationId: "tool-invocation-1",
+    requestDigest: `sha256:${"d".repeat(64)}`,
+    identity: {
+      threadId: "thread-1", turnId: "turn-1", displayName: "写入外部系统",
+      toolName: "external_write", callId: "call-1",
+    },
+    sideEffectRisk: "known",
+    state: "outcome_unknown",
+    version: 1,
+    createdAt: "2026-08-18T08:00:00.000Z",
+    updatedAt: "2026-08-18T08:00:00.000Z",
+    audit: [],
+  };
 }
 
 class ItemBudgetFailureRuntime extends FakeDesktopRuntime {

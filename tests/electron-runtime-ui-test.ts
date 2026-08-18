@@ -45,6 +45,52 @@ import {
   type ComposerSuggestion,
 } from "../src/electron/renderer/composer-suggestions.js";
 
+test("outcome_unknown reducer 按 resolutionId 原位更新且不复制记录", () => {
+  const record = {
+    resolutionId: "outcome-resolution-1",
+    invocationKind: "model" as const,
+    invocationId: "model-invocation-1",
+    requestDigest: `sha256:${"e".repeat(64)}`,
+    identity: { threadId: "thread-1", turnId: "turn-1", displayName: "生成回复" },
+    sideEffectRisk: "none" as const,
+    state: "outcome_unknown" as const,
+    version: 1,
+    createdAt: "2026-08-18T08:00:00.000Z",
+    updatedAt: "2026-08-18T08:00:00.000Z",
+    audit: [],
+  };
+  const base = desktopReducer(INITIAL_DESKTOP_UI_STATE, {
+    type: "snapshot",
+    snapshot: {
+      threads: [], messages: [], capabilities: { llm: false, models: [], webSearch: false, tools: [], skills: [], mcpServers: [] },
+      turnState: "idle", agentConfig: { model: "gpt-5.6-sol", reasoningEffort: "high", agentProfileId: "orchestrator" },
+      agentRuns: [], outcomeUnknownInvocations: [record],
+    },
+  });
+  const updated = desktopReducer(base, {
+    type: "outcome-unknown-updated",
+    record: { ...record, state: "abandoned", version: 2 },
+  });
+  assert.equal(updated.snapshot?.outcomeUnknownInvocations?.length, 1);
+  assert.equal(updated.snapshot?.outcomeUnknownInvocations?.[0]?.state, "abandoned");
+  assert.equal(updated.snapshot?.outcomeUnknownInvocations?.[0]?.version, 2);
+});
+
+test("outcome_unknown 桌面 UI 展示三类处置、只读摘要、副作用确认与审计", () => {
+  const app = readFileSync(resolve("src/electron/renderer/App.tsx"), "utf8");
+  const styles = readFileSync(resolve("src/electron/renderer/styles.css"), "utf8");
+  assert.match(app, /结果未知调用/);
+  assert.match(app, /身份与请求摘要来自 Runtime，只读且不可修改/);
+  assert.match(app, /确认未执行后重试/);
+  assert.match(app, /录入外部结果并提交/);
+  assert.match(app, /需人工处理/);
+  assert.match(app, />放弃</);
+  assert.match(app, /我已从外部系统确认该 Tool 的副作用没有发生/);
+  assert.match(app, /审计记录/);
+  assert.match(app, /desktop:\$\{record\.resolutionId\}:\$\{record\.version\}:\$\{action\}/);
+  assert.match(styles, /\.outcome-unknown-panel/);
+});
+
 test("Composer 只在安全 token 边界识别 / @ $", () => {
   assert.deepEqual(findComposerToken("请检查 @src/app", 12), {
     kind: "file", trigger: "@", query: "src/app", start: 4, end: 12,
