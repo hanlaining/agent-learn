@@ -35,6 +35,7 @@ import {
 import {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useReducer,
   useRef,
@@ -53,7 +54,6 @@ import type {
   DesktopOutcomeUnknownResolution,
   DesktopResolveOutcomeUnknownInput,
   DesktopPermissionRequest,
-  DesktopThreadSummary,
 } from "../desktop-types.js";
 import type {
   RuntimeCapabilities,
@@ -84,6 +84,7 @@ import {
   replaceComposerToken,
   type ComposerSuggestion,
 } from "./composer-suggestions.js";
+import { groupThreads, shouldAutoOpenToday } from "./history-groups.js";
 
 type InspectorTab = "changes" | "activity" | "terminal" | "browser" | "extensions";
 
@@ -141,6 +142,7 @@ export function App() {
   const [historyMenu, setHistoryMenu] = useState<{ kind: "group" | "thread"; id: string }>();
   const [editingThreadId, setEditingThreadId] = useState<string>();
   const [editingTitle, setEditingTitle] = useState("");
+  const [collapsedHistoryTreeIds, setCollapsedHistoryTreeIds] = useState<Set<string>>(() => new Set());
   const [trashOpen, setTrashOpen] = useState(false);
   const [olderLimit, setOlderLimit] = useState(50);
   const [selectedAgentRunId, setSelectedAgentRunId] = useState<string>();
@@ -172,6 +174,7 @@ export function App() {
   const autoFollowRef = useRef(true);
   const pendingEventsRef = useRef<DesktopEvent[]>([]);
   const eventFrameRef = useRef<number | undefined>(undefined);
+  const knownHistoryThreadIdsRef = useRef<Set<string> | undefined>(undefined);
 
   useEffect(() => {
     const updateViewportWidth = () => setViewportWidth(window.innerWidth);
@@ -389,12 +392,24 @@ export function App() {
     );
   }, [historyQuery, ui.snapshot?.threads]);
   const groupedThreads = useMemo(
-    () => groupThreads(threads),
-    [threads],
+    () => groupThreads(threads, ui.snapshot?.activeThreadId),
+    [threads, ui.snapshot?.activeThreadId],
   );
   const [todayOpen, setTodayOpen] = useStoredBoolean("god-agent:history-today", false);
   const [yesterdayOpen, setYesterdayOpen] = useStoredBoolean("god-agent:history-yesterday", false);
   const [historyOpen, setHistoryOpen] = useStoredBoolean("god-agent:history-older", false);
+
+  useLayoutEffect(() => {
+    if (ui.snapshot === undefined) return;
+    const currentIds = new Set(threads.map((thread) => thread.id));
+    const previousIds = knownHistoryThreadIdsRef.current;
+    knownHistoryThreadIdsRef.current = currentIds;
+    if (previousIds === undefined) return;
+
+    if (shouldAutoOpenToday(threads, ui.snapshot.activeThreadId, previousIds)) {
+      setTodayOpen(true);
+    }
+  }, [setTodayOpen, threads, ui.snapshot]);
 
   async function replaceSnapshot(operation: Promise<NonNullable<typeof ui.snapshot>>) {
     try {
@@ -773,9 +788,28 @@ export function App() {
                     type="button"
                     className="history-item"
                     aria-current={thread.id === ui.snapshot?.activeThreadId}
-                    onClick={() => void replaceSnapshot(
-                      window.godAgent.desktop.selectThread(thread.id),
-                    )}
+                    aria-expanded={thread.id === ui.snapshot?.activeThreadId && ui.snapshot.agentRuns.some((run) => run.parentRunId !== undefined)
+                      ? !collapsedHistoryTreeIds.has(thread.id)
+                      : undefined}
+                    onClick={() => {
+                      const isActiveTree = thread.id === ui.snapshot?.activeThreadId && ui.snapshot.agentRuns.some((run) => run.parentRunId !== undefined);
+                      if (isActiveTree) {
+                        setCollapsedHistoryTreeIds((current) => {
+                          const next = new Set(current);
+                          if (next.has(thread.id)) next.delete(thread.id);
+                          else next.add(thread.id);
+                          return next;
+                        });
+                        return;
+                      }
+                      setCollapsedHistoryTreeIds((current) => {
+                        if (!current.has(thread.id)) return current;
+                        const next = new Set(current);
+                        next.delete(thread.id);
+                        return next;
+                      });
+                      void replaceSnapshot(window.godAgent.desktop.selectThread(thread.id));
+                    }}
                   >
                     <i className="thread-status-dot" data-state={thread.turnState} />
                     <span>
@@ -798,7 +832,7 @@ export function App() {
                     </div>}
                   </div>
                   </div>
-                  {thread.id === ui.snapshot?.activeThreadId && ui.snapshot.agentRuns.some((run) => run.parentRunId !== undefined) && (
+                  {thread.id === ui.snapshot?.activeThreadId && !collapsedHistoryTreeIds.has(thread.id) && ui.snapshot.agentRuns.some((run) => run.parentRunId !== undefined) && (
                     <HistoryAgentTree
                       runs={ui.snapshot.agentRuns}
                       requirement={ui.snapshot.requirement}
@@ -1893,26 +1927,6 @@ function getRightInspectorMaxWidth(viewportWidth: number, leftWidth: number) {
 
 function clamp(value: number, minimum: number, maximum: number) {
   return Math.min(maximum, Math.max(minimum, value));
-}
-
-function groupThreads(threads: DesktopThreadSummary[]) {
-  const groups = new Map<string, DesktopThreadSummary[]>();
-  for (const thread of threads) {
-    const label = dateGroup(thread.lastActivityAt);
-    groups.set(label, [...(groups.get(label) ?? []), thread]);
-  }
-  return [...groups.entries()];
-}
-
-function dateGroup(value: string): string {
-  const date = new Date(value);
-  const now = new Date();
-  const start = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
-  const target = new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime();
-  const days = Math.round((start - target) / 86_400_000);
-  if (days <= 0) return "今天";
-  if (days === 1) return "昨天";
-  return "历史";
 }
 
 function readError(error: unknown): string {
