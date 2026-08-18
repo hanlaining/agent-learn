@@ -1,6 +1,8 @@
 import type {
+  LlmCreateResponseRequest,
   LlmMessage,
   LlmProvider,
+  LlmResponse,
 } from "../llm/types.js";
 import {
   OPENAI_BPE_TOKEN_COUNTER,
@@ -108,12 +110,16 @@ export class ContextCompactor {
   async compact(
     messages: readonly LlmMessage[],
     signal?: AbortSignal,
+    createResponse?: (
+      request: LlmCreateResponseRequest,
+    ) => Promise<LlmResponse>,
   ): Promise<LlmMessage[]> {
     if (messages.length === 0) {
       return [];
     }
 
-    const response = await this.llm.createResponse({
+    const response = await (createResponse ??
+      ((request) => this.llm.createResponse(request)))({
       // 当前教学 Runtime 没有 Codex 的 BaseInstructions 快照，因此用最小内部说明，
       // 真正的压缩任务仍由 input 最后一条合成 user 消息定义。
       instructions:
