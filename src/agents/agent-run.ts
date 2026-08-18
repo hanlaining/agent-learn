@@ -8,6 +8,10 @@ export interface AgentRunResult {
   status: "completed" | "failed" | "cancelled" | "timed_out";
   summary: string;
   safeError?: string;
+  evidenceIds?: string[];
+  boardEntryIds?: string[];
+  boardEntries?: SharedBoardEntry[];
+  reviewerVerdict?: { passed: boolean; summary: string };
 }
 
 export interface AgentRun {
@@ -35,3 +39,4 @@ export interface AgentRunSnapshot {
   runs: AgentRun[];
   returnReceipts: string[];
 }
+import type { SharedBoardEntry } from "./agent-runtime.js";

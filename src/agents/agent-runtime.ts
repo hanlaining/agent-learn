@@ -1,4 +1,5 @@
 import type { AgentReasoningEffort } from "./agent-profile.js";
+import type { RuntimeStageMetric } from "../observability/runtime-metrics.js";
 
 export type AgentCollaborationMode = "off" | "auto" | "manual";
 export type AgentRole = "investigator" | "researcher" | "coder" | "tester" | "reviewer";
@@ -53,11 +54,37 @@ export interface AgentJob {
   rootTurnId: string;
   rootRunId: string;
   configSnapshot: AgentTeamConfig;
+  executionKind: import("../requirements/requirement.js").RequirementExecutionKind;
+  workflowVersion: string;
+  attempt: number;
   status: AgentJobStatus;
   createdAt: string;
   completedAt?: string;
+  failureCode?: string;
   requirementId?: string;
   requirementRevision?: number;
+}
+
+export type AgentStageStatus =
+  | "pending"
+  | "running"
+  | "validating"
+  | "completed"
+  | "failed_retryable"
+  | "failed_terminal";
+
+export interface AgentStageCheckpoint {
+  idempotencyKey: string;
+  jobId: string;
+  jobAttempt: number;
+  workflowVersion: string;
+  stageId: string;
+  stageAttempt: number;
+  status: AgentStageStatus;
+  startedAt: string;
+  updatedAt: string;
+  completedAt?: string;
+  failureCode?: string;
 }
 
 export type AgentTaskStatus =
@@ -80,6 +107,7 @@ export interface AgentTask {
   dependencyIds: string[];
   fileClaims: string[];
   attempt: number;
+  jobAttempt: number;
   maxAttempts: number;
   status: AgentTaskStatus;
   leaseOwner?: string;
@@ -112,6 +140,12 @@ export interface AgentEvidence {
   producer: "worker" | "runtime" | "reviewer";
   verdict: "unverified" | "supported" | "passed" | "failed";
   severity?: "P0" | "P1" | "P2" | "P3";
+  idempotencyKey?: string;
+  jobAttempt?: number;
+  workflowVersion?: string;
+  stageId?: string;
+  stageAttempt?: number;
+  businessAttempt?: number;
   createdAt: string;
 }
 
@@ -119,6 +153,12 @@ export interface SharedBoardEntry {
   id: string;
   jobId: string;
   producerRunId: string;
+  taskId?: string;
+  attempt?: number;
+  idempotencyKey?: string;
+  workflowVersion?: string;
+  stageId?: string;
+  stageAttempt?: number;
   kind: "fact" | "artifact" | "source" | "decision" | "test_result" | "file_claim" | "warning" | "summary";
   title: string;
   summary: string;
@@ -126,6 +166,10 @@ export interface SharedBoardEntry {
   confidence: "unverified" | "supported" | "confirmed";
   visibility: "job" | "parent_only";
   createdAt: string;
+  supersedesBoardEntryId?: string;
+  supersededByBoardEntryId?: string;
+  supersededAt?: string;
+  /** @deprecated 旧快照兼容字段。 */
   supersedesId?: string;
 }
 
@@ -146,6 +190,11 @@ export interface AgentReturnEnvelope {
     boardEntryIds: string[];
   };
   idempotencyKey: string;
+  jobAttempt?: number;
+  workflowVersion?: string;
+  stageId?: string;
+  stageAttempt?: number;
+  businessAttempt?: number;
   attempts: number;
   nextAttemptAt?: string;
   createdAt: string;
@@ -162,6 +211,8 @@ export interface AgentRuntimeSnapshot {
   board: SharedBoardEntry[];
   returns: AgentReturnEnvelope[];
   returnReceipts: string[];
+  stageCheckpoints?: AgentStageCheckpoint[];
+  stageMetrics?: RuntimeStageMetric[];
 }
 
 export function normalizeAgentTeamConfig(value: Partial<AgentTeamConfig> = {}): AgentTeamConfig {

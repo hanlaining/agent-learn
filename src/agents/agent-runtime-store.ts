@@ -2,11 +2,13 @@ import type {
   AgentEvidence, AgentJob, AgentJobStatus, AgentReturnEnvelope,
   AgentRuntimeSnapshot, AgentTask, AgentTaskEdge, AgentTaskStatus,
   AgentTeamConfig, SharedBoardEntry,
+  AgentStageCheckpoint,
 } from "./agent-runtime.js";
 import { normalizeAgentTeamConfig } from "./agent-runtime.js";
+import type { RuntimeStageMetric } from "../observability/runtime-metrics.js";
 
-type CreateTaskInput = Omit<AgentTask, "id" | "dependencyIds" | "attempt" | "status" | "createdAt" | "updatedAt"> &
-  Partial<Pick<AgentTask, "dependencyIds" | "attempt" | "status">>;
+type CreateTaskInput = Omit<AgentTask, "id" | "dependencyIds" | "attempt" | "jobAttempt" | "status" | "createdAt" | "updatedAt"> &
+  Partial<Pick<AgentTask, "dependencyIds" | "attempt" | "jobAttempt" | "status">>;
 
 export class AgentRuntimeStore {
   private sequence = 0;
@@ -17,6 +19,8 @@ export class AgentRuntimeStore {
   private readonly board = new Map<string, SharedBoardEntry>();
   private readonly returns = new Map<string, AgentReturnEnvelope>();
   private readonly returnReceipts = new Set<string>();
+  private readonly stageCheckpoints = new Map<string, AgentStageCheckpoint>();
+  private readonly stageMetrics = new Map<string, RuntimeStageMetric>();
 
   constructor(private readonly now: () => string = () => new Date().toISOString()) {}
 
@@ -25,8 +29,16 @@ export class AgentRuntimeStore {
     if (value === undefined) return store;
     if (value.version !== 1) throw new Error("Invalid agent runtime snapshot");
     store.sequence = value.sequence;
-    value.jobs.forEach((item) => store.jobs.set(item.id, structuredClone(item)));
-    value.tasks.forEach((item) => store.tasks.set(item.id, structuredClone(item)));
+    value.jobs.forEach((item) => store.jobs.set(item.id, {
+      ...structuredClone(item),
+      executionKind: item.executionKind ?? "software_change",
+      workflowVersion: item.workflowVersion ?? (item.executionKind === "software_product_delivery" ? "fixed_team_v1" : "dynamic_v1"),
+      attempt: item.attempt ?? 1,
+    }));
+    value.tasks.forEach((item) => store.tasks.set(item.id, {
+      ...structuredClone(item),
+      jobAttempt: item.jobAttempt ?? 1,
+    }));
     value.edges.forEach((item) => store.edges.set(item.id, structuredClone(item)));
     value.evidence.forEach((item) => store.evidence.set(item.id, structuredClone(item)));
     value.board.forEach((item) => store.board.set(item.id, structuredClone(item)));
@@ -36,17 +48,24 @@ export class AgentRuntimeStore {
       store.returns.set(restored.id, restored);
     });
     value.returnReceipts.forEach((id) => store.returnReceipts.add(id));
+    value.stageCheckpoints?.forEach((item) => store.stageCheckpoints.set(item.idempotencyKey, structuredClone(item)));
+    value.stageMetrics?.forEach((item) => store.recordStageMetric(item));
     store.validateReferences();
     return store;
   }
 
-  createJob(input: { threadId: string; rootTurnId: string; rootRunId: string; configSnapshot: AgentTeamConfig; requirementId?: string; requirementRevision?: number }): AgentJob {
+  createJob(input: { threadId: string; rootTurnId: string; rootRunId: string; configSnapshot: AgentTeamConfig;
+    executionKind?: import("../requirements/requirement.js").RequirementExecutionKind;
+    workflowVersion?: string;
+    requirementId?: string; requirementRevision?: number }): AgentJob {
     const existing = input.requirementId === undefined
       ? this.getJobByTurn(input.rootTurnId)
       : this.getJobByRequirement(input.requirementId, input.requirementRevision);
     if (existing !== undefined) return existing;
     const job: AgentJob = {
-      ...input, id: input.requirementId === undefined ? `job-${input.rootTurnId}` : `job-${input.requirementId}-v${input.requirementRevision ?? 1}`, configSnapshot: normalizeAgentTeamConfig(input.configSnapshot),
+      ...input, executionKind: input.executionKind ?? "software_change",
+      workflowVersion: input.workflowVersion ?? (input.executionKind === "software_product_delivery" ? "software_product_delivery_v2" : "dynamic_v1"), attempt: 1,
+      id: input.requirementId === undefined ? `job-${input.rootTurnId}` : `job-${input.requirementId}-v${input.requirementRevision ?? 1}`, configSnapshot: normalizeAgentTeamConfig(input.configSnapshot),
       status: "planning", createdAt: this.now(),
     };
     this.jobs.set(job.id, job);
@@ -65,6 +84,28 @@ export class AgentRuntimeStore {
     if (["completed", "partial", "failed", "cancelled"].includes(status)) job.completedAt = this.now();
     else delete job.completedAt;
   }
+  startJobAttempt(id: string, rootTurnId: string, rootRunId: string): AgentJob {
+    const job = this.requireJob(id);
+    if (job.rootTurnId === rootTurnId) return copy(job);
+    if (!["failed", "cancelled", "partial"].includes(job.status)) {
+      throw new Error("Only a terminal failed Job can start another attempt");
+    }
+    job.attempt += 1;
+    job.rootTurnId = rootTurnId;
+    job.rootRunId = rootRunId;
+    job.status = "planning";
+    delete job.completedAt;
+    delete job.failureCode;
+    for (const item of this.returns.values()) {
+      if (item.jobId === job.id && item.status !== "consumed") item.status = "failed";
+    }
+    return copy(job);
+  }
+  failJob(id: string, status: "failed" | "cancelled", failureCode: string): void {
+    const job = this.requireJob(id);
+    this.setJobStatus(id, status);
+    job.failureCode = failureCode;
+  }
 
   /**
    * Reconcile a Job from persisted Task/Return facts instead of treating an
@@ -81,7 +122,8 @@ export class AgentRuntimeStore {
 
     // Reviewer Tasks are evidence for their parent Task. They must not create
     // a second independent completion contract for the Job.
-    const requiredTasks = this.listTasks(jobId).filter((task) => task.parentTaskId === undefined);
+    const requiredTasks = this.listTasks(jobId).filter((task) =>
+      task.parentTaskId === undefined && task.jobAttempt === job.attempt);
     if (requiredTasks.length === 0) {
       this.setJobStatus(jobId, "planning");
       return "planning";
@@ -111,7 +153,8 @@ export class AgentRuntimeStore {
     this.requireJob(input.jobId);
     const task: AgentTask = {
       ...structuredClone(input), id: this.id("task"), dependencyIds: [...(input.dependencyIds ?? [])],
-      attempt: input.attempt ?? 1, status: input.status ?? "draft", createdAt: this.now(), updatedAt: this.now(),
+      attempt: input.attempt ?? 1, jobAttempt: input.jobAttempt ?? this.requireJob(input.jobId).attempt,
+      status: input.status ?? "draft", createdAt: this.now(), updatedAt: this.now(),
     };
     if (task.parentTaskId !== undefined) {
       const parent = this.requireTask(task.parentTaskId);
@@ -187,7 +230,10 @@ export class AgentRuntimeStore {
 
   reconcilePersistedJobs(): AgentJob[] {
     for (const job of this.jobs.values()) {
-      if (job.status !== "cancelled") this.reconcileJobStatus(job.id);
+      if (["partial", "failed", "cancelled"].includes(job.status)) continue;
+      const hasCurrentTasks = this.listTasks(job.id).some((task) =>
+        task.parentTaskId === undefined && task.jobAttempt === job.attempt);
+      if (job.status !== "completed" || hasCurrentTasks) this.reconcileJobStatus(job.id);
     }
     return this.listJobs();
   }
@@ -195,6 +241,9 @@ export class AgentRuntimeStore {
   addEvidence(input: Omit<AgentEvidence, "id" | "createdAt">): AgentEvidence {
     const task = this.requireTask(input.taskId);
     if (task.jobId !== input.jobId) throw new Error("Cross-job evidence is forbidden");
+    const existing = input.idempotencyKey === undefined ? undefined : [...this.evidence.values()]
+      .find((item) => item.idempotencyKey === input.idempotencyKey);
+    if (existing !== undefined) return copy(existing);
     const evidence: AgentEvidence = { ...input, id: this.id("evidence"), createdAt: this.now() };
     this.evidence.set(evidence.id, evidence); return copy(evidence);
   }
@@ -214,10 +263,37 @@ export class AgentRuntimeStore {
   publishBoard(input: Omit<SharedBoardEntry, "id" | "createdAt">): SharedBoardEntry {
     this.requireJob(input.jobId);
     assertSafeBoardEntry(input);
+    const existing = input.idempotencyKey === undefined ? undefined : [...this.board.values()]
+      .find((item) => item.idempotencyKey === input.idempotencyKey);
+    if (existing !== undefined) return copy(existing);
     const item: SharedBoardEntry = { ...structuredClone(input), id: this.id("board"), createdAt: this.now() };
+    const supersededId = item.supersedesBoardEntryId ?? item.supersedesId;
+    if (supersededId !== undefined) {
+      const previous = this.board.get(supersededId);
+      if (previous === undefined || previous.jobId !== item.jobId) {
+        throw new Error("Superseded Board Entry is unavailable");
+      }
+      if (item.taskId !== undefined && previous.taskId !== undefined && item.taskId !== previous.taskId) {
+        throw new Error("Cross-task Board supersession is forbidden");
+      }
+      previous.supersededByBoardEntryId = item.id;
+      previous.supersededAt = item.createdAt;
+    }
     this.board.set(item.id, item); return copy(item);
   }
   listBoard(jobId: string): SharedBoardEntry[] { return [...this.board.values()].filter((item) => item.jobId === jobId).map(copy); }
+  listCurrentBoard(jobId: string): SharedBoardEntry[] {
+    return this.listBoard(jobId).filter((entry) => {
+      if (entry.supersededByBoardEntryId !== undefined) return false;
+      if (entry.taskId === undefined) return true;
+      const task = this.tasks.get(entry.taskId);
+      if (task === undefined || task.jobId !== jobId || task.status !== "completed") return false;
+      if (task.ownerRunId !== entry.producerRunId || task.attempt !== entry.attempt) return false;
+      return this.listEvidence(task.id).some((evidence) =>
+        evidence.kind === "review" && evidence.producer === "reviewer" &&
+        evidence.verdict === "passed" && evidence.runId.startsWith(`${entry.producerRunId}:`));
+    });
+  }
 
   createReturn(input: Omit<AgentReturnEnvelope, "id" | "status" | "attempts" | "createdAt">): AgentReturnEnvelope {
     this.requireJob(input.jobId);
@@ -238,14 +314,83 @@ export class AgentRuntimeStore {
     item.status = "consumed"; item.consumedAt = this.now(); delete item.nextAttemptAt; this.returnReceipts.add(item.idempotencyKey); return true;
   }
 
+  beginStage(jobId: string, stageId: string, maxAttempts = 2, forceNewAttempt = false): AgentStageCheckpoint {
+    const job = this.requireJob(jobId);
+    const previous = this.listStageCheckpoints(jobId).filter((item) => item.stageId === stageId).at(-1);
+    if (!forceNewAttempt && (previous?.status === "completed" || previous?.status === "running" || previous?.status === "validating")) return previous;
+    if (forceNewAttempt && previous !== undefined && previous.status !== "completed" && previous.status !== "failed_retryable") return previous;
+    const stageAttempt = previous === undefined ? 1 : previous.stageAttempt + 1;
+    if (stageAttempt > maxAttempts || previous?.status === "failed_terminal") {
+      throw Object.assign(new Error(`Stage retry exhausted: ${stageId}`), { code: "stage_retry_exhausted" });
+    }
+    const idempotencyKey = [job.id, job.attempt, job.workflowVersion, stageId, stageAttempt].join(":");
+    const checkpoint: AgentStageCheckpoint = {
+      idempotencyKey, jobId: job.id, jobAttempt: job.attempt, workflowVersion: job.workflowVersion,
+      stageId, stageAttempt, status: "running", startedAt: this.now(), updatedAt: this.now(),
+    };
+    this.stageCheckpoints.set(idempotencyKey, checkpoint);
+    return copy(checkpoint);
+  }
+
+  setStageStatus(
+    idempotencyKey: string,
+    status: "validating" | "completed" | "failed_retryable" | "failed_terminal",
+    failureCode?: string,
+  ): AgentStageCheckpoint {
+    const checkpoint = this.stageCheckpoints.get(idempotencyKey);
+    if (checkpoint === undefined) throw new Error(`Stage checkpoint not found: ${idempotencyKey}`);
+    const allowed = checkpoint.status === "running"
+      ? ["validating", "failed_retryable", "failed_terminal"]
+      : checkpoint.status === "validating"
+        ? ["completed", "failed_retryable", "failed_terminal"]
+        : [];
+    if (!allowed.includes(status)) throw new Error(`Invalid stage transition: ${checkpoint.status} -> ${status}`);
+    checkpoint.status = status;
+    checkpoint.updatedAt = this.now();
+    if (failureCode === undefined) delete checkpoint.failureCode;
+    else checkpoint.failureCode = failureCode;
+    if (status === "completed") checkpoint.completedAt = checkpoint.updatedAt;
+    return copy(checkpoint);
+  }
+
+  listStageCheckpoints(jobId?: string): AgentStageCheckpoint[] {
+    return [...this.stageCheckpoints.values()]
+      .filter((item) => jobId === undefined || item.jobId === jobId)
+      .sort((left, right) => left.startedAt.localeCompare(right.startedAt) || left.stageAttempt - right.stageAttempt)
+      .map(copy);
+  }
+
+  recordStageMetric(metric: RuntimeStageMetric): void {
+    const key = [metric.jobId, metric.jobAttempt, metric.workflowVersion, metric.stageId, metric.stageAttempt].join(":");
+    this.stageMetrics.set(key, copy(metric));
+  }
+
+  listStageMetrics(jobId?: string): RuntimeStageMetric[] {
+    return [...this.stageMetrics.values()].filter((item) => jobId === undefined || item.jobId === jobId).map(copy);
+  }
+
   cancelJob(jobId: string): void {
     this.setJobStatus(jobId, "cancelled");
     for (const task of this.tasks.values()) if (task.jobId === jobId && !["completed", "failed", "cancelled"].includes(task.status)) task.status = "cancelled";
     for (const item of this.returns.values()) if (item.jobId === jobId && item.status !== "consumed") item.status = "failed";
+    for (const item of this.stageCheckpoints.values()) if (item.jobId === jobId && ["running", "validating"].includes(item.status)) {
+      item.status = "failed_terminal"; item.failureCode = "user_cancelled"; item.updatedAt = this.now();
+    }
+  }
+
+  closeActiveTasks(jobId: string, terminal: "failed" | "cancelled" | "lost"): AgentTask[] {
+    const closed: AgentTask[] = [];
+    for (const task of this.tasks.values()) {
+      if (task.jobId !== jobId || ["completed", "failed", "cancelled", "lost"].includes(task.status)) continue;
+      task.status = terminal;
+      task.updatedAt = this.now();
+      closed.push(copy(task));
+    }
+    return closed;
   }
 
   exportSnapshot(): AgentRuntimeSnapshot {
-    return { version: 1, sequence: this.sequence, jobs: this.listJobs(), tasks: [...this.tasks.values()].map(copy), edges: [...this.edges.values()].map(copy), evidence: [...this.evidence.values()].map(copy), board: [...this.board.values()].map(copy), returns: this.listReturns(), returnReceipts: [...this.returnReceipts] };
+    return { version: 1, sequence: this.sequence, jobs: this.listJobs(), tasks: [...this.tasks.values()].map(copy), edges: [...this.edges.values()].map(copy), evidence: [...this.evidence.values()].map(copy), board: [...this.board.values()].map(copy), returns: this.listReturns(), returnReceipts: [...this.returnReceipts], stageCheckpoints: this.listStageCheckpoints(), stageMetrics: this.listStageMetrics() };
   }
 
   private hasCycle(jobId: string): boolean {

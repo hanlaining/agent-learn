@@ -111,6 +111,21 @@ export class AgentRunStore {
   complete(id: string, result: AgentRunResult): void {
     const run = this.require(id); run.status = result.status; run.result = structuredClone(result); run.completedAt = new Date().toISOString();
   }
+  closeActiveForJob(jobId: string, status: "failed" | "cancelled" | "timed_out", summary: string, safeError?: string): AgentRun[] {
+    const closed: AgentRun[] = [];
+    for (const run of this.runs.values()) {
+      if (run.jobId !== jobId || !["queued", "running", "waiting_children", "resuming"].includes(run.status)) continue;
+      this.complete(run.id, {
+        runId: run.id,
+        ...(run.taskId === undefined ? {} : { taskId: run.taskId }),
+        status,
+        summary,
+        ...(safeError === undefined ? {} : { safeError }),
+      });
+      closed.push(structuredClone(this.require(run.id)));
+    }
+    return closed;
+  }
   receiveReturn(result: AgentRunResult): boolean {
     if (this.returnReceipts.has(result.runId)) return false;
     this.returnReceipts.add(result.runId); return true;

@@ -37,6 +37,7 @@ export function renderRequirementPlan(
     `# ${draft.title}`,
     "",
     `> Requirement: ${requirementId} · revision ${revision}`,
+    `> 执行类型：${draft.executionKind}`,
     "",
     "## 目标", "", draft.objective,
     "", "## 范围", "", list(draft.scope),

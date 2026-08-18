@@ -3,7 +3,20 @@ export type RequirementStatus =
   | "planned"
   | "confirmed"
   | "executing"
+  | "failed_retryable"
   | "completed"
+  | "cancelled";
+
+export type RequirementExecutionKind =
+  | "analysis_only"
+  | "software_change"
+  | "software_product_delivery";
+
+export type RequirementExecutionState =
+  | "not_started"
+  | "executing"
+  | "completed"
+  | "failed_retryable"
   | "cancelled";
 
 export interface RequirementTestCase {
@@ -21,6 +34,7 @@ export interface RequirementPlanArtifact {
 }
 
 export interface RequirementDraft {
+  executionKind: RequirementExecutionKind;
   title: string;
   objective: string;
   scope: string[];
@@ -37,6 +51,7 @@ export interface Requirement extends RequirementDraft {
   parentThreadId: string;
   revision: number;
   status: RequirementStatus;
+  executionState: RequirementExecutionState;
   planArtifact: RequirementPlanArtifact;
   createdAt: string;
   updatedAt: string;
@@ -54,7 +69,7 @@ export interface RequirementSnapshot {
 
 export function isRequirementConfirmed(value: Requirement | undefined): boolean {
   return value !== undefined &&
-    ["confirmed", "executing"].includes(value.status) &&
+    value.status !== "planned" && value.status !== "clarifying" && value.status !== "cancelled" &&
     value.confirmedRevision === value.revision &&
     value.confirmedContentHash === value.planArtifact.contentHash;
 }

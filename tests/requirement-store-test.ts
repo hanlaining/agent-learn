@@ -7,8 +7,10 @@ import test from "node:test";
 import { RequirementStore } from "../src/requirements/requirement-store.js";
 import { RequirementPlanWriter } from "../src/requirements/requirement-plan-writer.js";
 import type { RequirementDraft } from "../src/requirements/requirement.js";
+import { isRequirementConfirmed } from "../src/requirements/requirement.js";
 
 const draft: RequirementDraft = {
+  executionKind: "analysis_only",
   title: "确认后执行", objective: "用户确认计划后才执行",
   scope: ["父 Chat 澄清"], nonGoals: ["不自动执行"], constraints: ["确认硬门"],
   deliverables: ["计划文档"], acceptanceCriteria: ["确认前没有 Job"],
@@ -43,6 +45,12 @@ test("一个已确认 Requirement 版本只绑定一个 Job", async () => {
   store.confirm(planned.id, planned.revision, artifact.contentHash);
   assert.equal(store.attachJob(planned.id, "job-1").jobId, "job-1");
   assert.equal(store.attachJob(planned.id, "job-1").jobId, "job-1");
+  const failed = store.setExecutionState(planned.id, "failed_retryable");
+  assert.equal(failed.status, "failed_retryable");
+  assert.equal(failed.confirmedRevision, planned.revision);
+  assert.equal(failed.confirmedContentHash, artifact.contentHash);
+  assert.equal(isRequirementConfirmed(failed), true);
+  assert.equal(store.attachJob(planned.id, "job-1").executionState, "executing");
   assert.throws(() => store.attachJob(planned.id, "job-2"), /another Job/);
 });
 
@@ -52,5 +60,6 @@ test("Markdown 计划包含测试用例并返回稳定哈希和绝对路径", as
   assert.equal(join(root, artifact.path.slice(root.length + 1)), artifact.path);
   assert.match(artifact.contentHash, /^[a-f0-9]{64}$/);
   const markdown = await readFile(artifact.path, "utf8");
-  assert.match(markdown, /TC-01 确认门/); assert.match(markdown, /只有用户确认本版本后才开始执行/);
+  assert.match(markdown, /TC-01 确认门/); assert.match(markdown, /执行类型：analysis_only/);
+  assert.match(markdown, /只有用户确认本版本后才开始执行/);
 });

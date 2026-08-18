@@ -17,8 +17,9 @@ export function createPrepareRequirementPlanTool(options: {
       parameters: {
         type: "object",
         additionalProperties: false,
-        required: ["title", "objective", "scope", "nonGoals", "constraints", "deliverables", "acceptanceCriteria", "testCases", "executionSteps"],
+        required: ["executionKind", "title", "objective", "scope", "nonGoals", "constraints", "deliverables", "acceptanceCriteria", "testCases", "executionSteps"],
         properties: {
+          executionKind: { type: "string", enum: ["analysis_only", "software_change", "software_product_delivery"] },
           title: { type: "string" }, objective: { type: "string" },
           scope: stringArray(), nonGoals: stringArray(), constraints: stringArray(),
           deliverables: stringArray(), acceptanceCriteria: stringArray(), executionSteps: stringArray(),
@@ -71,6 +72,9 @@ function parseDraft(text: string): RequirementDraft {
   let value: unknown;
   try { value = JSON.parse(text); } catch { throw new Error("Invalid requirement plan arguments"); }
   if (!isRecord(value)) throw new Error("Invalid requirement plan arguments");
+  if (!["analysis_only", "software_change", "software_product_delivery"].includes(String(value.executionKind))) {
+    throw new Error("Requirement executionKind is required");
+  }
   const stringFields = ["title", "objective"] as const;
   for (const field of stringFields) if (typeof value[field] !== "string" || value[field].trim().length === 0) throw new Error(`Requirement ${field} is required`);
   const arrayFields = ["scope", "nonGoals", "constraints", "deliverables", "acceptanceCriteria", "executionSteps"] as const;
