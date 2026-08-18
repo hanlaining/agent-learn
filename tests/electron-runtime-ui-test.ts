@@ -5,6 +5,7 @@ import { resolve } from "node:path";
 
 import type {
   DesktopEvent,
+  DesktopThreadSummary,
 } from "../src/electron/desktop-types.js";
 import type {
   RuntimeContent,
@@ -44,6 +45,43 @@ import {
   replaceComposerToken,
   type ComposerSuggestion,
 } from "../src/electron/renderer/composer-suggestions.js";
+import {
+  dateGroup,
+  groupThreads,
+  shouldAutoOpenToday,
+} from "../src/electron/renderer/history-groups.js";
+
+test("新 Chat 使用创建时间兜底并在首帧归入今天", () => {
+  const now = new Date(2026, 7, 18, 9, 0, 0);
+  const makeThread = (overrides: Partial<DesktopThreadSummary>): DesktopThreadSummary => ({
+    id: "thread-new",
+    title: "新任务",
+    status: "active",
+    createdAt: new Date(2026, 7, 18, 8, 59, 0).toISOString(),
+    lastActivityAt: "",
+    messageCount: 1,
+    turnState: "starting",
+    model: "gpt-5.6-sol",
+    reasoningEffort: "high",
+    ...overrides,
+  });
+
+  const newThread = makeThread({});
+  assert.equal(dateGroup(newThread, newThread.id, now), "今天");
+  assert.equal(dateGroup(makeThread({ createdAt: "invalid" }), "thread-new", now), "今天");
+  assert.equal(dateGroup(makeThread({ id: "broken", createdAt: "invalid" }), "thread-new", now), "历史");
+  assert.equal(dateGroup(makeThread({
+    id: "yesterday",
+    createdAt: new Date(2026, 7, 17, 23, 59, 0).toISOString(),
+  }), undefined, new Date(2026, 7, 18, 0, 1, 0)), "昨天");
+
+  assert.deepEqual(groupThreads([
+    newThread,
+    makeThread({ id: "old", createdAt: new Date(2026, 7, 10).toISOString() }),
+  ], newThread.id, now).map(([label]) => label), ["今天", "历史"]);
+  assert.equal(shouldAutoOpenToday([newThread], newThread.id, new Set(), now), true);
+  assert.equal(shouldAutoOpenToday([newThread], newThread.id, new Set([newThread.id]), now), false);
+});
 
 test("outcome_unknown reducer 按 resolutionId 原位更新且不复制记录", () => {
   const record = {
@@ -595,6 +633,28 @@ test("工作区标题与真实 Agent 上下文在会话滚动时保持固定", (
   assert.match(styles, /\.workspace-header \{[\s\S]*?position: sticky;[\s\S]*?z-index: 5;[\s\S]*?top: 0;[\s\S]*?background: var\(--app-background\);/);
   assert.match(styles, /\.agent-thread-context \{[\s\S]*?position: sticky;[\s\S]*?z-index: 4;[\s\S]*?top: 0;[\s\S]*?backdrop-filter: blur\(12px\);/);
   assert.match(styles, /\.conversation-scroll \{[\s\S]*?overflow: auto;/);
+});
+
+test("当前历史任务树支持重复点击收起和重新展开", () => {
+  const app = readFileSync(resolve("src/electron/renderer/App.tsx"), "utf8");
+  const styles = readFileSync(resolve("src/electron/renderer/styles.css"), "utf8");
+  assert.match(app, /collapsedHistoryTreeIds/);
+  assert.match(app, /aria-expanded=\{thread\.id === ui\.snapshot\?\.activeThreadId/);
+  assert.match(app, /if \(isActiveTree\) \{[\s\S]*?next\.has\(thread\.id\)[\s\S]*?next\.delete\(thread\.id\)[\s\S]*?next\.add\(thread\.id\)/);
+  assert.match(app, /thread\.id === ui\.snapshot\?\.activeThreadId && !collapsedHistoryTreeIds\.has\(thread\.id\)/);
+  assert.match(styles, /\.history-item\[aria-expanded\]::after/);
+  assert.match(styles, /\.history-item\[aria-expanded="true"\]::after \{ transform: rotate\(90deg\); \}/);
+});
+
+test("用户与 Agent 消息使用 Codex 式左右分列并适配窄窗口", () => {
+  const app = readFileSync(resolve("src/electron/renderer/App.tsx"), "utf8");
+  const styles = readFileSync(resolve("src/electron/renderer/styles.css"), "utf8");
+  assert.match(app, /message message-\$\{message\.role\}/);
+  assert.match(styles, /\.message-user \{[\s\S]*?grid-template-columns: minmax\(0, 1fr\) 22px;/);
+  assert.match(styles, /\.message-user > div \{[\s\S]*?grid-column: 1;[\s\S]*?justify-items: end;/);
+  assert.match(styles, /\.message-user \.message-avatar \{[\s\S]*?grid-column: 2;[\s\S]*?grid-row: 1;/);
+  assert.match(styles, /\.message-user \.message-copy \{[\s\S]*?width: fit-content;[\s\S]*?max-width: min\(75%, 560px\);/);
+  assert.match(styles, /@container workspace \(max-width: 380px\) \{[\s\S]*?\.message-user \{ grid-template-columns: minmax\(0, 1fr\) 20px; \}[\s\S]*?\.message-user \.message-copy \{ max-width: 92%; \}/);
 });
 
 test("产品双轮 Return 使用受控阶段按钮且返工状态不标红", () => {

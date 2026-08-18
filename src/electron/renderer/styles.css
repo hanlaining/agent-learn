@@ -406,7 +406,7 @@ button { color: inherit; }
 
 .history-item {
   display: grid;
-  grid-template-columns: 8px minmax(0, 1fr) auto;
+  grid-template-columns: 8px minmax(0, 1fr) auto auto;
   width: 100%;
   align-items: center;
   gap: 7px;
@@ -415,6 +415,18 @@ button { color: inherit; }
   font-size: 11px;
   text-align: left;
 }
+
+.history-item[aria-expanded]::after {
+  width: 12px;
+  color: var(--faint-text);
+  content: "›";
+  font-size: 15px;
+  line-height: 1;
+  text-align: center;
+  transition: transform 120ms ease;
+}
+
+.history-item[aria-expanded="true"]::after { transform: rotate(90deg); }
 
 .history-item > span {
   display: grid;
@@ -680,6 +692,17 @@ button { color: inherit; }
   font-size: 13px;
 }
 
+.message-user {
+  grid-template-columns: minmax(0, 1fr) 22px;
+}
+
+.message-user > div {
+  grid-column: 1;
+  grid-row: 1;
+  display: grid;
+  justify-items: end;
+}
+
 .message > div,
 .thinking-block,
 .sources-block,
@@ -705,6 +728,8 @@ button { color: inherit; }
 }
 
 .message-user .message-avatar {
+  grid-column: 2;
+  grid-row: 1;
   border: 1px solid var(--border-color);
   color: var(--muted-text);
   background: var(--soft-background);
@@ -716,6 +741,7 @@ button { color: inherit; }
 }
 
 .message strong { display: block; margin: 3px 0 7px; font-size: 11px; }
+.message-user strong { text-align: right; }
 .message-copy {
   max-width: 100%;
   line-height: 1.65;
@@ -726,6 +752,8 @@ button { color: inherit; }
 
 .message-user .message-copy {
   display: inline-block;
+  width: fit-content;
+  max-width: min(75%, 560px);
   padding: 8px 11px;
   border: 1px solid var(--border-color);
   border-radius: 10px;
@@ -1356,6 +1384,7 @@ button { color: inherit; }
 
 @container workspace (max-width: 560px) {
   .conversation-scroll { padding: 18px 14px 10px; }
+  .message-user .message-copy { max-width: 85%; }
   .thinking-block,
   .sources-block,
   .runtime-timeline { max-width: calc(100% - 22px); margin-left: 22px; }
@@ -1397,6 +1426,8 @@ button { color: inherit; }
 @container workspace (max-width: 380px) {
   .conversation-scroll { padding-inline: 10px; }
   .message { grid-template-columns: 20px minmax(0, 1fr); gap: 7px; }
+  .message-user { grid-template-columns: minmax(0, 1fr) 20px; }
+  .message-user .message-copy { max-width: 92%; }
   .message-avatar { width: 20px; height: 20px; }
   .thinking-block,
   .sources-block,
@@ -1426,6 +1457,7 @@ button { color: inherit; }
   .trash-section .footer-action span,
   .sidebar-footer .footer-action span { display: none; }
   .history-item { grid-template-columns: 8px minmax(0, 1fr); gap: 6px; padding-inline: 6px; }
+  .history-item[aria-expanded]::after { display: none; }
   .history-item-row { gap: 0; }
 }
 
