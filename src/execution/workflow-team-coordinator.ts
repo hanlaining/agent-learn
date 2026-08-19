@@ -769,6 +769,7 @@ export class WorkflowTeamCoordinator {
     for (const runId of responsibleRunIds) {
       const run = this.options.runStore.get(runId);
       if (run === undefined) continue;
+      if (run.taskId !== undefined) this.options.runtimeStore.setTaskStatus(run.taskId, "failed");
       this.options.runStore.complete(runId, {
         runId,
         ...(run.taskId === undefined ? {} : { taskId: run.taskId }),
@@ -786,9 +787,17 @@ export class WorkflowTeamCoordinator {
       .filter((run) => downstreamRunIds.includes(run.id) && run.taskId !== undefined)
       .map((run) => run.taskId!);
     this.options.runtimeStore.closeTasks(downstreamTaskIds);
-    const closed = this.options.runStore.markUpstreamBlocked(jobId, downstreamRunIds, "上游阶段未完成，本角色未启动");
+    this.options.runtimeStore.closeActiveTasks(jobId, "cancelled");
+    const downstream = this.options.runStore.closeAsUpstreamBlocked(jobId, downstreamRunIds, "上游阶段未完成，本角色未启动");
+    const nonResponsible = this.options.runStore.closeActiveForJob(jobId, "cancelled", "责任节点失败，流程已终止");
+    for (const run of nonResponsible) {
+      this.options.runStore.setPresentation(run.id, {
+        coordinationStatus: "skipped", attentionLevel: "neutral",
+        statusMessage: "责任节点失败，流程已终止",
+      });
+    }
     if (!alreadyTerminal) this.options.onFailed?.(jobId);
-    this.notify(...responsibleRunIds, ...closed.map((run) => run.id));
+    this.notify(...responsibleRunIds, ...downstream.map((run) => run.id), ...nonResponsible.map((run) => run.id));
   }
 
   private markSupervisorsWaiting(jobId: string, responsibleRunId: string): void {

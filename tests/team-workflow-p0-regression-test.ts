@@ -182,6 +182,12 @@ test("P0-6 Lead返回failed时有界重试后只标红责任节点", async () =>
   const lead = setup.runs.listForJob(setup.jobId).find((item) => item.agentProfileId === "software_team_lead");
   assert.equal(lead?.status, "failed");
   assert.equal(lead?.failureOrigin, "contract");
+  const terminalRuns = setup.runs.listForJob(setup.jobId);
+  assert.equal(terminalRuns.some((item) => ["queued", "running", "waiting_children", "resuming"].includes(item.status)), false);
+  assert.deepEqual(terminalRuns.filter((item) => item.attentionLevel === "error").map((item) => item.id), [lead?.id]);
+  const root = terminalRuns.find((item) => item.agentProfileId === "orchestrator");
+  assert.equal(root?.status, "cancelled");
+  assert.equal(root?.attentionLevel, "neutral");
   assert.equal(setup.calls.filter((call) => call.profileId === "software_team_lead").length, 2);
   assert.equal(setup.calls.filter((call) => call.profileId === "orchestrator").length, 0);
   assert.equal(setup.runtime.listReturns(setup.jobId).some((item) => item.stageId === "lead"), false);

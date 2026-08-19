@@ -160,6 +160,26 @@ export class AgentRunStore {
     }
     return updated;
   }
+  closeAsUpstreamBlocked(jobId: string, downstreamRunIds: readonly string[], summary: string): AgentRun[] {
+    const downstream = new Set(downstreamRunIds);
+    const closed: AgentRun[] = [];
+    for (const run of this.runs.values()) {
+      if (run.jobId !== jobId || !downstream.has(run.id) ||
+        !["queued", "running", "waiting_children", "resuming"].includes(run.status)) continue;
+      this.complete(run.id, {
+        runId: run.id,
+        ...(run.taskId === undefined ? {} : { taskId: run.taskId }),
+        status: "cancelled",
+        summary,
+      });
+      run.coordinationStatus = "upstream_blocked";
+      run.attentionLevel = "feedback";
+      run.statusMessage = summary;
+      run.failureOrigin = "dependency";
+      closed.push(structuredClone(run));
+    }
+    return closed;
+  }
   receiveReturn(result: AgentRunResult): boolean {
     if (this.returnReceipts.has(result.runId)) return false;
     this.returnReceipts.add(result.runId); return true;

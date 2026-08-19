@@ -51,13 +51,20 @@ test("Product 真正业务失败只标红责任节点，未执行下游保持橙
 
   for (const profile of ["engineering_role", "quality_role"] as const) {
     const downstream = run(setup, profile);
-    assert.equal(downstream.status, "queued");
+    assert.equal(downstream.status, "cancelled");
     assert.equal(downstream.coordinationStatus, "upstream_blocked");
     assert.equal(downstream.attentionLevel, "feedback");
     assert.equal(downstream.failureOrigin, "dependency");
   }
-  assert.equal(run(setup, "software_team_lead").status, "waiting_children");
-  assert.equal(run(setup, "orchestrator").status, "waiting_children");
+  for (const profile of ["software_team_lead", "orchestrator"]) {
+    const ancestor = run(setup, profile);
+    assert.equal(ancestor.status, "cancelled");
+    assert.equal(ancestor.coordinationStatus, "skipped");
+    assert.equal(ancestor.attentionLevel, "neutral");
+  }
+  const terminalRuns = setup.runs.listForJob(setup.jobId);
+  assert.equal(terminalRuns.some((item) => ["queued", "running", "waiting_children", "resuming"].includes(item.status)), false);
+  assert.deepEqual(terminalRuns.filter((item) => item.attentionLevel === "error").map((item) => item.id), [product.id]);
   assert.equal(setup.runtime.listTasks(setup.jobId).find((item) => item.profileId === "product_role")?.status, "failed");
 });
 
