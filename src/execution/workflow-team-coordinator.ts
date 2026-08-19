@@ -57,6 +57,7 @@ export interface WorkflowTeamCoordinatorOptions {
   }): WorkflowTeamExecution | undefined;
   commitRecoveredModelExecution?(invocationId: string, targetCommitKey: string): void;
   requirement(jobId: string): WorkflowRequirementContext;
+  feedback?(jobId: string): { turnId: string; text: string } | undefined;
   modelInfo?(profileId: TeamProfile): { model: string; reasoningEffort?: string };
   persist?: () => void | Promise<void>;
   onRunUpdated?: (runId: string) => void;
@@ -69,7 +70,7 @@ const FORMAT_CONTRACT = `只返回一个 JSON 对象，不要 Markdown：{"statu
 export type WorkflowRecoveryDecision =
   | { kind: "resume_stage"; stage: FixedProductStage }
   | { kind: "deliver_return"; stage: FixedProductStage }
-  | { kind: "wait"; reason: "active" | "backoff" | "no_progress" }
+  | { kind: "wait"; reason: "active" | "backoff" | "feedback" | "no_progress" }
   | { kind: "terminal"; status: "completed" | "failed" | "partial" | "cancelled" };
 
 export class WorkflowTeamCoordinator {
@@ -124,11 +125,9 @@ export class WorkflowTeamCoordinator {
       return { kind: "terminal", status: job.status as "completed" | "failed" | "partial" | "cancelled" };
     }
     if (this.activeJobs.has(jobId)) return { kind: "wait", reason: "active" };
-    if (job.status === "reviewing" && this.options.runStore.listForJob(jobId).some((run) =>
-      run.coordinationStatus === "feedback_required")) {
-      // Feedback is a durable pause, not an automatic retry. A parent steer or
-      // explicit resume calls advance() after adding the missing guidance.
-      return { kind: "wait", reason: "no_progress" };
+    if (this.options.runtimeStore.listTasks(jobId).some((item) =>
+      item.jobAttempt === job.attempt && item.status === "blocked")) {
+      return { kind: "wait", reason: "feedback" };
     }
     const now = new Date().toISOString();
     const pendingBackoff = this.options.runtimeStore.listReturns(jobId).some((item) =>
@@ -146,6 +145,35 @@ export class WorkflowTeamCoordinator {
     return { kind: "resume_stage", stage };
   }
 
+  async provideFeedback(jobId: string, feedback: { turnId: string; text: string }): Promise<boolean> {
+    const job = this.options.runtimeStore.getJob(jobId);
+    if (job === undefined || ["completed", "failed", "partial", "cancelled"].includes(job.status)) return false;
+    const blocked = this.options.runtimeStore.listTasks(jobId)
+      .filter((item) => item.jobAttempt === job.attempt && item.status === "blocked");
+    if (blocked.length === 0) return false;
+    for (const task of blocked) {
+      this.options.runtimeStore.publishBoard({
+        jobId,
+        producerRunId: job.rootRunId,
+        taskId: task.id,
+        attempt: task.attempt,
+        kind: "decision",
+        title: "User feedback received",
+        summary: `Parent Turn ${feedback.turnId} supplied feedback for blocked Task`,
+        payload: { turnId: feedback.turnId },
+        confidence: "confirmed",
+        visibility: "parent_only",
+        idempotencyKey: `${job.id}:${job.attempt}:feedback:${task.id}:${feedback.turnId}`,
+      });
+      this.options.runtimeStore.setTaskStatus(task.id, "rework");
+      this.options.runStore.setStatus(task.ownerRunId, "resuming");
+      this.notify(task.ownerRunId);
+    }
+    this.options.runtimeStore.setJobStatus(jobId, "running");
+    await this.options.persist?.();
+    return true;
+  }
+
   canAdvanceWithoutModel(jobId: string, stage: FixedProductStage): boolean {
     const job = this.options.runtimeStore.getJob(jobId);
     if (job === undefined || ["completed", "failed", "partial", "cancelled"].includes(job.status)) return true;
@@ -159,6 +187,12 @@ export class WorkflowTeamCoordinator {
     }
     if (stage === "lead_return_ready") return this.hasPersistedStageEvidence(jobId, "return_god", job.attempt) ||
       this.hasRecoverableModelExecution(jobId, "return_god", job.attempt);
+    const reworkTask = stage === "rework" ? this.taskFor(jobId, "product_role")
+      : stage === "engineering_ready" ? this.taskFor(jobId, "engineering_role")
+        : stage === "quality_ready" ? this.taskFor(jobId, "quality_role") : undefined;
+    // 已持久化的旧 attempt Evidence 不能被误当成反馈后新 attempt 已完成。
+    // 启动恢复保持零模型调用，等用户显式 turn/run 再执行返工。
+    if (reworkTask?.status === "rework") return false;
     const stageId = stage === "ready_first_return" || stage === "rework" ? "product"
       : stage === "engineering_ready" ? "engineering"
         : stage === "quality_ready" ? "quality" : undefined;
@@ -230,10 +264,11 @@ export class WorkflowTeamCoordinator {
   private async runProduct(jobId: string, attempt: number): Promise<void> {
     const team = this.team(jobId); const task = this.ensureTask(jobId, "product_role");
     if (attempt > 1) this.options.runtimeStore.setTaskOwnerRun(task.id, team.product.id, attempt);
+    const feedback = this.feedbackForTask(jobId, task.id);
     await this.runWorkerStage({
       jobId, stageId: "product", profileId: "product_role", runId: team.product.id, threadId: team.product.threadId,
       taskId: task.id, parentRunId: team.lead.id, attempt, kind: "summary", producer: "worker",
-      prompt: `把已确认需求整理成可执行的结构化产品规格。不得实现工程，也不得扩大范围。\n\n${this.options.requirement(jobId).prompt}`,
+      prompt: `把已确认需求整理成可执行的结构化产品规格。不得实现工程，也不得扩大范围。\n\n${this.options.requirement(jobId).prompt}${this.formatFeedback(feedback)}`,
     });
   }
 
@@ -242,6 +277,12 @@ export class WorkflowTeamCoordinator {
     const envelope = this.requireReturn(jobId, "product", attempt); const claimed = this.options.runtimeStore.claimReturn(envelope.id);
     if (claimed === undefined) throw new RuntimeFailure("return_delivery_failed", "Product Return is unavailable", true);
     const result = parseStageResult(claimed.result.summary);
+    if (result.status === "blocked" || result.nextStageRecommendation === "block") {
+      this.options.runtimeStore.consumeReturn(envelope.id);
+      this.pauseForFeedback(jobId, task.id, team.product.id, "产品阶段需要负责人补充信息");
+      await this.options.persist?.();
+      return;
+    }
     const complete = result.status === "completed" && result.deliverables.length > 0 && result.evidence.length > 0 && result.blockers.length === 0;
     const review = this.options.runtimeStore.addEvidence({
       jobId, taskId: task.id, runId: team.lead.id, kind: "review", producer: "reviewer",
@@ -259,8 +300,6 @@ export class WorkflowTeamCoordinator {
       this.options.runStore.complete(team.product.id, { runId: team.product.id, taskId: task.id, status: "completed", summary: result.summary });
       this.options.runStore.setPresentation(team.product.id, { attentionLevel: "success", statusMessage: "产品规格已通过验收" });
       this.options.runtimeStore.setJobStatus(jobId, "running");
-    } else if (result.status === "blocked") {
-      this.pauseForFeedback(jobId, task.id, team.product.id, "产品阶段需要负责人补充信息");
     } else if (attempt < 2) {
       this.options.runtimeStore.setTaskStatus(task.id, "rework"); this.options.runStore.setStatus(team.product.id, "resuming");
       this.options.runStore.setPresentation(team.product.id, {
@@ -284,10 +323,11 @@ export class WorkflowTeamCoordinator {
       this.options.runStore.setStatus(team.engineering.id, "resuming");
       task = this.options.runtimeStore.getTask(task.id)!;
     }
+    const feedback = this.feedbackForTask(jobId, task.id);
     await this.runWorkerStage({
       jobId, stageId: "engineering", profileId: "engineering_role", runId: team.engineering.id, threadId: team.engineering.threadId,
       taskId: task.id, parentRunId: team.lead.id, attempt: task.attempt, kind: "artifact", producer: "worker",
-      prompt: `只在已确认 scope 内完成工程实现并运行必要检查。交付目录来自 Requirement，不得假设任何演示项目路径。\n\n${this.options.requirement(jobId).prompt}`,
+      prompt: `只在已确认 scope 内完成工程实现并运行必要检查。交付目录来自 Requirement，不得假设任何演示项目路径。\n\n${this.options.requirement(jobId).prompt}${this.formatFeedback(feedback)}`,
     });
   }
 
@@ -296,13 +336,13 @@ export class WorkflowTeamCoordinator {
     const envelope = this.requireReturn(jobId, "engineering", task.attempt); const claimed = this.options.runtimeStore.claimReturn(envelope.id);
     if (claimed === undefined) throw new RuntimeFailure("return_delivery_failed", "Engineering Return is unavailable", true);
     const result = parseStageResult(claimed.result.summary);
+    if (result.status === "blocked" || result.nextStageRecommendation === "block") {
+      this.options.runtimeStore.consumeReturn(envelope.id);
+      this.pauseForFeedback(jobId, task.id, team.engineering.id, "工程阶段需要负责人补充信息");
+      await this.options.persist?.();
+      return;
+    }
     if (!isSuccessfulStageResult(result)) {
-      if (result.status === "blocked") {
-        this.options.runtimeStore.consumeReturn(envelope.id);
-        this.pauseForFeedback(jobId, task.id, team.engineering.id, "工程阶段需要负责人补充信息");
-        await this.options.persist?.();
-        return;
-      }
       if (task.attempt < task.maxAttempts) {
         this.options.runtimeStore.consumeReturn(envelope.id);
         this.options.runtimeStore.setTaskStatus(task.id, "rework");
@@ -337,10 +377,11 @@ export class WorkflowTeamCoordinator {
       this.options.runStore.setStatus(team.quality.id, "resuming");
       task = this.options.runtimeStore.getTask(task.id)!;
     }
+    const feedback = this.feedbackForTask(jobId, task.id);
     await this.runWorkerStage({
       jobId, stageId: "quality", profileId: "quality_role", runId: team.quality.id, threadId: team.quality.threadId,
       taskId: task.id, parentRunId: team.lead.id, attempt: task.attempt, kind: "test", producer: "reviewer",
-      prompt: `独立、只读验收工程结果；运行允许的测试并逐条核对已确认验收标准。不得修改文件。\n\n${this.options.requirement(jobId).prompt}`,
+      prompt: `独立、只读验收工程结果；运行允许的测试并逐条核对已确认验收标准。不得修改文件。\n\n${this.options.requirement(jobId).prompt}${this.formatFeedback(feedback)}`,
     });
   }
 
@@ -357,13 +398,13 @@ export class WorkflowTeamCoordinator {
       return;
     }
     const result = parseStageResult(claimed.result.summary);
+    if (result.status === "blocked" || result.nextStageRecommendation === "block") {
+      this.options.runtimeStore.consumeReturn(envelope.id);
+      this.pauseForFeedback(jobId, task.id, team.quality.id, "测试阶段需要负责人补充信息");
+      await this.options.persist?.();
+      return;
+    }
     if (!isSuccessfulStageResult(result)) {
-      if (result.status === "blocked") {
-        this.options.runtimeStore.consumeReturn(envelope.id);
-        this.pauseForFeedback(jobId, task.id, team.quality.id, "测试阶段需要负责人补充信息");
-        await this.options.persist?.();
-        return;
-      }
       if (task.attempt < task.maxAttempts) {
         this.options.runtimeStore.consumeReturn(envelope.id);
         this.options.runtimeStore.setTaskStatus(task.id, "rework");
@@ -626,17 +667,25 @@ export class WorkflowTeamCoordinator {
       const evidence = this.options.runtimeStore.addEvidence({ jobId: input.jobId, taskId: input.taskId, runId: input.runId, kind: input.kind,
         summary: JSON.stringify(result), producer: input.producer, verdict: result.status === "failed" ? "failed" : "supported",
         idempotencyKey: evidenceKey, jobAttempt: team.job.attempt, workflowVersion: team.job.workflowVersion, stageId: input.stageId, stageAttempt: checkpoint.stageAttempt });
-      this.options.runStore.complete(input.runId, {
-        runId: input.runId, taskId: input.taskId,
-        status: "completed",
-        summary: result.summary,
-      });
-      this.options.runStore.setPresentation(input.runId, result.status === "blocked" ? {
-        coordinationStatus: "feedback_required", attentionLevel: "feedback",
-        statusMessage: result.summary || "需要负责人补充信息后继续",
-      } : result.status === "failed" ? {
-        coordinationStatus: "rework_required", attentionLevel: "feedback", statusMessage: "阶段输出需要返工",
-      } : { attentionLevel: "success", statusMessage: "阶段结果已返回，等待验收" });
+      if (result.status === "completed") {
+        this.options.runStore.complete(input.runId, { runId: input.runId, taskId: input.taskId, status: "completed", summary: result.summary });
+        this.options.runStore.setPresentation(input.runId, {
+          attentionLevel: "success",
+          statusMessage: "阶段结果已返回，等待验收",
+        });
+      } else {
+        // blocked/failed 是待 Lead 验收的业务结果，不是 AgentLoop 崩溃。在验收决策前保持可续跑。
+        this.options.runStore.setStatus(input.runId, "resuming");
+        this.options.runStore.setPresentation(input.runId, result.status === "blocked" ? {
+          coordinationStatus: "feedback_required",
+          attentionLevel: "feedback",
+          statusMessage: result.summary || "需要负责人补充信息后继续",
+        } : {
+          coordinationStatus: "rework_required",
+          attentionLevel: "feedback",
+          statusMessage: "阶段输出需要返工",
+        });
+      }
       this.options.runtimeStore.createReturn({ jobId: input.jobId, rootRunId: team.root.rootRunId, parentRunId: input.parentRunId, childRunId: input.runId, taskId: input.taskId,
         sequence: input.stageId === "product" ? input.attempt : input.stageId === "engineering" ? 2 : 3,
         result: { status: result.status === "failed" ? "failed" : "completed", summary: JSON.stringify(result), evidenceIds: [evidence.id], boardEntryIds: [] },
@@ -702,6 +751,29 @@ export class WorkflowTeamCoordinator {
     const stage = this.options.template.stages.find((item) => item.id === id);
     if (stage === undefined) throw new Error(`Workflow stage is unavailable: ${id}`);
     return stage;
+  }
+
+  private feedbackForTask(jobId: string, taskId: string): string | undefined {
+    const job = this.options.runtimeStore.getJob(jobId);
+    const marker = this.options.runtimeStore.listBoard(jobId)
+      .filter((item) => item.taskId === taskId && item.kind === "decision" &&
+        item.idempotencyKey?.startsWith(`${jobId}:${job?.attempt}:feedback:${taskId}:`))
+      .at(-1);
+    if (marker === undefined) return undefined;
+    const turnId = isRecord(marker.payload) && typeof marker.payload.turnId === "string"
+      ? marker.payload.turnId
+      : undefined;
+    const feedback = this.options.feedback?.(jobId);
+    if (turnId === undefined || feedback?.turnId !== turnId || feedback.text.trim().length === 0) {
+      throw new RuntimeFailure("stage_contract_failed", "Persisted user feedback is unavailable", true);
+    }
+    return feedback.text;
+  }
+
+  private formatFeedback(feedback: string | undefined): string {
+    return feedback === undefined
+      ? ""
+      : `\n\n用户对上一次 blocked 结果的补充反馈（必须纳入本次重试）：\n${feedback}`;
   }
 
   private requireReturn(jobId: string, stageId: string, attempt: number) {
@@ -827,4 +899,8 @@ function isSuccessfulStageResult(result: StageResult): boolean {
   return result.status === "completed" && result.deliverables.length > 0 &&
     result.evidence.length > 0 && result.blockers.length === 0 &&
     !["retry", "block"].includes(result.nextStageRecommendation);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }

@@ -12,6 +12,7 @@ import type { StageAdvancingExecutionEngine } from "./execution-engine-router.js
  */
 export class LegacyTeamExecutionEngineAdapter implements StageAdvancingExecutionEngine {
   readonly id = "legacy_team_adapter";
+  readonly control = "turn_agent" as const;
 
   constructor(
     private readonly runtimeStore: AgentRuntimeStore,

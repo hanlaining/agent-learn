@@ -93,6 +93,14 @@ export class AgentRuntimeStore {
     if (["completed", "partial", "failed", "cancelled"].includes(status)) job.completedAt = this.now();
     else delete job.completedAt;
   }
+  rebindJobTurn(id: string, rootTurnId: string): AgentJob {
+    const job = this.requireJob(id);
+    if (["completed", "partial", "failed", "cancelled"].includes(job.status)) {
+      throw new Error("Terminal Job cannot be rebound to another Turn");
+    }
+    job.rootTurnId = rootTurnId;
+    return copy(job);
+  }
   startJobAttempt(id: string, rootTurnId: string, rootRunId: string): AgentJob {
     const job = this.requireJob(id);
     if (job.rootTurnId === rootTurnId) return copy(job);
@@ -481,7 +489,7 @@ export class AgentRuntimeStore {
       this.setJobStatus(job.id, "waiting_returns");
       return "waiting_returns";
     }
-    if (currentTasks.some((item) => item.status === "rework" || item.status === "reviewing") ||
+    if (currentTasks.some((item) => ["blocked", "rework", "reviewing"].includes(item.status)) ||
       checkpoints.some((item) => item.status === "validating")) {
       this.setJobStatus(job.id, "reviewing");
       return "reviewing";

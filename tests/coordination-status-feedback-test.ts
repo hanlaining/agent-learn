@@ -88,7 +88,7 @@ test("Product blocked 后 Root/Lead 保持活动，并在同 Job/同 Thread 恢�
   assertDownstreamBlocked(setup, ["engineering_role", "quality_role"]);
 
   const resumed = restoreHarness(setup, async () => stageResult("completed", "valid after parent steer"));
-  assert.deepEqual(resumed.coordinator.recoveryDecision(resumed.jobId), { kind: "wait", reason: "no_progress" });
+  assert.deepEqual(resumed.coordinator.recoveryDecision(resumed.jobId), { kind: "wait", reason: "feedback" });
   assert.equal((await resumed.coordinator.advance(resumed.jobId, "rework")).stage, "second_return_ready");
   assert.equal((await resumed.coordinator.advance(resumed.jobId, "second_return_ready")).stage, "engineering_ready");
   await finishFromEngineering(resumed);

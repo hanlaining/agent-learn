@@ -4,11 +4,14 @@ import type { AgentRuntimeStore } from "../agents/agent-runtime-store.js";
 import type { RequirementExecutionKind } from "../requirements/requirement.js";
 import type { ExecutionContext } from "./execution-context.js";
 import type { ExecutionEngineSnapshot } from "./execution-engine.js";
+import type { ExecutionFeedback } from "./execution-engine.js";
 import type { StageAdvancingExecutionEngine } from "./execution-engine-router.js";
 
 export class TeamWorkflowExecutionEngine implements StageAdvancingExecutionEngine {
   readonly id = "team_workflow";
+  readonly control = "workflow" as const;
   private static readonly MAX_RESUME_TRANSITIONS = 32;
+  private readonly activeDrives = new Set<string>();
 
   constructor(
     private readonly runtimeStore: AgentRuntimeStore,
@@ -18,18 +21,21 @@ export class TeamWorkflowExecutionEngine implements StageAdvancingExecutionEngin
   ) {}
 
   supports(kind: RequirementExecutionKind): boolean { return kind === "software_product_delivery"; }
+  isActive(jobId: string): boolean { return this.activeDrives.has(jobId); }
   validateStart(allowedTools: string[]): void { this.validateTools(allowedTools); }
-  async start(context: ExecutionContext): Promise<void> { this.provision(context); }
+  provideFeedback(jobId: string, feedback: ExecutionFeedback): Promise<boolean> {
+    return this.coordinator.provideFeedback(jobId, feedback);
+  }
+  async start(context: ExecutionContext): Promise<void> {
+    this.provision(context);
+    await this.resume(context.jobId);
+  }
   async resume(jobId: string): Promise<void> {
-    this.runtimeStore.reconcilePersistedJobs(jobId);
-    this.coordinator.recoverPersistedCheckpoints(jobId);
-    await this.drive(jobId, true);
+    await this.runDrive(jobId, true);
   }
   async cancel(jobId: string): Promise<void> { this.runtimeStore.cancelJob(jobId); }
   async recover(jobId: string): Promise<void> {
-    this.runtimeStore.reconcilePersistedJobs(jobId);
-    this.coordinator.recoverPersistedCheckpoints(jobId);
-    await this.drive(jobId, false);
+    await this.runDrive(jobId, false);
   }
   advance(jobId: string, expectedStage: FixedProductStage): Promise<{ stage: FixedProductStage; changed: boolean }> {
     return this.coordinator.advance(jobId, expectedStage);
@@ -37,6 +43,18 @@ export class TeamWorkflowExecutionEngine implements StageAdvancingExecutionEngin
   snapshot(jobId: string): ExecutionEngineSnapshot {
     const job = this.runtimeStore.getJob(jobId);
     return { engine: this.id, jobId, ...(job === undefined ? {} : { workflowVersion: job.workflowVersion }), stage: this.coordinator.getStage(jobId), terminal: job === undefined || ["completed", "failed", "partial", "cancelled"].includes(job.status) };
+  }
+
+  private async runDrive(jobId: string, allowModelCalls: boolean): Promise<void> {
+    if (this.activeDrives.has(jobId)) return;
+    this.activeDrives.add(jobId);
+    try {
+      this.runtimeStore.reconcilePersistedJobs(jobId);
+      this.coordinator.recoverPersistedCheckpoints(jobId);
+      await this.drive(jobId, allowModelCalls);
+    } finally {
+      this.activeDrives.delete(jobId);
+    }
   }
 
   private async drive(jobId: string, allowModelCalls: boolean): Promise<void> {

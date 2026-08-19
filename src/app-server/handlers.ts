@@ -17,6 +17,7 @@ import {
 } from "../runtime/turn-start.js";
 import {
   parseTurnRunParams,
+  type TurnRunResult,
 } from "../runtime/turn-run.js";
 import {
   parseTurnCancelParams,
@@ -448,10 +449,30 @@ export function registerAppServerHandlers(
     agentRegistry?.requireAll(jobTeamConfig.allowedProfiles);
     if (jobTeamConfig.independentReview) agentRegistry?.require("reviewer");
     if (executionRequested) executionEngineRouter?.validateStart(executionKind, jobTeamConfig.allowedTools ?? ["*"]);
+    const activeTeamJob = existingRequirementJob?.executionKind === "software_product_delivery" &&
+      !["completed", "partial", "failed", "cancelled"].includes(existingRequirementJob.status);
+    const currentAttemptBlocked = activeTeamJob && agentRuntimeStore?.listTasks(existingRequirementJob.id)
+      .some((item) => item.jobAttempt === existingRequirementJob.attempt && item.status === "blocked") === true;
+    const workflowDriveActive = activeTeamJob && executionEngineRouter?.isActive(
+      existingRequirementJob.executionKind, existingRequirementJob.id) === true;
+    const workflowFeedbackTurn = activeTeamJob && existingRequirementJob.status === "reviewing" &&
+      currentAttemptBlocked && existingRequirementJob.rootTurnId !== request.turnId && !workflowDriveActive;
+    const workflowBusyTurn = activeTeamJob && !workflowFeedbackTurn &&
+      (workflowDriveActive || existingRequirementJob.rootTurnId !== request.turnId);
+    if (workflowBusyTurn) {
+      const result = createWorkflowBusyResult(lifecycleStore, request.turnId);
+      await saveState();
+      log(`[app-server] workflow busy; follow-up rejected while active Job continues: ${request.turnId}\n`);
+      return result;
+    }
+    const reuseTeamRoot = activeTeamJob &&
+      (workflowFeedbackTurn || existingRequirementJob.rootTurnId === request.turnId);
     const rootRun = turnFact === undefined || requirement === undefined || !executionRequested
       ? undefined
-      : agentRunStore?.ensureRoot(turnFact.threadId, request.turnId, profile?.id,
-          existingRequirementJob?.id ?? `job-${requirement.id}-v${requirement.revision}`);
+      : reuseTeamRoot
+        ? agentRunStore?.get(existingRequirementJob.rootRunId)
+        : agentRunStore?.ensureRoot(turnFact.threadId, request.turnId, profile?.id,
+            existingRequirementJob?.id ?? `job-${requirement.id}-v${requirement.revision}`);
     let job = rootRun === undefined || turnFact === undefined || requirement === undefined ? undefined
       : agentRuntimeStore?.createJob({ threadId: turnFact.threadId, rootTurnId: request.turnId,
           rootRunId: rootRun.rootRunId, configSnapshot: jobTeamConfig, executionKind,
@@ -461,36 +482,63 @@ export function registerAppServerHandlers(
       job = agentRuntimeStore?.startJobAttempt(job.id, request.turnId, rootRun.rootRunId);
       if (job !== undefined) agentRunStore?.rebindAttempt(rootRun.id, request.turnId, job.attempt);
     }
-    if (job !== undefined && requirement !== undefined) requirementStore?.attachJob(requirement.id, job.id);
-    if (job !== undefined && rootRun !== undefined && executionEngineRouter !== undefined) {
-      await executionEngineRouter.start({ jobId: job.id, threadId: job.threadId, rootRunId: rootRun.id,
-        executionKind: job.executionKind, workflowVersion: job.workflowVersion });
+    if (job !== undefined && rootRun !== undefined && workflowFeedbackTurn) {
+      agentRuntimeStore?.rebindJobTurn(job.id, request.turnId);
+      agentRunStore?.rebindAttempt(rootRun.id, request.turnId, job.attempt);
+      job = agentRuntimeStore?.getJob(job.id);
     }
-    if (rootRun !== undefined) agentRunStore?.setStatus(rootRun.id, "running");
-    if (job !== undefined) agentRuntimeStore?.setJobStatus(job.id, "running");
+    if (job !== undefined && requirement !== undefined) requirementStore?.attachJob(requirement.id, job.id);
+    const executionControl = job === undefined || executionEngineRouter === undefined
+      ? "turn_agent" as const
+      : executionEngineRouter.control(job.executionKind);
 
     try {
-      const result = await agentLoop.run(request.turnId, {
-        ...(request.model === undefined ? {} : { model: request.model }),
-        ...(request.reasoningEffort === undefined
-          ? {}
-          : { reasoningEffort: request.reasoningEffort }),
-        ...(profile === undefined ? {} : { instructions: buildParentAgentInstructions(
-          profile.instructions,
-          teamConfig.mode,
-          undefined,
-          executionConfirmed,
-          requirement,
-        ) }),
-        ...(profile === undefined ? {} : { allowedTools: applyRequirementGateToTools(applyAgentModeToTools(intersectCapabilities(profile.allowedTools, jobTeamConfig.allowedTools), teamConfig.mode), executionConfirmed),
-          allowedSkills: intersectCapabilities(profile.allowedSkills, teamConfig.allowedSkills) }),
-      });
+      if (job?.executionKind === "software_product_delivery" && executionEngineRouter === undefined) {
+        throw new Error("Team Workflow engine is unavailable");
+      }
+      if (rootRun !== undefined) {
+        agentRunStore?.setStatus(rootRun.id,
+          executionControl === "workflow" ? "waiting_children" : "running");
+      }
+      if (job !== undefined) {
+        const awaitingFeedback = executionControl === "workflow" && !workflowFeedbackTurn &&
+          agentRuntimeStore?.listTasks(job.id).some((item) => item.status === "blocked") === true;
+        agentRuntimeStore?.setJobStatus(job.id, awaitingFeedback ? "reviewing" : "running");
+      }
+      if (job !== undefined && rootRun !== undefined && executionEngineRouter !== undefined) {
+        if (workflowFeedbackTurn) {
+          await executionEngineRouter.provideFeedback(job.executionKind, job.id, {
+            turnId: request.turnId,
+            text: turnUserInput,
+          });
+        }
+        await executionEngineRouter.start({ jobId: job.id, threadId: job.threadId, rootRunId: rootRun.id,
+          executionKind: job.executionKind, workflowVersion: job.workflowVersion });
+      }
+
+      const result: TurnRunResult = executionControl === "workflow"
+        ? resolveWorkflowTurnResult(lifecycleStore, agentRuntimeStore, job?.id, request.turnId)
+        : await agentLoop.run(request.turnId, {
+            ...(request.model === undefined ? {} : { model: request.model }),
+            ...(request.reasoningEffort === undefined
+              ? {}
+              : { reasoningEffort: request.reasoningEffort }),
+            ...(profile === undefined ? {} : { instructions: buildParentAgentInstructions(
+              profile.instructions,
+              teamConfig.mode,
+              undefined,
+              executionConfirmed,
+              requirement,
+            ) }),
+            ...(profile === undefined ? {} : { allowedTools: applyRequirementGateToTools(applyAgentModeToTools(intersectCapabilities(profile.allowedTools, jobTeamConfig.allowedTools), teamConfig.mode), executionConfirmed),
+              allowedSkills: intersectCapabilities(profile.allowedSkills, teamConfig.allowedSkills) }),
+          });
 
       log(
         `[app-server] turn completed: ${result.turn.id}\n`,
       );
 
-      if (rootRun !== undefined) {
+      if (rootRun !== undefined && executionControl === "turn_agent") {
         agentRunStore?.complete(rootRun.id, {
           runId: rootRun.id,
           status: "completed",
@@ -734,6 +782,52 @@ function readTurnUserInput(lifecycleStore: LifecycleStore, turnId: string): stri
     "text" in item.content && typeof item.content.text === "string"
     ? item.content.text
     : "执行用户当前任务并返回可验证结果";
+}
+
+function readCompletedTurnResult(lifecycleStore: LifecycleStore, turnId: string): TurnRunResult {
+  const turn = lifecycleStore.getTurn(turnId);
+  const assistantMessage = lifecycleStore.getItemsForTurn(turnId)
+    .filter((item) => item.type === "assistant_message")
+    .at(-1);
+  if (turn?.status !== "completed" || assistantMessage === undefined) {
+    throw new Error("Team Workflow finished without a committed root-turn delivery");
+  }
+  return { turn, assistantMessage };
+}
+
+function resolveWorkflowTurnResult(
+  lifecycleStore: LifecycleStore,
+  runtimeStore: AgentRuntimeStore | undefined,
+  jobId: string | undefined,
+  turnId: string,
+): TurnRunResult {
+  const job = jobId === undefined ? undefined : runtimeStore?.getJob(jobId);
+  if (job?.status === "completed") return readCompletedTurnResult(lifecycleStore, turnId);
+  const blocked = jobId === undefined ? [] : runtimeStore?.listTasks(jobId)
+    .filter((item) => item.jobAttempt === job?.attempt && item.status === "blocked") ?? [];
+  if (job?.status !== "reviewing" || blocked.length === 0) {
+    throw new Error("Team Workflow paused without a recoverable feedback request");
+  }
+  const existing = lifecycleStore.getItemsForTurn(turnId)
+    .filter((item) => item.type === "assistant_message")
+    .at(-1);
+  if (lifecycleStore.getTurn(turnId)?.status === "completed" && existing !== undefined) {
+    return { turn: lifecycleStore.getTurn(turnId)!, assistantMessage: existing };
+  }
+  const roles = [...new Set(blocked.map((item) => item.profileId))].join("、");
+  const assistantMessage = lifecycleStore.appendItem(turnId, "assistant_message", {
+    text: `团队执行已暂停，${roles} 需要你补充信息后才能继续。请在当前 Chat 发送补充说明；Runtime 会沿用同一个 Job 和团队恢复，不会重跑已完成阶段。`,
+  });
+  const turn = lifecycleStore.completeTurn(turnId);
+  return { turn, assistantMessage };
+}
+
+function createWorkflowBusyResult(lifecycleStore: LifecycleStore, turnId: string): TurnRunResult {
+  const assistantMessage = lifecycleStore.appendItem(turnId, "assistant_message", {
+    text: "当前团队流程仍在执行，本条消息未进入队列、未合并到正在运行的阶段，也不会中断原任务。请等待当前流程完成或暂停后再发送；如果 Runtime 请求补充信息，再发送针对该反馈的说明。",
+  });
+  const turn = lifecycleStore.completeTurn(turnId);
+  return { turn, assistantMessage };
 }
 
 function parseOutcomeUnknownResolutionRequest(value: unknown): ResolveOutcomeUnknownInput {
