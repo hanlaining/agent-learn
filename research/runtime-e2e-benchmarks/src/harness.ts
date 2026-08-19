@@ -633,18 +633,7 @@ async function reloadBundle(bundle: RuntimeBundle, metrics: IoMetrics): Promise<
 }
 
 async function saveBundle(bundle: RuntimeBundle, metrics: IoMetrics): Promise<void> {
-  await bundle.persistence.save(
-    bundle.state.lifecycleStore,
-    bundle.state.contextCheckpointStore,
-    bundle.state.agentRunStore,
-    bundle.state.threadConfigs,
-    bundle.state.agentProfiles,
-    bundle.state.runtimeSessions,
-    bundle.state.agentRuntimeStore,
-    bundle.state.requirementStore,
-    bundle.state.modelInvocationStore,
-    bundle.state.toolInvocationStore,
-  );
+  await bundle.persistence.save(bundle.state);
   metrics.writes += 1;
 }
 

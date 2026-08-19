@@ -31,18 +31,7 @@ test("真实 App Server 遇到已占用 Job Lease 时记录等待并继续 ready
     executionKind: "software_change",
     workflowVersion: "dynamic_v1",
   });
-  await persistence.save(
-    loaded.lifecycleStore,
-    loaded.contextCheckpointStore,
-    loaded.agentRunStore,
-    loaded.threadConfigs,
-    loaded.agentProfiles,
-    loaded.runtimeSessions,
-    loaded.agentRuntimeStore,
-    loaded.requirementStore,
-    loaded.modelInvocationStore,
-    loaded.toolInvocationStore,
-  );
+  await persistence.save(loaded);
   const leaseStore = new PersistentRuntimeLeaseStore(join(root, "runtime-leases.json"));
   await leaseStore.acquire({
     resource: { type: "job", id: job.id },

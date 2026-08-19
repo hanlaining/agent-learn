@@ -146,12 +146,15 @@ const threadConfigs = new Map(
 const runtimeSessions = new Map(
   loadedRuntimeState.runtimeSessions.map((session) => [session.threadId, session]),
 );
-const persistRuntimeStateUnfenced = () => runtimePersistence.save(
-  lifecycleStore, contextCheckpointStore, agentRunStore,
-  [...threadConfigs.values()], agentRegistry?.list?.() ?? loadedRuntimeState.agentProfiles,
-  [...runtimeSessions.values()], agentRuntimeStore, requirementStore,
-  modelInvocationStore, toolInvocationStore,
-);
+const persistRuntimeStateUnfenced = () => {
+  replaceArrayContents(loadedRuntimeState.threadConfigs, [...threadConfigs.values()]);
+  replaceArrayContents(
+    loadedRuntimeState.agentProfiles,
+    agentRegistry?.list?.() ?? loadedRuntimeState.agentProfiles,
+  );
+  replaceArrayContents(loadedRuntimeState.runtimeSessions, [...runtimeSessions.values()]);
+  return runtimePersistence.save(loadedRuntimeState);
+};
 const persistRuntimeState = () => executionLeaseCoordinator.withActiveFencedCommit(
   "runtime_state",
   () => persistRuntimeStateUnfenced(),
@@ -810,4 +813,8 @@ function intersectCapabilities(left: readonly string[], right: readonly string[]
   if (left.includes("*")) return [...actualRight];
   if (actualRight.includes("*")) return [...left];
   return left.filter((item) => actualRight.includes(item));
+}
+
+function replaceArrayContents<T>(target: T[], source: readonly T[]): void {
+  target.splice(0, target.length, ...source);
 }

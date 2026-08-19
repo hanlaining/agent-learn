@@ -87,7 +87,7 @@ export interface LoadedRuntimeState {
   runtimeSessions: PersistedRuntimeSession[];
   restored: boolean;
   recoveredTurnIds: string[];
-  /** Zero identifies a missing or legacy v1-v6 snapshot. */
+  /** Diagnostic mirror only; save authorization is kept in a private state identity. */
   generation: number;
 }
 
@@ -107,6 +107,32 @@ export class SnapshotConflictError extends Error {
   }
 }
 
+export class SnapshotStateIdentityError extends Error {
+  readonly name = "SnapshotConflict";
+  readonly code = "snapshot_state_identity_mismatch";
+
+  constructor(readonly statePath: string) {
+    super(
+      `SnapshotConflict: Runtime state identity does not match ${statePath}; ` +
+        "reload and save the returned state as one unit",
+    );
+  }
+}
+
+interface SnapshotStateIdentity {
+  generation: number;
+  lifecycleStore: LifecycleStore;
+  contextCheckpointStore: ContextCheckpointStore;
+  agentRunStore: AgentRunStore;
+  agentRuntimeStore: AgentRuntimeStore;
+  requirementStore: RequirementStore;
+  modelInvocationStore: ModelInvocationStore;
+  toolInvocationStore: ToolInvocationStore;
+  threadConfigs: PersistedThreadConfig[];
+  agentProfiles: AgentProfile[];
+  runtimeSessions: PersistedRuntimeSession[];
+}
+
 /**
  * 把 Runtime 状态保存为单个版本化 JSON 文件。
  * 写入先落到同目录临时文件，再 rename，避免进程中断留下半份 JSON。
@@ -114,7 +140,10 @@ export class SnapshotConflictError extends Error {
 export class JsonFileRuntimePersistence {
   private saveQueue: Promise<void> = Promise.resolve();
   private readonly stateLock: ProcessSafeFileLock;
-  private expectedGeneration = 0;
+  private readonly stateIdentities = new WeakMap<
+    LoadedRuntimeState,
+    SnapshotStateIdentity
+  >();
 
   constructor(
     private readonly statePath: string,
@@ -137,8 +166,7 @@ export class JsonFileRuntimePersistence {
       text = await readFile(this.statePath, "utf8");
     } catch (error) {
       if (hasErrorCode(error, "ENOENT")) {
-        this.expectedGeneration = 0;
-        return {
+        const state: LoadedRuntimeState = {
           lifecycleStore: new LifecycleStore(),
           contextCheckpointStore:
             new ContextCheckpointStore(),
@@ -154,6 +182,8 @@ export class JsonFileRuntimePersistence {
           recoveredTurnIds: [],
           generation: 0,
         };
+        this.bindStateIdentity(state);
+        return state;
       }
 
       throw error;
@@ -170,7 +200,7 @@ export class JsonFileRuntimePersistence {
       ) {
         throw new Error("Unsupported state version");
       }
-      let generation = snapshotGeneration(value);
+      const generation = snapshotGeneration(value);
 
       const lifecycleStore = LifecycleStore.fromSnapshot(
         value.lifecycle,
@@ -216,25 +246,7 @@ export class JsonFileRuntimePersistence {
         lifecycleStore
           .recoverInProgressTurns()
           .map((turn) => turn.id);
-      this.expectedGeneration = generation;
-
-      if (recoveredTurnIds.length > 0) {
-        await this.save(
-          lifecycleStore,
-          contextCheckpointStore,
-          agentRunStore,
-          threadConfigs,
-          agentProfiles,
-          runtimeSessions,
-          agentRuntimeStore,
-          requirementStore,
-          modelInvocationStore,
-          toolInvocationStore,
-        );
-        generation = this.expectedGeneration;
-      }
-
-      return {
+      const state: LoadedRuntimeState = {
         lifecycleStore,
         contextCheckpointStore,
         agentRunStore,
@@ -249,8 +261,18 @@ export class JsonFileRuntimePersistence {
         recoveredTurnIds,
         generation,
       };
+      this.bindStateIdentity(state);
+
+      if (recoveredTurnIds.length > 0) {
+        await this.save(state);
+      }
+
+      return state;
     } catch (error) {
-      if (error instanceof SnapshotConflictError) throw error;
+      if (
+        error instanceof SnapshotConflictError ||
+        error instanceof SnapshotStateIdentityError
+      ) throw error;
       const message =
         error instanceof Error
           ? error.message
@@ -262,34 +284,24 @@ export class JsonFileRuntimePersistence {
     }
   }
 
-  save(
-    lifecycleStore: LifecycleStore,
-    contextCheckpointStore: ContextCheckpointStore,
-    agentRunStore: AgentRunStore = new AgentRunStore(),
-    threadConfigs: PersistedThreadConfig[] = [],
-    agentProfiles: AgentProfile[] = [],
-    runtimeSessions: PersistedRuntimeSession[] = [],
-    agentRuntimeStore: AgentRuntimeStore = new AgentRuntimeStore(),
-    requirementStore: RequirementStore = new RequirementStore(),
-    modelInvocationStore: ModelInvocationStore = new ModelInvocationStore(),
-    toolInvocationStore: ToolInvocationStore = new ToolInvocationStore(),
-  ): Promise<void> {
+  async save(state: LoadedRuntimeState): Promise<void> {
+    const identity = this.requireStateIdentity(state);
     const snapshot: Omit<RuntimeStateSnapshot, "generation"> = {
       version: 7,
-      lifecycle: lifecycleStore.exportSnapshot(),
+      lifecycle: state.lifecycleStore.exportSnapshot(),
       contextCheckpoints:
-        contextCheckpointStore.exportSnapshot(),
-      threadConfigs: structuredClone(threadConfigs),
-      agentProfiles: structuredClone(agentProfiles),
-      agentRuns: agentRunStore.exportSnapshot(),
-      agentRuntime: agentRuntimeStore.exportSnapshot(),
-      runtimeSessions: structuredClone(runtimeSessions),
-      requirements: requirementStore.exportSnapshot(),
-      modelInvocations: modelInvocationStore.exportSnapshot(),
-      toolInvocations: toolInvocationStore.exportSnapshot(),
+        state.contextCheckpointStore.exportSnapshot(),
+      threadConfigs: structuredClone(state.threadConfigs),
+      agentProfiles: structuredClone(state.agentProfiles),
+      agentRuns: state.agentRunStore.exportSnapshot(),
+      agentRuntime: state.agentRuntimeStore.exportSnapshot(),
+      runtimeSessions: structuredClone(state.runtimeSessions),
+      requirements: state.requirementStore.exportSnapshot(),
+      modelInvocations: state.modelInvocationStore.exportSnapshot(),
+      toolInvocations: state.toolInvocationStore.exportSnapshot(),
     };
     const operation = this.saveQueue.then(() =>
-      this.writeSnapshot(snapshot),
+      this.writeSnapshot(state, identity, snapshot),
     );
 
     // 队列继续工作，但当前调用者仍会收到本次写入的真实失败。
@@ -299,10 +311,13 @@ export class JsonFileRuntimePersistence {
   }
 
   private async writeSnapshot(
+    state: LoadedRuntimeState,
+    identity: SnapshotStateIdentity,
     snapshot: Omit<RuntimeStateSnapshot, "generation">,
   ): Promise<void> {
     await this.stateLock.withLock(async () => {
-      const expectedGeneration = this.expectedGeneration;
+      this.requireStateIdentity(state, identity);
+      const expectedGeneration = identity.generation;
       const actualGeneration = await this.readDiskGeneration();
       if (actualGeneration !== expectedGeneration) {
         throw new SnapshotConflictError(
@@ -314,8 +329,49 @@ export class JsonFileRuntimePersistence {
       const generation = expectedGeneration + 1;
       assertGeneration(generation, "next generation");
       await this.replaceSnapshot({ ...snapshot, generation });
-      this.expectedGeneration = generation;
+      identity.generation = generation;
+      state.generation = generation;
     });
+  }
+
+  private bindStateIdentity(state: LoadedRuntimeState): void {
+    this.stateIdentities.set(state, {
+      generation: state.generation,
+      lifecycleStore: state.lifecycleStore,
+      contextCheckpointStore: state.contextCheckpointStore,
+      agentRunStore: state.agentRunStore,
+      agentRuntimeStore: state.agentRuntimeStore,
+      requirementStore: state.requirementStore,
+      modelInvocationStore: state.modelInvocationStore,
+      toolInvocationStore: state.toolInvocationStore,
+      threadConfigs: state.threadConfigs,
+      agentProfiles: state.agentProfiles,
+      runtimeSessions: state.runtimeSessions,
+    });
+  }
+
+  private requireStateIdentity(
+    state: LoadedRuntimeState,
+    expected?: SnapshotStateIdentity,
+  ): SnapshotStateIdentity {
+    const identity = this.stateIdentities.get(state);
+    if (
+      identity === undefined ||
+      (expected !== undefined && identity !== expected) ||
+      identity.lifecycleStore !== state.lifecycleStore ||
+      identity.contextCheckpointStore !== state.contextCheckpointStore ||
+      identity.agentRunStore !== state.agentRunStore ||
+      identity.agentRuntimeStore !== state.agentRuntimeStore ||
+      identity.requirementStore !== state.requirementStore ||
+      identity.modelInvocationStore !== state.modelInvocationStore ||
+      identity.toolInvocationStore !== state.toolInvocationStore ||
+      identity.threadConfigs !== state.threadConfigs ||
+      identity.agentProfiles !== state.agentProfiles ||
+      identity.runtimeSessions !== state.runtimeSessions
+    ) {
+      throw new SnapshotStateIdentityError(this.statePath);
+    }
+    return identity;
   }
 
   private async readDiskGeneration(): Promise<number> {
