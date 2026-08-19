@@ -1,5 +1,5 @@
 import { homedir } from "node:os";
-import { delimiter, join } from "node:path";
+import { delimiter, dirname, join } from "node:path";
 
 import { JsonRpcConnection } from "../protocol/connection.js";
 import {
@@ -34,6 +34,8 @@ import {
 import {
   ModelInvocationStartupRecovery,
 } from "../runtime/model-invocation-startup-recovery.js";
+import { PersistentRuntimeLeaseStore } from "../runtime/persistent-runtime-lease-store.js";
+import { ExecutionLeaseCoordinator } from "../runtime/execution-lease-coordinator.js";
 import {
   WorkspaceSandbox,
 } from "../sandbox/workspace-sandbox.js";
@@ -102,9 +104,17 @@ const mcpConfigPath = process.env.AGENT_MCP_CONFIG;
 const defaultStateRoot =
   process.env.LOCALAPPDATA ??
   join(homedir(), ".local", "share");
+const runtimeStatePath = process.env.AGENT_STATE_PATH ??
+  join(defaultStateRoot, "god-agent", "runtime-state.json");
 const runtimePersistence = new JsonFileRuntimePersistence(
-  process.env.AGENT_STATE_PATH ??
-    join(defaultStateRoot, "god-agent", "runtime-state.json"),
+  runtimeStatePath,
+);
+// Lease 与 Runtime 快照同属本地用户状态，但使用独立文件，绝不进入仓库。
+const runtimeLeaseStore = new PersistentRuntimeLeaseStore(
+  join(dirname(runtimeStatePath), "runtime-leases.json"),
+);
+const executionLeaseCoordinator = new ExecutionLeaseCoordinator(
+  runtimeLeaseStore,
 );
 const outcomeUnknownResolutionStore = await OutcomeUnknownResolutionStore.open({
   statePath: process.env.AGENT_OUTCOME_UNKNOWN_STATE_PATH ??
@@ -133,11 +143,31 @@ const threadConfigs = new Map(
 const runtimeSessions = new Map(
   loadedRuntimeState.runtimeSessions.map((session) => [session.threadId, session]),
 );
-const persistRuntimeState = () => runtimePersistence.save(
+const persistRuntimeStateUnfenced = () => runtimePersistence.save(
   lifecycleStore, contextCheckpointStore, agentRunStore,
   [...threadConfigs.values()], agentRegistry?.list?.() ?? loadedRuntimeState.agentProfiles,
   [...runtimeSessions.values()], agentRuntimeStore, requirementStore,
   modelInvocationStore, toolInvocationStore,
+);
+const persistRuntimeState = () => executionLeaseCoordinator.withActiveFencedCommit(
+  "runtime_state",
+  () => persistRuntimeStateUnfenced(),
+);
+const persistModelInvocationState = () => executionLeaseCoordinator.withActiveFencedCommit(
+  "model_commit",
+  () => persistRuntimeStateUnfenced(),
+);
+const persistToolInvocationState = () => executionLeaseCoordinator.withActiveFencedCommit(
+  "tool_commit",
+  () => persistRuntimeStateUnfenced(),
+);
+const persistWorkflowState = () => executionLeaseCoordinator.withActiveFencedCommit(
+  "workflow_stage",
+  () => persistRuntimeStateUnfenced(),
+);
+const persistParentContinuationState = () => executionLeaseCoordinator.withActiveFencedCommit(
+  "parent_continuation",
+  () => persistRuntimeStateUnfenced(),
 );
 
 // 与当前 Codex 客户端的已验证配置对齐；仍可用 OPENAI_MODEL 覆盖。
@@ -198,7 +228,8 @@ if (JSON.stringify(agentRegistry.list()) !== JSON.stringify(loadedRuntimeState.a
 }
 const runtimeCoordinator = new AgentRuntimeCoordinator({
   store: agentRuntimeStore,
-  persist: () => persistRuntimeState(),
+  persist: persistParentContinuationState,
+  executionLeases: executionLeaseCoordinator,
 });
 
 if (apiKey !== undefined) {
@@ -322,14 +353,15 @@ const agentLoop =
         llm: llmProvider!,
         modelInvocationWal: {
           store: modelInvocationStore,
-          persist: persistRuntimeState,
+          persist: persistModelInvocationState,
           provider: "openai_responses",
           defaultModel: configuredModel,
         },
         toolInvocationWal: {
           store: toolInvocationStore,
-          persist: persistRuntimeState,
+          persist: persistToolInvocationState,
         },
+        executionLeases: executionLeaseCoordinator,
         continueAfterAgentReturns: (turnId, childRunIds, continuation) =>
           runtimeCoordinator.continueParent(turnId, childRunIds, continuation),
         resolveExecutionContext: (turnId) => {
@@ -450,7 +482,7 @@ const workflowTeamCoordinator = agentLoop === undefined ? undefined : new Workfl
       : undefined;
     return text === undefined ? undefined : { turnId: job.rootTurnId, text };
   },
-  persist: () => persistRuntimeState(),
+  persist: persistWorkflowState,
 });
 const dynamicExecutionEngine = new DynamicAgentExecutionEngine(agentRuntimeStore, {
   runStore: agentRunStore,
@@ -471,7 +503,7 @@ const executionEngineRouter = workflowTeamCoordinator === undefined ? undefined 
     ensureFixedSoftwareTeam(lifecycleStore, agentRunStore, rootRun);
   }, (allowedTools) => {
     workflowTemplates.requireForExecution("software_product_delivery", "software_product_delivery", "v2", allowedTools);
-  }),
+  }, executionLeaseCoordinator, persistWorkflowState),
 ]);
 
 if (agentLoop !== undefined) {
@@ -526,9 +558,7 @@ if (agentLoop !== undefined) {
       const run = agentRunStore.get(runId);
       if (run !== undefined) events.emit({ type: "agent/run_updated", threadId, turnId, run });
     },
-    persist: () => runtimePersistence.save(lifecycleStore, contextCheckpointStore,
-      agentRunStore, [...threadConfigs.values()], agentRegistry.list(), [...runtimeSessions.values()], agentRuntimeStore, requirementStore,
-      modelInvocationStore, toolInvocationStore),
+    persist: persistRuntimeState,
   });
   sharedToolRegistry.register(createRunAgentTool(() => multiAgentScheduler!));
 }

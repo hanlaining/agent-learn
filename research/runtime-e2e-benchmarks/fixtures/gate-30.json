@@ -1,0 +1,24 @@
+{
+  "schemaVersion": "runtime-e2e-fixture-v1",
+  "name": "Runtime-E2E-GATE-30",
+  "caseCount": 30,
+  "seed": 20260819,
+  "generatorVersion": "runtime-e2e-generator-v1",
+  "familyAllocation": {
+    "model-response-window": 5,
+    "tool-effect-window": 5,
+    "return-parent-feedback": 5,
+    "workflow-stage": 5,
+    "snapshot-reload": 5,
+    "multi-instance-lease": 5
+  },
+  "checkpoints": {
+    "model-response-window": ["response-received", "response-received-replay", "committed-replay", "submitted-unknown", "assistant-commit"],
+    "tool-effect-window": ["result-received", "result-replay", "tool-commit", "continuation", "effect-journal"],
+    "return-parent-feedback": ["return-claim", "return-consume", "product-feedback", "engineering-feedback", "quality-feedback"],
+    "workflow-stage": ["product", "engineering", "quality", "lead", "return-god"],
+    "snapshot-reload": ["in-progress-turn", "model-wal", "tool-wal", "agent-runtime", "workflow-checkpoint"],
+    "multi-instance-lease": ["job", "turn", "model-invocation", "tool-invocation", "fenced-commit"]
+  },
+  "variants": ["baseline", "no-wal", "no-recovery", "no-lease"]
+}
