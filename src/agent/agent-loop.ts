@@ -493,6 +493,7 @@ export class AgentLoop {
             continue;
           }
 
+          this.assertTurnActive(turnId, signal);
           const assistantMessage =
             this.lifecycleStore.appendItem(
               turnId,
@@ -676,6 +677,7 @@ export class AgentLoop {
             turnId,
             options.allowedTools,
           );
+          this.assertTurnActive(turnId, signal);
 
           this.lifecycleStore.appendItem(
             turnId,
@@ -771,7 +773,9 @@ export class AgentLoop {
         signal.aborted &&
         signal.reason instanceof TurnCancelledError
           ? signal.reason
-          : undefined;
+          : error instanceof TurnCancelledError
+            ? error
+            : undefined;
       const timeout =
         signal.aborted &&
         signal.reason instanceof TurnTimeoutError
@@ -829,6 +833,7 @@ export class AgentLoop {
     request: Omit<LlmCreateResponseRequest, "onEvent">,
     invocationContext?: AgentInvocationContext,
   ): Promise<ModelRequestResult> {
+    this.assertTurnActive(turnId, request.signal);
     // 所有业务模型请求（首次请求和每次 Tool 续轮）共用同一硬断言。
     this.itemBudget.assertWithinLimit(request.input);
 
@@ -908,6 +913,10 @@ export class AgentLoop {
         await wal.persist();
       }
     }
+
+    // response_received is a durable audit fact. Cancellation remains the
+    // authority for whether that response may become Lifecycle output.
+    this.assertTurnActive(turnId, request.signal);
 
     if (
       response.text.length > 0 ||
@@ -1013,6 +1022,7 @@ export class AgentLoop {
     signal: AbortSignal;
     options: AgentRunOptions;
   }): Promise<LlmFunctionOutput> {
+    this.assertTurnActive(input.turnId, input.signal);
     const wal = this.toolInvocationWal!;
     const targetCommitKey = `turn:${input.turnId}:tool:${input.functionCall.callId}`;
     let invocation = wal.store.get(input.toolInvocationId);
@@ -1084,6 +1094,9 @@ export class AgentLoop {
 
     invocation = wal.store.recordResult(invocation.toolInvocationId, normalizedResult);
     await wal.persist();
+    // Keep result_received for audit/recovery, but never publish a late result
+    // or start a continuation after the Turn has been cancelled.
+    this.assertTurnActive(input.turnId, input.signal);
     this.ensureToolResultItem(input.turnId, input.functionCall, invocation.result);
     wal.store.markCommitted(invocation.toolInvocationId, targetCommitKey);
     await wal.persist();
@@ -1094,6 +1107,16 @@ export class AgentLoop {
       toolName: input.functionCall.name,
     });
     return replayToolResult(invocation, input.functionCall);
+  }
+
+  private assertTurnActive(turnId: TurnId, signal?: AbortSignal): void {
+    signal?.throwIfAborted();
+    const turn = this.lifecycleStore.getTurn(turnId);
+    if (turn === undefined) throw new Error(`Turn not found: ${turnId}`);
+    if (turn.status === "interrupted") throw new TurnCancelledError(turnId);
+    if (turn.status !== "in_progress") {
+      throw new Error(`Turn is no longer active: ${turnId} (${turn.status})`);
+    }
   }
 
   private async authorizeToolInvocation(input: {

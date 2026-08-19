@@ -149,6 +149,10 @@ export class DynamicAgentExecutionEngine implements ExecutionEngine {
       await this.persist(continuation ? "return_consume" : "runtime_state");
       return driven;
     } catch (error) {
+      // A concurrent cancel/failure that already reached a terminal Job is the
+      // authority. A late ordinary provider error may be reported to its
+      // caller, but must not reopen Return delivery or replace that terminal.
+      if (TERMINAL_JOB_STATUSES.has(this.requireDynamicJob(jobId).status)) throw error;
       const cancelled = error instanceof Error && ["TurnCancelledError", "AbortError"].includes(error.name);
       if (continuation && !cancelled) {
         for (const item of claimedReturns) {

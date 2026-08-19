@@ -29,6 +29,12 @@ class TrackingOwnership implements DynamicExecutionOwnership {
   }
 }
 
+function deferredSignal(): { promise: Promise<void>; resolve: () => void } {
+  let resolve: () => void = () => undefined;
+  const promise = new Promise<void>((done) => { resolve = done; });
+  return { promise, resolve };
+}
+
 test("Dynamic Engine 的五个公开操作及持久提交都处于同一 Job ownership", async () => {
   const setup = createFixture("all-owned-operations");
   const ownership = new TrackingOwnership();
@@ -206,6 +212,67 @@ test("Return claim、父 continuation、模型结果与 consume 使用同一 own
   ]);
   assert.deepEqual(ownership.entries, [setup.jobId]);
   assert.equal(setup.runtime.listReturns(setup.jobId)[0]?.status, "consumed");
+});
+
+test("cancel 提交后 root drive 的迟到普通异常不得把 Job 从 cancelled 改为 failed", async () => {
+  const setup = createFixture("cancelled-root-late-error");
+  const driveStarted = deferredSignal();
+  const releaseDrive = deferredSignal();
+  const engine = new DynamicAgentExecutionEngine(setup.runtime, { runStore: setup.runs });
+  const running = engine.start({
+    jobId: setup.jobId,
+    threadId: setup.threadId,
+    rootRunId: setup.rootRunId,
+    executionKind: "software_change",
+    workflowVersion: "dynamic_v1",
+    drive: async () => {
+      driveStarted.resolve();
+      await releaseDrive.promise;
+      throw new Error("late root provider failure");
+    },
+  });
+  await driveStarted.promise;
+
+  await engine.cancel(setup.jobId);
+  releaseDrive.resolve();
+  await assert.rejects(running, /late root provider failure/);
+
+  assert.equal(setup.runtime.getJob(setup.jobId)?.status, "cancelled");
+  assert.equal(setup.runtime.getDynamicExecution(setup.jobId)?.recoveryAction, "terminate");
+  assert.equal(setup.runs.get(setup.rootRunId)?.status, "cancelled");
+});
+
+test("cancel 提交后 continuation 的迟到普通异常不得重试 Return 或改为 waiting_returns", async () => {
+  const setup = createFixture("cancelled-continuation-late-error");
+  const task = addTask(setup, "completed");
+  const returned = addReturn(setup, task.id, "completed");
+  const driveStarted = deferredSignal();
+  const releaseDrive = deferredSignal();
+  const engine = new DynamicAgentExecutionEngine(setup.runtime, { runStore: setup.runs });
+  const running = engine.start({
+    jobId: setup.jobId,
+    threadId: setup.threadId,
+    rootRunId: setup.rootRunId,
+    executionKind: "software_change",
+    workflowVersion: "dynamic_v1",
+    drive: async (request) => {
+      assert.equal(request.kind, "parent_continuation");
+      assert.equal(setup.runtime.listReturns(setup.jobId)[0]?.status, "delivering");
+      driveStarted.resolve();
+      await releaseDrive.promise;
+      throw new Error("late continuation provider failure");
+    },
+  });
+  await driveStarted.promise;
+
+  await engine.cancel(setup.jobId);
+  releaseDrive.resolve();
+  await assert.rejects(running, /late continuation provider failure/);
+
+  assert.equal(setup.runtime.getJob(setup.jobId)?.status, "cancelled");
+  assert.equal(setup.runtime.listReturns(setup.jobId).find((item) => item.id === returned.id)?.status, "failed");
+  assert.equal(setup.runtime.getDynamicExecution(setup.jobId)?.recoveryAction, "terminate");
+  assert.equal(setup.runs.get(setup.rootRunId)?.status, "cancelled");
 });
 
 test("失败 child 接收反馈后沿用同 Job、原 Task/Thread并创建新 attempt", async () => {

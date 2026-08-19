@@ -156,6 +156,12 @@ function createTool(onExecute: () => void): AgentTool {
   };
 }
 
+function deferredSignal(): { promise: Promise<void>; resolve: () => void } {
+  let resolve: () => void = () => undefined;
+  const promise = new Promise<void>((done) => { resolve = done; });
+  return { promise, resolve };
+}
+
 function baseIdentity(argumentsDigest: string): ToolInvocationIdentity {
   return {
     modelInvocationId: "model-invocation-stable",
@@ -279,6 +285,53 @@ test("执行前 prepared/executing 已持久化，结果先以 result_received �
     (entry) => entry.status === "committed",
   );
   assert.ok(committed?.itemTypes.includes("tool_result"));
+});
+
+test("忽略 Abort 的 Tool 迟到结果只保留 result_received 且不得继续模型或完成 Turn", async () => {
+  const { lifecycleStore, turn } = createTurn();
+  const modelInvocationStore = new ModelInvocationStore();
+  const toolInvocationStore = new ToolInvocationStore();
+  const toolStarted = deferredSignal();
+  const releaseTool = deferredSignal();
+  const provider = new FakeProvider([toolCallResponse(), finalResponse()]);
+  const tool: AgentTool = {
+    definition: {
+      name: "durable_tool",
+      description: "A Tool that deliberately ignores Abort",
+      parameters: { type: "object", properties: {}, additionalProperties: true },
+    },
+    execute: async () => {
+      toolStarted.resolve();
+      await releaseTool.promise;
+      return { result: { ok: true, late: true }, modelOutput: { ok: true, late: true } };
+    },
+  };
+  const loop = createLoop({
+    lifecycleStore,
+    modelInvocationStore,
+    toolInvocationStore,
+    provider,
+    toolRegistry: new ToolRegistry([tool]),
+    persist: async () => undefined,
+  });
+
+  const run = loop.run(turn.id, { model: FAKE_MODEL });
+  await toolStarted.promise;
+  assert.equal(loop.cancel(turn.id), true);
+  releaseTool.resolve();
+
+  await assert.rejects(run, (error: unknown) => error instanceof Error && error.name === "TurnCancelledError");
+  assert.equal(lifecycleStore.getTurn(turn.id)?.status, "interrupted");
+  assert.equal(toolInvocationStore.list()[0]?.status, "result_received");
+  assert.equal(
+    lifecycleStore.getItemsForTurn(turn.id).some((item) => item.type === "tool_result"),
+    false,
+  );
+  assert.equal(
+    lifecycleStore.getItemsForTurn(turn.id).some((item) => item.type === "assistant_message"),
+    false,
+  );
+  assert.equal(provider.requests.length, 1, "a late Tool result must not trigger a continuation model call");
 });
 
 test("result_received snapshot 重启零 Tool 调用重放，committed snapshot 同样跳过", async () => {

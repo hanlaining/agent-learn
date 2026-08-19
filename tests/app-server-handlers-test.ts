@@ -29,9 +29,8 @@ import {
 import {
   isTurnCancelResult,
 } from "../src/runtime/turn-cancel.js";
-import type {
-  AgentLoop,
-} from "../src/agent/agent-loop.js";
+import { AgentLoop } from "../src/agent/agent-loop.js";
+import type { LlmCreateResponseRequest, LlmProvider, LlmResponse } from "../src/llm/types.js";
 import type { AgentRunResult } from "../src/agents/agent-run.js";
 import type { PersistedThreadConfig } from "../src/runtime/json-file-runtime-persistence.js";
 import { DEFAULT_AGENT_TEAM_CONFIG } from "../src/agents/agent-runtime.js";
@@ -62,6 +61,7 @@ import {
 } from "../src/runtime/execution-lease-coordinator.js";
 import { PersistentRuntimeLeaseStore } from "../src/runtime/persistent-runtime-lease-store.js";
 import type { DynamicExecutionOwnership } from "../src/execution/dynamic-agent-execution-engine.js";
+import { ModelInvocationStore } from "../src/runtime/model-invocation-store.js";
 
 function createTestAppServer(options: {
   lifecycleStore?: LifecycleStore;
@@ -175,7 +175,7 @@ async function drainServerResponses(app: TestAppServer): Promise<void> {
 async function createConcurrentDynamicApp(
   t: TestContext,
   suffix: string,
-  options: { completeAfterCancel?: boolean } = {},
+  options: { completeAfterCancel?: boolean; realAgentLoop?: boolean } = {},
 ) {
   const directory = await mkdtemp(join(tmpdir(), `handler-concurrent-${suffix}-`));
   t.after(() => rm(directory, { recursive: true, force: true }));
@@ -192,9 +192,37 @@ async function createConcurrentDynamicApp(
   const requirements = new RequirementStore();
   const driveStarted = deferredSignal();
   const releaseDrive = deferredSignal();
+  const modelInvocations = new ModelInvocationStore();
   let cancelled = false;
   let cancelCalls = 0;
-  const rootAgent: Pick<AgentLoop, "run" | "cancel"> = {
+  const persist = (boundary: ExecutionLeaseCommitBoundary) =>
+    executionLeases.withRequiredActiveFencedCommit(boundary, () => undefined);
+  const provider: LlmProvider = {
+    createResponse: async (request: LlmCreateResponseRequest): Promise<LlmResponse> => {
+      driveStarted.resolve();
+      await releaseDrive.promise;
+      assert.equal(request.signal?.aborted, true, "the Provider deliberately returns after observing Abort");
+      return { id: "late-provider-response", text: "late assistant must be discarded", functionCalls: [] };
+    },
+  };
+  const realAgent = options.realAgentLoop === true
+    ? new AgentLoop({
+        lifecycleStore: lifecycle,
+        llm: provider,
+        executionLeases,
+        resolveExecutionContext: (turnId) => {
+          const job = runtime.getJobByTurn(turnId);
+          return job === undefined ? undefined : { jobId: job.id };
+        },
+        modelInvocationWal: {
+          store: modelInvocations,
+          persist: () => persist("model_commit"),
+          provider: "ignores-abort",
+          defaultModel: "late-response-model",
+        },
+      })
+    : undefined;
+  const rootAgent: Pick<AgentLoop, "run" | "cancel"> = realAgent === undefined ? {
     run: async (turnId) => {
       assert.equal(executionLeases.currentContext()?.resource.id, runtime.getJobByTurn(turnId)?.id);
       driveStarted.resolve();
@@ -213,15 +241,20 @@ async function createConcurrentDynamicApp(
       releaseDrive.resolve();
       return true;
     },
+  } : {
+    run: (turnId, runOptions) => realAgent.run(turnId, runOptions),
+    cancel: (turnId) => {
+      cancelCalls += 1;
+      cancelled = true;
+      return realAgent.cancel(turnId);
+    },
   };
-  const persist = (boundary: ExecutionLeaseCommitBoundary) =>
-    executionLeases.withRequiredActiveFencedCommit(boundary, () => undefined);
   const router = new ExecutionEngineRouter([
     new DynamicAgentExecutionEngine(runtime, {
       runStore: runs,
       ownership: executionLeases,
       persist,
-      cancelTurn: rootAgent.cancel,
+      cancelTurn: (turnId) => rootAgent.cancel(turnId),
     }),
     new TeamWorkflowExecutionEngine(runtime, {} as never, () => undefined),
   ]);
@@ -265,6 +298,7 @@ async function createConcurrentDynamicApp(
     started,
     driveStarted,
     releaseDrive,
+    modelInvocations,
     wasCancelled: () => cancelled,
     cancelCalls: () => cancelCalls,
   };
@@ -711,6 +745,46 @@ test("turn/cancel 与不可中止的 Dynamic drive 同时完成时 cancelled 终
   const job = setup.runtime.getJobByRequirement(setup.planned.id, setup.planned.revision);
   assert.equal(job?.status, "cancelled", "a completed drive must not overwrite a linearized cancellation");
   assert.equal(setup.runtime.getDynamicExecution(job!.id)?.recoveryAction, "terminate");
+});
+
+test("真实 AgentLoop 的迟到模型响应在 turn/cancel 后只保留 response_received 审计事实", async (t) => {
+  const setup = await createConcurrentDynamicApp(t, "real-agent-cancel", { realAgentLoop: true });
+  const runRequest = setup.app.client.sendRequest("turn/run", { turnId: setup.started.turn.id });
+  const runOutcomePromise = runRequest.then(
+    (value) => ({ ok: true as const, value }),
+    (error: unknown) => ({ ok: false as const, error }),
+  );
+  const runTransport = setup.app.server.receive(setup.app.clientToServer.shift()!);
+  await setup.driveStarted.promise;
+
+  const cancelRequest = setup.app.client.sendRequest("turn/cancel", { turnId: setup.started.turn.id });
+  const cancelOutcomePromise = cancelRequest.then(
+    (value) => ({ ok: true as const, value }),
+    (error: unknown) => ({ ok: false as const, error }),
+  );
+  const cancelTransport = setup.app.server.receive(setup.app.clientToServer.shift()!);
+  await cancelTransport;
+  await drainServerResponses(setup.app);
+  const cancelOutcome = await cancelOutcomePromise;
+
+  setup.releaseDrive.resolve();
+  await runTransport;
+  await drainServerResponses(setup.app);
+  const runOutcome = await runOutcomePromise;
+
+  assert.deepEqual(cancelOutcome, {
+    ok: true,
+    value: { turnId: setup.started.turn.id, cancelled: true },
+  });
+  assert.equal(runOutcome.ok, false, "turn/run must reject a Provider response that arrived after cancellation");
+  assert.equal(setup.lifecycle.getTurn(setup.started.turn.id)?.status, "interrupted");
+  assert.equal(
+    setup.lifecycle.getItemsForTurn(setup.started.turn.id).some((item) => item.type === "assistant_message"),
+    false,
+  );
+  assert.equal(setup.modelInvocations.list()[0]?.status, "response_received");
+  const job = setup.runtime.getJobByRequirement(setup.planned.id, setup.planned.revision);
+  assert.equal(job?.status, "cancelled");
 });
 
 test("运行中的 Dynamic drive 持 Lease 时并发 follow-up 在同一 session 返回 busy", async (t) => {
