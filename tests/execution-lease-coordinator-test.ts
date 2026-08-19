@@ -178,6 +178,44 @@ test("same-Job nesting reuses one Lease while different-Job nesting is rejected"
   assert.equal(acquireCalls, 1);
 });
 
+test("independent async callers for the same Job join the active local Lease session", async (t) => {
+  const { statePath } = await fixture(t);
+  let acquireCalls = 0;
+  const backing = new PersistentRuntimeLeaseStore(statePath);
+  const store: ExecutionLeaseStore = {
+    acquire: (input) => { acquireCalls += 1; return backing.acquire(input); },
+    renew: (lease, ttlMs) => backing.renew(lease, ttlMs),
+    release: (lease) => backing.release(lease),
+    withFencedCommit: (lease, commit) => backing.withFencedCommit(lease, commit),
+  };
+  const coordinator = new ExecutionLeaseCoordinator(store, {
+    ownerId: "concurrent-local-owner", ttlMs: 1_000, renewIntervalMs: 500, maxRenewals: 0,
+  });
+  const entered = deferred();
+  const releaseOuter = deferred();
+  let outerContext = coordinator.currentContext();
+  const outer = coordinator.withJob("job-concurrent-local", async () => {
+    outerContext = coordinator.currentContext();
+    entered.resolve();
+    await releaseOuter.promise;
+  });
+  await entered.promise;
+
+  const joinedOutcome = await coordinator.withJob("job-concurrent-local", async () => {
+    assert.equal(coordinator.currentContext(), outerContext);
+    await coordinator.withRequiredActiveFencedCommit("cancel", () => undefined);
+    return "joined";
+  }).then(
+    (value) => ({ ok: true as const, value }),
+    (error: unknown) => ({ ok: false as const, error }),
+  );
+  releaseOuter.resolve();
+  await outer;
+
+  assert.deepEqual(joinedOutcome, { ok: true, value: "joined" });
+  assert.equal(acquireCalls, 1);
+});
+
 test("required fenced commit rejects a silent commit without an active Lease", async (t) => {
   const { statePath } = await fixture(t);
   const coordinator = new ExecutionLeaseCoordinator(
