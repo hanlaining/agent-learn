@@ -54,6 +54,10 @@ import type {
   ToolInvocationStore,
 } from "../runtime/tool-invocation-store.js";
 import {
+  ExecutionLeaseUnavailableError,
+  type ExecutionLeaseCoordinator,
+} from "../runtime/execution-lease-coordinator.js";
+import {
   financeMonthlySummaryAgentTool,
 } from "../tools/finance-monthly-summary-tool.js";
 import {
@@ -130,6 +134,7 @@ export interface AgentLoopOptions {
     store: ToolInvocationStore;
     persist: () => Promise<void>;
   };
+  executionLeases?: ExecutionLeaseCoordinator;
 }
 
 export interface AgentInvocationContext {
@@ -213,6 +218,7 @@ export class AgentLoop {
   private readonly resolveExecutionContext?: AgentLoopOptions["resolveExecutionContext"];
   private readonly modelInvocationWal?: AgentLoopOptions["modelInvocationWal"];
   private readonly toolInvocationWal?: AgentLoopOptions["toolInvocationWal"];
+  private readonly executionLeases: ExecutionLeaseCoordinator | undefined;
   private readonly activeTurns = new Map<
     TurnId,
     AbortController
@@ -275,6 +281,7 @@ export class AgentLoop {
     this.resolveExecutionContext = options.resolveExecutionContext;
     this.modelInvocationWal = options.modelInvocationWal;
     this.toolInvocationWal = options.toolInvocationWal;
+    this.executionLeases = options.executionLeases;
     if (this.toolInvocationWal !== undefined && this.modelInvocationWal === undefined) {
       throw new Error("Tool invocation WAL requires model invocation WAL");
     }
@@ -295,6 +302,28 @@ export class AgentLoop {
   ): Promise<TurnRunResult> {
     const committedTurn = this.replayCommittedTurn(turnId);
     if (committedTurn !== undefined) return committedTurn;
+    if (this.activeTurns.has(turnId)) {
+      throw new Error(`Turn is already running: ${turnId}`);
+    }
+    const jobId = options.invocationContext?.jobId ??
+      this.resolveExecutionContext?.(turnId)?.jobId;
+    if (jobId !== undefined && this.executionLeases !== undefined) {
+      const result = await this.executionLeases.runWithJobLease(
+        jobId,
+        () => this.runOwnedTurn(turnId, options),
+      );
+      if (result.status === "waiting") {
+        throw new ExecutionLeaseUnavailableError(jobId);
+      }
+      return result.value;
+    }
+    return this.runOwnedTurn(turnId, options);
+  }
+
+  private async runOwnedTurn(
+    turnId: TurnId,
+    options: AgentRunOptions,
+  ): Promise<TurnRunResult> {
     if (this.activeTurns.has(turnId)) {
       throw new Error(`Turn is already running: ${turnId}`);
     }

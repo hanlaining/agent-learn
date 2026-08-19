@@ -7,6 +7,7 @@
     "god-agent": "bin/god-agent.js"
   },
   "scripts": {
+    "test:lease": "tsx --test tests/persistent-runtime-lease-store-test.ts tests/execution-lease-coordinator-test.ts",
     "test:requirements": "tsx --test tests/requirement-store-test.ts",
     "provider:smoke": "tsx scripts/provider-capability-smoke.ts",
     "pretest": "tsx --test tests/agent-runtime-store-test.ts",

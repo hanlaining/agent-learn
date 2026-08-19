@@ -1,11 +1,16 @@
 import { AgentRuntimeStore } from "./agent-runtime-store.js";
 import type { AgentJob, AgentReturnEnvelope } from "./agent-runtime.js";
+import {
+  ExecutionLeaseUnavailableError,
+  type ExecutionLeaseCoordinator,
+} from "../runtime/execution-lease-coordinator.js";
 
 export interface AgentRuntimeCoordinatorOptions {
   store: AgentRuntimeStore;
   persist?: () => void | Promise<void>;
   maxAttempts?: number;
   retryDelayMs?: (attempt: number) => number;
+  executionLeases?: ExecutionLeaseCoordinator;
 }
 
 export class AgentRuntimeCoordinator {
@@ -110,10 +115,6 @@ export class AgentRuntimeCoordinator {
     return results;
   }
 
-  /**
-   * 这里只提供单进程内的 Job 串行化。未来增加多进程恢复时，持久 lease
-   * 必须在这个边界内、任何 Return claim 之前获取并在 finally 中释放。
-   */
   private async withJobLock<T>(jobId: string, operation: () => Promise<T>): Promise<T> {
     const predecessor = this.jobLocks.get(jobId) ?? Promise.resolve();
     let release: () => void = () => undefined;
@@ -122,7 +123,15 @@ export class AgentRuntimeCoordinator {
     this.jobLocks.set(jobId, tail);
     await predecessor.catch(() => undefined);
     try {
-      return await operation();
+      if (this.options.executionLeases === undefined) return await operation();
+      const result = await this.options.executionLeases.runWithJobLease(
+        jobId,
+        () => operation(),
+      );
+      if (result.status === "waiting") {
+        throw new ExecutionLeaseUnavailableError(jobId);
+      }
+      return result.value;
     } finally {
       release();
       if (this.jobLocks.get(jobId) === tail) this.jobLocks.delete(jobId);
