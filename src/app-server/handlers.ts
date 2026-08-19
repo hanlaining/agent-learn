@@ -17,6 +17,7 @@ import {
 } from "../runtime/turn-start.js";
 import {
   parseTurnRunParams,
+  type TurnRunResult,
 } from "../runtime/turn-run.js";
 import {
   parseTurnCancelParams,
@@ -462,35 +463,47 @@ export function registerAppServerHandlers(
       if (job !== undefined) agentRunStore?.rebindAttempt(rootRun.id, request.turnId, job.attempt);
     }
     if (job !== undefined && requirement !== undefined) requirementStore?.attachJob(requirement.id, job.id);
-    if (job !== undefined && rootRun !== undefined && executionEngineRouter !== undefined) {
-      await executionEngineRouter.start({ jobId: job.id, threadId: job.threadId, rootRunId: rootRun.id,
-        executionKind: job.executionKind, workflowVersion: job.workflowVersion });
-    }
-    if (rootRun !== undefined) agentRunStore?.setStatus(rootRun.id, "running");
-    if (job !== undefined) agentRuntimeStore?.setJobStatus(job.id, "running");
+    const executionControl = job === undefined || executionEngineRouter === undefined
+      ? "turn_agent" as const
+      : executionEngineRouter.control(job.executionKind);
 
     try {
-      const result = await agentLoop.run(request.turnId, {
-        ...(request.model === undefined ? {} : { model: request.model }),
-        ...(request.reasoningEffort === undefined
-          ? {}
-          : { reasoningEffort: request.reasoningEffort }),
-        ...(profile === undefined ? {} : { instructions: buildParentAgentInstructions(
-          profile.instructions,
-          teamConfig.mode,
-          undefined,
-          executionConfirmed,
-          requirement,
-        ) }),
-        ...(profile === undefined ? {} : { allowedTools: applyRequirementGateToTools(applyAgentModeToTools(intersectCapabilities(profile.allowedTools, jobTeamConfig.allowedTools), teamConfig.mode), executionConfirmed),
-          allowedSkills: intersectCapabilities(profile.allowedSkills, teamConfig.allowedSkills) }),
-      });
+      if (job?.executionKind === "software_product_delivery" && executionEngineRouter === undefined) {
+        throw new Error("Team Workflow engine is unavailable");
+      }
+      if (rootRun !== undefined) {
+        agentRunStore?.setStatus(rootRun.id,
+          executionControl === "workflow" ? "waiting_children" : "running");
+      }
+      if (job !== undefined) agentRuntimeStore?.setJobStatus(job.id, "running");
+      if (job !== undefined && rootRun !== undefined && executionEngineRouter !== undefined) {
+        await executionEngineRouter.start({ jobId: job.id, threadId: job.threadId, rootRunId: rootRun.id,
+          executionKind: job.executionKind, workflowVersion: job.workflowVersion });
+      }
+
+      const result: TurnRunResult = executionControl === "workflow"
+        ? readCompletedTurnResult(lifecycleStore, request.turnId)
+        : await agentLoop.run(request.turnId, {
+            ...(request.model === undefined ? {} : { model: request.model }),
+            ...(request.reasoningEffort === undefined
+              ? {}
+              : { reasoningEffort: request.reasoningEffort }),
+            ...(profile === undefined ? {} : { instructions: buildParentAgentInstructions(
+              profile.instructions,
+              teamConfig.mode,
+              undefined,
+              executionConfirmed,
+              requirement,
+            ) }),
+            ...(profile === undefined ? {} : { allowedTools: applyRequirementGateToTools(applyAgentModeToTools(intersectCapabilities(profile.allowedTools, jobTeamConfig.allowedTools), teamConfig.mode), executionConfirmed),
+              allowedSkills: intersectCapabilities(profile.allowedSkills, teamConfig.allowedSkills) }),
+          });
 
       log(
         `[app-server] turn completed: ${result.turn.id}\n`,
       );
 
-      if (rootRun !== undefined) {
+      if (rootRun !== undefined && executionControl === "turn_agent") {
         agentRunStore?.complete(rootRun.id, {
           runId: rootRun.id,
           status: "completed",
@@ -734,6 +747,17 @@ function readTurnUserInput(lifecycleStore: LifecycleStore, turnId: string): stri
     "text" in item.content && typeof item.content.text === "string"
     ? item.content.text
     : "执行用户当前任务并返回可验证结果";
+}
+
+function readCompletedTurnResult(lifecycleStore: LifecycleStore, turnId: string): TurnRunResult {
+  const turn = lifecycleStore.getTurn(turnId);
+  const assistantMessage = lifecycleStore.getItemsForTurn(turnId)
+    .filter((item) => item.type === "assistant_message")
+    .at(-1);
+  if (turn?.status !== "completed" || assistantMessage === undefined) {
+    throw new Error("Team Workflow finished without a committed root-turn delivery");
+  }
+  return { turn, assistantMessage };
 }
 
 function parseOutcomeUnknownResolutionRequest(value: unknown): ResolveOutcomeUnknownInput {

@@ -8,6 +8,7 @@ import type { StageAdvancingExecutionEngine } from "./execution-engine-router.js
 
 export class TeamWorkflowExecutionEngine implements StageAdvancingExecutionEngine {
   readonly id = "team_workflow";
+  readonly control = "workflow" as const;
   private static readonly MAX_RESUME_TRANSITIONS = 32;
 
   constructor(
@@ -19,7 +20,10 @@ export class TeamWorkflowExecutionEngine implements StageAdvancingExecutionEngin
 
   supports(kind: RequirementExecutionKind): boolean { return kind === "software_product_delivery"; }
   validateStart(allowedTools: string[]): void { this.validateTools(allowedTools); }
-  async start(context: ExecutionContext): Promise<void> { this.provision(context); }
+  async start(context: ExecutionContext): Promise<void> {
+    this.provision(context);
+    await this.resume(context.jobId);
+  }
   async resume(jobId: string): Promise<void> {
     this.runtimeStore.reconcilePersistedJobs(jobId);
     this.coordinator.recoverPersistedCheckpoints(jobId);

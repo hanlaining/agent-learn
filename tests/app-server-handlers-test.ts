@@ -33,6 +33,16 @@ import type { AgentRunResult } from "../src/agents/agent-run.js";
 import type { PersistedThreadConfig } from "../src/runtime/json-file-runtime-persistence.js";
 import { DEFAULT_AGENT_TEAM_CONFIG } from "../src/agents/agent-runtime.js";
 import { AgentRegistry } from "../src/agents/agent-registry.js";
+import { AgentRunStore } from "../src/agents/agent-run-store.js";
+import { AgentRuntimeStore } from "../src/agents/agent-runtime-store.js";
+import { RequirementStore } from "../src/requirements/requirement-store.js";
+import { ExecutionEngineRouter } from "../src/execution/execution-engine-router.js";
+import { DynamicAgentExecutionEngine } from "../src/execution/dynamic-agent-execution-engine.js";
+import { TeamWorkflowExecutionEngine } from "../src/execution/team-workflow-execution-engine.js";
+import { WorkflowTeamCoordinator } from "../src/execution/workflow-team-coordinator.js";
+import { SOFTWARE_PRODUCT_DELIVERY_TEMPLATE } from "../src/execution/workflows/software-product-delivery.js";
+import { ensureFixedSoftwareTeam } from "../src/agents/fixed-software-team.js";
+import { STAGE_RESULT_CONTRACT_VERSION } from "../src/execution/stage-contract.js";
 import {
   isThreadHistoryResult,
 } from "../src/runtime/thread-history.js";
@@ -45,6 +55,7 @@ import { OutcomeUnknownResolutionService } from "../src/runtime/outcome-unknown-
 import type { OutcomeUnknownActor } from "../src/runtime/outcome-unknown-resolution.js";
 
 function createTestAppServer(options: {
+  lifecycleStore?: LifecycleStore;
   saveState?: () => void | Promise<void>;
   agentLoop?: Pick<AgentLoop, "run" | "cancel">;
   runtimeCapabilities?: RuntimeCapabilities;
@@ -58,6 +69,10 @@ function createTestAppServer(options: {
   skillNames?: string[];
   outcomeUnknownResolutionService?: OutcomeUnknownResolutionService;
   resolveOutcomeUnknownActor?: () => OutcomeUnknownActor | undefined;
+  agentRunStore?: AgentRunStore;
+  agentRuntimeStore?: AgentRuntimeStore;
+  requirementStore?: RequirementStore;
+  executionEngineRouter?: ExecutionEngineRouter;
 } = {}) {
   const clientToServer: string[] = [];
   const serverToClient: string[] = [];
@@ -76,7 +91,7 @@ function createTestAppServer(options: {
     item: 0,
   };
 
-  const store = new LifecycleStore({
+  const store = options.lifecycleStore ?? new LifecycleStore({
     now: () => "2026-08-01T09:00:00.000Z",
     createId: (prefix) => {
       idSequence[prefix] += 1;
@@ -112,6 +127,10 @@ function createTestAppServer(options: {
     ...(options.resolveOutcomeUnknownActor === undefined
       ? {}
       : { resolveOutcomeUnknownActor: options.resolveOutcomeUnknownActor }),
+    ...(options.agentRunStore === undefined ? {} : { agentRunStore: options.agentRunStore }),
+    ...(options.agentRuntimeStore === undefined ? {} : { agentRuntimeStore: options.agentRuntimeStore }),
+    ...(options.requirementStore === undefined ? {} : { requirementStore: options.requirementStore }),
+    ...(options.executionEngineRouter === undefined ? {} : { executionEngineRouter: options.executionEngineRouter }),
   });
 
   // 测试中手动搬运 JSONL，模拟真实的 Client ↔ App Server 双向通道。
@@ -375,6 +394,117 @@ test("开启子 Agent 但需求未确认时不会开放执行工具", async () =
 
   assert.match(parentInstructions, /确认前不得执行命令/);
   assert.match(parentInstructions, /prepare_requirement_plan/);
+});
+
+test("真实 turn\/run 入口由 Team Workflow 单一控制并在最终交付前保持 Root waiting_children", async () => {
+  const lifecycle = new LifecycleStore();
+  const runs = new AgentRunStore();
+  const runtime = new AgentRuntimeStore();
+  const requirements = new RequirementStore();
+  const stageProfiles: string[] = [];
+  const rootStates: string[] = [];
+  let rootAgentCalls = 0;
+
+  const finalRootAgent: Pick<AgentLoop, "run" | "cancel"> = {
+    cancel: () => false,
+    run: async (turnId) => {
+      rootAgentCalls += 1;
+      const before = lifecycle.getTurn(turnId);
+      assert.ok(before);
+      const assistantMessage = lifecycle.appendItem(turnId, "assistant_message", {
+        text: "团队已完成且只交付一次",
+      });
+      const turn = lifecycle.completeTurn(turnId);
+      return { turn, assistantMessage };
+    },
+  };
+  const coordinator = new WorkflowTeamCoordinator({
+    runStore: runs,
+    runtimeStore: runtime,
+    template: SOFTWARE_PRODUCT_DELIVERY_TEMPLATE,
+    requirement: () => ({
+      objective: "修复父 Agent 监督主链",
+      scope: ["src/**"],
+      nonGoals: ["不改 UI"],
+      deliverables: ["code"],
+      acceptanceCriteria: ["tests pass"],
+      prompt: "confirmed requirement",
+    }),
+    execute: async (input) => {
+      stageProfiles.push(input.profileId);
+      const job = runtime.getJob(input.jobId);
+      assert.ok(job);
+      rootStates.push(runs.get(job.rootRunId)?.status ?? "missing");
+      if (input.profileId === "orchestrator") {
+        const delivered = await finalRootAgent.run(job.rootTurnId);
+        return { turnId: delivered.turn.id, summary: (delivered.assistantMessage.content as { text: string }).text };
+      }
+      return {
+        turnId: `stage-turn-${stageProfiles.length}`,
+        summary: JSON.stringify({
+          status: "completed",
+          summary: `${input.profileId} complete`,
+          deliverables: ["artifact"],
+          evidence: ["verified"],
+          blockers: [],
+          nextStageRecommendation: "continue",
+          contractVersion: STAGE_RESULT_CONTRACT_VERSION,
+        }),
+      };
+    },
+  });
+  const router = new ExecutionEngineRouter([
+    new DynamicAgentExecutionEngine(runtime),
+    new TeamWorkflowExecutionEngine(runtime, coordinator, (context) => {
+      const root = runs.get(context.rootRunId);
+      assert.ok(root);
+      ensureFixedSoftwareTeam(lifecycle, runs, root);
+    }),
+  ]);
+  const app = createTestAppServer({
+    lifecycleStore: lifecycle,
+    agentLoop: finalRootAgent,
+    agentRegistry: new AgentRegistry(),
+    agentRunStore: runs,
+    agentRuntimeStore: runtime,
+    requirementStore: requirements,
+    executionEngineRouter: router,
+  });
+
+  await completeHandshake(app);
+  const threadRequest = app.client.sendRequest("thread/start");
+  await app.flushClientRequest();
+  const thread = await threadRequest as { id: string };
+  const planned = requirements.prepare(thread.id, {
+    executionKind: "software_product_delivery",
+    title: "P0 Parent Supervisor",
+    objective: "修复父 Agent 监督主链",
+    scope: ["src/**"],
+    nonGoals: ["不改 UI"],
+    constraints: ["单一控制面"],
+    deliverables: ["code"],
+    acceptanceCriteria: ["tests pass"],
+    testCases: [{ id: "TC-P0", title: "真实入口", kind: "integration", steps: ["turn/run"], expected: "自动收口" }],
+    executionSteps: ["产品", "工程", "测试", "负责人", "交付"],
+  }, { path: "D:/plans/p0.md", contentHash: "p0-hash", generatedAt: "2026-08-19T00:00:00.000Z" });
+  requirements.confirm(planned.id, planned.revision, planned.planArtifact.contentHash);
+
+  const turnRequest = app.client.sendRequest("turn/start", { threadId: thread.id, input: "确认执行" });
+  await app.flushClientRequest();
+  const started = await turnRequest as { turn: { id: string } };
+  const runRequest = app.client.sendRequest("turn/run", { turnId: started.turn.id });
+  await app.flushClientRequest();
+  const result = await runRequest as { assistantMessage: { content: { text: string } } };
+
+  const job = runtime.getJobByRequirement(planned.id, planned.revision);
+  assert.ok(job);
+  assert.equal(result.assistantMessage.content.text, "团队已完成且只交付一次");
+  assert.deepEqual(stageProfiles, ["product_role", "engineering_role", "quality_role", "software_team_lead", "orchestrator"]);
+  assert.equal(rootAgentCalls, 1);
+  assert.equal(rootStates.every((state) => state === "waiting_children"), true);
+  assert.equal(runtime.getJob(job.id)?.status, "completed");
+  assert.equal(runs.get(job.rootRunId)?.status, "completed");
+  assert.equal(requirements.get(planned.id)?.executionState, "completed");
 });
 
 type TestAppServer =

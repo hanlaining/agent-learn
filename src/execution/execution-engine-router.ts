@@ -2,6 +2,7 @@ import type { RequirementExecutionKind } from "../requirements/requirement.js";
 import type { FixedProductStage } from "../agents/fixed-software-team-coordinator.js";
 import type { ExecutionContext } from "./execution-context.js";
 import type { ExecutionEngine, ExecutionEngineSnapshot } from "./execution-engine.js";
+import type { ExecutionControl } from "./execution-engine.js";
 
 export interface StageAdvancingExecutionEngine extends ExecutionEngine {
   advance(jobId: string, expectedStage: FixedProductStage): Promise<{ stage: FixedProductStage; changed: boolean }>;
@@ -19,6 +20,7 @@ export class ExecutionEngineRouter {
   }
 
   start(context: ExecutionContext): Promise<void> { return this.route(context.executionKind).start(context); }
+  control(kind: RequirementExecutionKind): ExecutionControl { return this.route(kind).control; }
   validateStart(kind: RequirementExecutionKind, allowedTools: string[]): void { this.route(kind).validateStart?.(allowedTools); }
   resume(kind: RequirementExecutionKind, jobId: string): Promise<void> { return this.route(kind).resume(jobId); }
   cancel(kind: RequirementExecutionKind, jobId: string): Promise<void> { return this.route(kind).cancel(jobId); }

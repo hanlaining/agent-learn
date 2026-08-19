@@ -356,12 +356,19 @@ const workflowTeamCoordinator = agentLoop === undefined ? undefined : new Workfl
   execute: async ({ threadId, profileId, prompt, allowedTools, formatRepair,
     jobId, jobAttempt, workflowVersion, stageId, stageAttempt }) => {
     const profile = agentRegistry.require(profileId);
-    const turn = lifecycleStore.createTurn(threadId);
-    lifecycleStore.appendItem(turn.id, "user_message", { text: prompt });
+    const job = agentRuntimeStore.getJob(jobId);
+    const ownsRootTurn = profileId === "orchestrator" && stageId === "return_god";
+    const turn = ownsRootTurn && job !== undefined
+      ? lifecycleStore.getTurn(job.rootTurnId)
+      : lifecycleStore.createTurn(threadId);
+    if (turn === undefined) throw new Error("Workflow execution Turn is unavailable");
+    if (!ownsRootTurn) lifecycleStore.appendItem(turn.id, "user_message", { text: prompt });
     const result = await agentLoop.run(turn.id, {
       model: profile.defaultModel,
       reasoningEffort: profile.reasoningEffort,
-      instructions: `${profile.instructions}\n\n你是版本化 Workflow Template 中的叶子阶段 Agent。不得创建子 Agent，不得越过当前阶段职责；${formatRepair ? "本轮只修复结构化格式，不得调用工具。" : "只使用 Runtime 明确授予的工具。"}`,
+      instructions: ownsRootTurn
+        ? `${profile.instructions}\n\n你是 Workflow 的唯一最终交付者。只根据下面已验收的负责人 Return 回答用户一次；不得重新执行、委派或调用工具。\n\n${prompt}`
+        : `${profile.instructions}\n\n你是版本化 Workflow Template 中的叶子阶段 Agent。不得创建子 Agent，不得越过当前阶段职责；${formatRepair ? "本轮只修复结构化格式，不得调用工具。" : "只使用 Runtime 明确授予的工具。"}`,
       allowedTools,
       allowedSkills: [],
       modelInvocationPurpose: formatRepair ? "format_repair" : "initial",

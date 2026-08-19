@@ -5,6 +5,7 @@ import type { ExecutionEngine, ExecutionEngineSnapshot } from "./execution-engin
 
 export class DynamicAgentExecutionEngine implements ExecutionEngine {
   readonly id = "dynamic_agent";
+  readonly control = "turn_agent" as const;
 
   constructor(private readonly runtimeStore: AgentRuntimeStore) {}
 
