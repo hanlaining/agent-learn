@@ -5,6 +5,7 @@ import path from "node:path";
 import test from "node:test";
 
 import { generateRuntimeE2eScenarios, loadRuntimeE2eFixture } from "../research/runtime-e2e-benchmarks/src/fixtures.js";
+import { runProcessChaosHarness } from "../research/runtime-e2e-benchmarks/src/process-chaos-harness.js";
 import {
   buildRuntimeE2eReport,
   deterministicProjection,
@@ -105,4 +106,21 @@ test("失败用例写出 report/CSV 和可单条运行的最小 repro", async ()
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
+});
+
+test("真实 App Server 子进程在无副作用与 Return 窗口强杀后可重启恢复", async (t) => {
+  const directory = await mkdtemp(path.join(tmpdir(), "god-agent-process-chaos-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+
+  const report = await runProcessChaosHarness(directory, "gate40-seed-1");
+
+  assert.equal(report.pidChangedAfterReload, true);
+  assert.equal(report.pidChangedAfterOwnerKill, true);
+  assert.equal(report.windows.length, 2);
+  assert.ok(report.windows.every((window) => window.faultPointConfirmed && window.ownerKilled &&
+    window.publicRpcReloaded && window.rawJsonReloaded && window.recovered));
+  assert.equal(report.windows[1]?.leaseWaitObserved, true);
+  assert.equal(report.evidence.finalJobStatus, "completed");
+  assert.equal(report.evidence.finalReturnStatus, "consumed");
+  assert.deepEqual(JSON.parse(await readFile(report.rawReportPath, "utf8")), report);
 });
