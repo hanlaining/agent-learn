@@ -1,8 +1,10 @@
 import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
+import { pathToFileURL } from "node:url";
 
 import { generateRuntimeE2eScenarios, loadRuntimeE2eFixture } from "../research/runtime-e2e-benchmarks/src/fixtures.js";
 import { runProcessChaosHarness } from "../research/runtime-e2e-benchmarks/src/process-chaos-harness.js";
@@ -122,5 +124,46 @@ test("真实 App Server 子进程在无副作用与 Return 窗口强杀后可重
   assert.equal(report.windows[1]?.leaseWaitObserved, true);
   assert.equal(report.evidence.finalJobStatus, "completed");
   assert.equal(report.evidence.finalReturnStatus, "consumed");
+  assert.equal(report.evidence.providerRequestsByStage.return_god, 1);
   assert.deepEqual(JSON.parse(await readFile(report.rawReportPath, "utf8")), report);
+});
+
+test("Process Chaos timeout 在 resolve/reject/timeout 后均不遗留活动 timer", async () => {
+  const harnessUrl = pathToFileURL(path.resolve(
+    "research/runtime-e2e-benchmarks/src/process-chaos-harness.ts",
+  )).href;
+  const probe = [
+    `import { withProcessChaosTimeout } from ${JSON.stringify(harnessUrl)};`,
+    "await withProcessChaosTimeout(Promise.resolve('ok'), 30_000, 'resolve');",
+    "const rejected = await withProcessChaosTimeout(Promise.reject(new Error('expected')), 30_000, 'reject').then(() => false, (error) => error.message === 'expected');",
+    "if (!rejected) throw new Error('reject path was not preserved');",
+    "const timedOut = await withProcessChaosTimeout(new Promise(() => undefined), 10, 'timeout').then(() => false, (error) => error.message === 'Timed out waiting for timeout');",
+    "if (!timedOut) throw new Error('timeout path was not preserved');",
+  ].join("\n");
+  const startedAt = performance.now();
+  const child = spawn(process.execPath, ["--import", "tsx", "--input-type=module", "--eval", probe], {
+    cwd: process.cwd(),
+    env: process.env,
+    stdio: ["ignore", "ignore", "pipe"],
+    windowsHide: true,
+  });
+  let stderr = "";
+  child.stderr.setEncoding("utf8");
+  child.stderr.on("data", (chunk: string) => { stderr += chunk; });
+  await new Promise<void>((resolve, reject) => {
+    let settled = false;
+    const finish = (error?: Error) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      if (error === undefined) resolve(); else reject(error);
+    };
+    const timer = setTimeout(() => {
+      child.kill("SIGKILL");
+      finish(new Error("timeout probe retained a 30 second timer"));
+    }, 5_000);
+    child.once("error", (error) => finish(error));
+    child.once("exit", (code) => finish(code === 0 ? undefined : new Error(`timeout probe failed (${String(code)}): ${stderr}`)));
+  });
+  assert.ok(performance.now() - startedAt < 5_000);
 });
