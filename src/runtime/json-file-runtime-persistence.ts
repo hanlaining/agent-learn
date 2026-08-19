@@ -1,7 +1,9 @@
+import { randomUUID } from "node:crypto";
 import {
   mkdir,
   readFile,
   rename,
+  rm,
   writeFile,
 } from "node:fs/promises";
 import {
@@ -38,6 +40,10 @@ import {
 import type {
   ToolInvocationSnapshot,
 } from "./tool-invocation.js";
+import {
+  ProcessSafeFileLock,
+  type ProcessSafeFileLockOptions,
+} from "./process-safe-file-lock.js";
 
 export interface PersistedThreadConfig {
   threadId: string;
@@ -54,7 +60,8 @@ export interface PersistedRuntimeSession {
 }
 
 export interface RuntimeStateSnapshot {
-  version: 6;
+  version: 7;
+  generation: number;
   lifecycle: LifecycleSnapshot;
   contextCheckpoints: ContextCheckpointSnapshot;
   threadConfigs: PersistedThreadConfig[];
@@ -80,6 +87,24 @@ export interface LoadedRuntimeState {
   runtimeSessions: PersistedRuntimeSession[];
   restored: boolean;
   recoveredTurnIds: string[];
+  /** Zero identifies a missing or legacy v1-v6 snapshot. */
+  generation: number;
+}
+
+export class SnapshotConflictError extends Error {
+  readonly name = "SnapshotConflict";
+  readonly code = "snapshot_conflict";
+
+  constructor(
+    readonly statePath: string,
+    readonly expectedGeneration: number,
+    readonly actualGeneration: number,
+  ) {
+    super(
+      `SnapshotConflict: expected generation ${expectedGeneration}, ` +
+        `found ${actualGeneration}; reload before retrying ${statePath}`,
+    );
+  }
 }
 
 /**
@@ -87,10 +112,21 @@ export interface LoadedRuntimeState {
  * 写入先落到同目录临时文件，再 rename，避免进程中断留下半份 JSON。
  */
 export class JsonFileRuntimePersistence {
-  private saveSequence = 0;
   private saveQueue: Promise<void> = Promise.resolve();
+  private readonly stateLock: ProcessSafeFileLock;
+  private expectedGeneration = 0;
 
-  constructor(private readonly statePath: string) {}
+  constructor(
+    private readonly statePath: string,
+    lockOptions: ProcessSafeFileLockOptions = {},
+  ) {
+    if (statePath.trim().length === 0) throw new Error("Runtime state path must not be empty");
+    this.stateLock = new ProcessSafeFileLock(
+      `${statePath}.lock`,
+      lockOptions,
+      "Runtime snapshot",
+    );
+  }
 
   async load(): Promise<LoadedRuntimeState> {
     await this.saveQueue;
@@ -101,6 +137,7 @@ export class JsonFileRuntimePersistence {
       text = await readFile(this.statePath, "utf8");
     } catch (error) {
       if (hasErrorCode(error, "ENOENT")) {
+        this.expectedGeneration = 0;
         return {
           lifecycleStore: new LifecycleStore(),
           contextCheckpointStore:
@@ -115,6 +152,7 @@ export class JsonFileRuntimePersistence {
           runtimeSessions: [],
           restored: false,
           recoveredTurnIds: [],
+          generation: 0,
         };
       }
 
@@ -127,10 +165,12 @@ export class JsonFileRuntimePersistence {
       if (
         !isRecord(value) ||
         (value.version !== 1 && value.version !== 2 && value.version !== 3 &&
-          value.version !== 4 && value.version !== 5 && value.version !== 6)
+          value.version !== 4 && value.version !== 5 && value.version !== 6 &&
+          value.version !== 7)
       ) {
         throw new Error("Unsupported state version");
       }
+      let generation = snapshotGeneration(value);
 
       const lifecycleStore = LifecycleStore.fromSnapshot(
         value.lifecycle,
@@ -140,26 +180,28 @@ export class JsonFileRuntimePersistence {
           value.contextCheckpoints,
         );
       const version2 = value.version === 2 || value.version === 3 ||
-        value.version === 4 || value.version === 5 || value.version === 6;
+        value.version === 4 || value.version === 5 || value.version === 6 ||
+          value.version === 7;
       const agentRunStore = AgentRunStore.fromSnapshot(
         version2 ? value.agentRuns as AgentRunSnapshot : undefined,
       );
       const agentRuntimeStore = AgentRuntimeStore.fromSnapshot(
         value.version === 3 || value.version === 4 || value.version === 5 ||
-          value.version === 6
+          value.version === 6 || value.version === 7
           ? value.agentRuntime as AgentRuntimeSnapshot : undefined,
       );
       const requirementStore = RequirementStore.fromSnapshot(
-        value.version === 4 || value.version === 5 || value.version === 6
+        value.version === 4 || value.version === 5 || value.version === 6 ||
+          value.version === 7
           ? value.requirements as RequirementSnapshot : undefined,
       );
       const modelInvocationStore = ModelInvocationStore.fromSnapshot(
-        value.version === 5 || value.version === 6
+        value.version === 5 || value.version === 6 || value.version === 7
           ? value.modelInvocations as ModelInvocationSnapshot | undefined
           : undefined,
       );
       const toolInvocationStore = ToolInvocationStore.fromSnapshot(
-        value.version === 6
+        value.version === 6 || value.version === 7
           ? value.toolInvocations as ToolInvocationSnapshot | undefined
           : undefined,
       );
@@ -174,6 +216,7 @@ export class JsonFileRuntimePersistence {
         lifecycleStore
           .recoverInProgressTurns()
           .map((turn) => turn.id);
+      this.expectedGeneration = generation;
 
       if (recoveredTurnIds.length > 0) {
         await this.save(
@@ -188,6 +231,7 @@ export class JsonFileRuntimePersistence {
           modelInvocationStore,
           toolInvocationStore,
         );
+        generation = this.expectedGeneration;
       }
 
       return {
@@ -203,8 +247,10 @@ export class JsonFileRuntimePersistence {
         runtimeSessions,
         restored: true,
         recoveredTurnIds,
+        generation,
       };
     } catch (error) {
+      if (error instanceof SnapshotConflictError) throw error;
       const message =
         error instanceof Error
           ? error.message
@@ -228,8 +274,8 @@ export class JsonFileRuntimePersistence {
     modelInvocationStore: ModelInvocationStore = new ModelInvocationStore(),
     toolInvocationStore: ToolInvocationStore = new ToolInvocationStore(),
   ): Promise<void> {
-    const snapshot: RuntimeStateSnapshot = {
-      version: 6,
+    const snapshot: Omit<RuntimeStateSnapshot, "generation"> = {
+      version: 7,
       lifecycle: lifecycleStore.exportSnapshot(),
       contextCheckpoints:
         contextCheckpointStore.exportSnapshot(),
@@ -247,29 +293,79 @@ export class JsonFileRuntimePersistence {
     );
 
     // 队列继续工作，但当前调用者仍会收到本次写入的真实失败。
-    this.saveQueue = operation.catch(() => undefined);
+    this.saveQueue = operation.then(() => undefined, () => undefined);
 
     return operation;
   }
 
   private async writeSnapshot(
-    snapshot: RuntimeStateSnapshot,
+    snapshot: Omit<RuntimeStateSnapshot, "generation">,
   ): Promise<void> {
+    await this.stateLock.withLock(async () => {
+      const expectedGeneration = this.expectedGeneration;
+      const actualGeneration = await this.readDiskGeneration();
+      if (actualGeneration !== expectedGeneration) {
+        throw new SnapshotConflictError(
+          this.statePath,
+          expectedGeneration,
+          actualGeneration,
+        );
+      }
+      const generation = expectedGeneration + 1;
+      assertGeneration(generation, "next generation");
+      await this.replaceSnapshot({ ...snapshot, generation });
+      this.expectedGeneration = generation;
+    });
+  }
+
+  private async readDiskGeneration(): Promise<number> {
+    try {
+      const value = JSON.parse(await readFile(this.statePath, "utf8")) as unknown;
+      if (!isRecord(value) || !isSupportedVersion(value.version)) {
+        throw new Error("Unsupported state version");
+      }
+      return snapshotGeneration(value);
+    } catch (error) {
+      if (hasErrorCode(error, "ENOENT")) return 0;
+      throw error;
+    }
+  }
+
+  private async replaceSnapshot(snapshot: RuntimeStateSnapshot): Promise<void> {
     const stateDirectory = dirname(this.statePath);
-    this.saveSequence += 1;
     const temporaryPath = join(
       stateDirectory,
-      `.${basename(this.statePath)}.${process.pid}.` +
-        `${this.saveSequence}.tmp`,
+      `.${basename(this.statePath)}.${process.pid}.${randomUUID()}.tmp`,
     );
     const text = `${JSON.stringify(snapshot, null, 2)}\n`;
 
     await mkdir(stateDirectory, { recursive: true });
-    await writeFile(temporaryPath, text, {
-      encoding: "utf8",
-      flag: "wx",
-    });
-    await rename(temporaryPath, this.statePath);
+    try {
+      await writeFile(temporaryPath, text, { encoding: "utf8", flag: "wx" });
+      // Linearization point: generation comparison and this atomic replacement
+      // are in one cross-process critical section.
+      await rename(temporaryPath, this.statePath);
+    } catch (error) {
+      await rm(temporaryPath, { force: true });
+      throw error;
+    }
+  }
+}
+
+function snapshotGeneration(value: Record<string, unknown>): number {
+  if (value.version !== 7) return 0;
+  assertGeneration(value.generation, "snapshot generation");
+  return value.generation as number;
+}
+
+function isSupportedVersion(value: unknown): boolean {
+  return value === 1 || value === 2 || value === 3 || value === 4 ||
+    value === 5 || value === 6 || value === 7;
+}
+
+function assertGeneration(value: unknown, name: string): asserts value is number {
+  if (!Number.isSafeInteger(value) || (value as number) < 0) {
+    throw new Error(`${name} must be a non-negative safe integer`);
   }
 }
 

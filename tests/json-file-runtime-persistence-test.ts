@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { spawn, type ChildProcess } from "node:child_process";
 import {
   mkdtemp,
   mkdir,
@@ -8,13 +9,18 @@ import {
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import test, {
   type TestContext,
 } from "node:test";
 
 import {
   JsonFileRuntimePersistence,
+  SnapshotConflictError,
+  type LoadedRuntimeState,
 } from "../src/runtime/json-file-runtime-persistence.js";
+import { DEFAULT_AGENT_TEAM_CONFIG } from "../src/agents/agent-runtime.js";
+import { PersistentRuntimeLeaseStore } from "../src/runtime/persistent-runtime-lease-store.js";
 import {
   createModelRequestDigest,
 } from "../src/runtime/model-invocation.js";
@@ -32,8 +38,50 @@ async function createFixture(t: TestContext) {
   }));
 
   return {
+    directory,
     statePath: join(directory, "nested", "state.json"),
   };
+}
+
+async function waitForFile(path: string): Promise<void> {
+  for (let attempt = 0; attempt < 500; attempt += 1) {
+    try {
+      await readFile(path, "utf8");
+      return;
+    } catch (error) {
+      if (!String(error).includes("ENOENT")) throw error;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  assert.fail(`Timed out waiting for ${path}`);
+}
+
+function saveLoadedState(
+  persistence: JsonFileRuntimePersistence,
+  state: LoadedRuntimeState,
+): Promise<void> {
+  return persistence.save(
+    state.lifecycleStore,
+    state.contextCheckpointStore,
+    state.agentRunStore,
+    state.threadConfigs,
+    state.agentProfiles,
+    state.runtimeSessions,
+    state.agentRuntimeStore,
+    state.requirementStore,
+    state.modelInvocationStore,
+    state.toolInvocationStore,
+  );
+}
+
+function waitForSuccessfulExit(child: ChildProcess): Promise<void> {
+  return new Promise((resolve, reject) => {
+    child.once("error", reject);
+    child.once("exit", (code, signal) => {
+      if (code === 0) resolve();
+      else reject(new Error(`Child exited with code ${code}, signal ${signal}`));
+    });
+  });
 }
 
 test("状态文件不存在时返回新的空 Store", async (t) => {
@@ -103,7 +151,7 @@ test("原子保存并在新实例中恢复 Runtime 状态", async (t) => {
   const json = JSON.parse(
     await readFile(fixture.statePath, "utf8"),
   ) as { version: number };
-  assert.equal(json.version, 6);
+  assert.equal(json.version, 7);
 });
 
 test("后续保存覆盖旧快照且保持合法 JSON", async (t) => {
@@ -112,11 +160,16 @@ test("后续保存覆盖旧快照且保持合法 JSON", async (t) => {
     fixture.statePath,
   );
   const loaded = await persistence.load();
+  assert.equal(loaded.generation, 0);
 
   loaded.lifecycleStore.createThread();
   await persistence.save(
     loaded.lifecycleStore,
     loaded.contextCheckpointStore,
+  );
+  assert.equal(
+    (JSON.parse(await readFile(fixture.statePath, "utf8")) as { generation: number }).generation,
+    1,
   );
   loaded.lifecycleStore.createThread();
   await persistence.save(
@@ -125,10 +178,272 @@ test("后续保存覆盖旧快照且保持合法 JSON", async (t) => {
   );
 
   const restored = await persistence.load();
+  assert.equal(restored.generation, 2);
   assert.equal(
     restored.lifecycleStore.exportSnapshot().threads.length,
     2,
   );
+});
+
+test("旧实例的非 Job 保存不能把磁盘上的 completed Job 覆盖回 planning", async (t) => {
+  const fixture = await createFixture(t);
+  const seedPersistence = new JsonFileRuntimePersistence(fixture.statePath);
+  const seed = await seedPersistence.load();
+  const job = seed.agentRuntimeStore.createJob({
+    threadId: "thread-stale-writer",
+    rootTurnId: "turn-stale-writer",
+    rootRunId: "run-stale-writer",
+    configSnapshot: DEFAULT_AGENT_TEAM_CONFIG,
+  });
+  await seedPersistence.save(
+    seed.lifecycleStore,
+    seed.contextCheckpointStore,
+    seed.agentRunStore,
+    seed.threadConfigs,
+    seed.agentProfiles,
+    seed.runtimeSessions,
+    seed.agentRuntimeStore,
+    seed.requirementStore,
+    seed.modelInvocationStore,
+    seed.toolInvocationStore,
+  );
+
+  const persistenceA = new JsonFileRuntimePersistence(fixture.statePath);
+  const persistenceB = new JsonFileRuntimePersistence(fixture.statePath);
+  const stateA = await persistenceA.load();
+  const staleStateB = await persistenceB.load();
+
+  stateA.agentRuntimeStore.setJobStatus(job.id, "completed");
+  await persistenceA.save(
+    stateA.lifecycleStore,
+    stateA.contextCheckpointStore,
+    stateA.agentRunStore,
+    stateA.threadConfigs,
+    stateA.agentProfiles,
+    stateA.runtimeSessions,
+    stateA.agentRuntimeStore,
+    stateA.requirementStore,
+    stateA.modelInvocationStore,
+    stateA.toolInvocationStore,
+  );
+
+  staleStateB.lifecycleStore.createThread();
+  await assert.rejects(
+    () => saveLoadedState(persistenceB, staleStateB),
+    (error) => {
+      assert.ok(error instanceof SnapshotConflictError);
+      assert.equal(error.name, "SnapshotConflict");
+      assert.equal(error.code, "snapshot_conflict");
+      assert.equal(error.expectedGeneration, 1);
+      assert.equal(error.actualGeneration, 2);
+      assert.match(error.message, /reload before retrying/);
+      return true;
+    },
+  );
+
+  const durable = await new JsonFileRuntimePersistence(fixture.statePath).load();
+  assert.equal(durable.generation, 2);
+  assert.equal(durable.agentRuntimeStore.getJob(job.id)?.status, "completed");
+
+  // Conflict recovery is explicit: reload drops the uncommitted stale view,
+  // then the caller may reapply a known-safe local mutation and retry.
+  const reloadedB = await persistenceB.load();
+  assert.equal(reloadedB.generation, 2);
+  assert.equal(reloadedB.lifecycleStore.exportSnapshot().threads.length, 0);
+  reloadedB.lifecycleStore.createThread();
+  await saveLoadedState(persistenceB, reloadedB);
+  const afterExplicitRetry = await new JsonFileRuntimePersistence(fixture.statePath).load();
+  assert.equal(afterExplicitRetry.generation, 3);
+  assert.equal(afterExplicitRetry.agentRuntimeStore.getJob(job.id)?.status, "completed");
+});
+
+test("两个进程同时保存同一 generation 时只有一个成功", async (t) => {
+  const fixture = await createFixture(t);
+  const goPath = join(fixture.directory, "save-go");
+  const moduleUrl = pathToFileURL(join(
+    process.cwd(),
+    "src",
+    "runtime",
+    "json-file-runtime-persistence.ts",
+  )).href;
+  const children = ["a", "b"].map((id) => {
+    const readyPath = join(fixture.directory, `ready-${id}`);
+    const resultPath = join(fixture.directory, `result-${id}.json`);
+    const program = `
+      import { readFile, writeFile } from "node:fs/promises";
+      import { JsonFileRuntimePersistence } from ${JSON.stringify(moduleUrl)};
+      const persistence = new JsonFileRuntimePersistence(${JSON.stringify(fixture.statePath)}, {
+        lockTimeoutMs: 2000,
+        staleLockMs: 100,
+        retryDelayMs: 1,
+      });
+      const state = await persistence.load();
+      state.lifecycleStore.createThread();
+      await writeFile(${JSON.stringify(readyPath)}, "ready");
+      while (true) {
+        try { await readFile(${JSON.stringify(goPath)}, "utf8"); break; }
+        catch (error) {
+          if (!String(error).includes("ENOENT")) throw error;
+          await new Promise((resolve) => setTimeout(resolve, 5));
+        }
+      }
+      let result;
+      try {
+        await persistence.save(
+          state.lifecycleStore, state.contextCheckpointStore, state.agentRunStore,
+          state.threadConfigs, state.agentProfiles, state.runtimeSessions,
+          state.agentRuntimeStore, state.requirementStore,
+          state.modelInvocationStore, state.toolInvocationStore,
+        );
+        result = { ok: true };
+      } catch (error) {
+        result = {
+          ok: false,
+          name: error?.name,
+          code: error?.code,
+          expectedGeneration: error?.expectedGeneration,
+          actualGeneration: error?.actualGeneration,
+        };
+      }
+      await writeFile(${JSON.stringify(resultPath)}, JSON.stringify(result));
+    `;
+    const child = spawn(
+      process.execPath,
+      ["--import", "tsx", "--input-type=module", "--eval", program],
+      { cwd: process.cwd(), stdio: "ignore" },
+    );
+    t.after(() => child.kill());
+    return { child, readyPath, resultPath };
+  });
+  const exits = children.map(({ child }) => waitForSuccessfulExit(child));
+  await Promise.all(children.map(({ readyPath }) => waitForFile(readyPath)));
+  await writeFile(goPath, "go");
+  await Promise.all(exits);
+
+  const results = await Promise.all(children.map(async ({ resultPath }) =>
+    JSON.parse(await readFile(resultPath, "utf8")) as {
+      ok: boolean;
+      name?: string;
+      code?: string;
+      expectedGeneration?: number;
+      actualGeneration?: number;
+    }));
+  assert.equal(results.filter((result) => result.ok).length, 1);
+  const conflict = results.find((result) => !result.ok);
+  assert.deepEqual(conflict, {
+    ok: false,
+    name: "SnapshotConflict",
+    code: "snapshot_conflict",
+    expectedGeneration: 0,
+    actualGeneration: 1,
+  });
+
+  const durable = await new JsonFileRuntimePersistence(fixture.statePath).load();
+  assert.equal(durable.generation, 1);
+  assert.equal(durable.lifecycleStore.exportSnapshot().threads.length, 1);
+});
+
+test("快照 writer 崩溃后不会留下永久锁", async (t) => {
+  const fixture = await createFixture(t);
+  const readyPath = join(fixture.directory, "snapshot-lock-owner-ready");
+  const moduleUrl = pathToFileURL(join(
+    process.cwd(),
+    "src",
+    "runtime",
+    "process-safe-file-lock.ts",
+  )).href;
+  const program = `
+    import { writeFile } from "node:fs/promises";
+    import { ProcessSafeFileLock } from ${JSON.stringify(moduleUrl)};
+    const lock = new ProcessSafeFileLock(${JSON.stringify(`${fixture.statePath}.lock`)}, {
+      staleLockMs: 10,
+      retryDelayMs: 1,
+    }, "Runtime snapshot");
+    await lock.withLock(async () => {
+      await writeFile(${JSON.stringify(readyPath)}, "ready");
+      await new Promise((resolve) => setTimeout(resolve, 10000));
+    });
+  `;
+  const lockOwner = spawn(
+    process.execPath,
+    ["--import", "tsx", "--input-type=module", "--eval", program],
+    { cwd: process.cwd(), stdio: "ignore" },
+  );
+  t.after(() => lockOwner.kill());
+  const ownerExit = new Promise<void>((resolve, reject) => {
+    lockOwner.once("error", reject);
+    lockOwner.once("exit", () => resolve());
+  });
+  await waitForFile(readyPath);
+  lockOwner.kill();
+  await ownerExit;
+
+  const persistence = new JsonFileRuntimePersistence(fixture.statePath, {
+    lockTimeoutMs: 1_000,
+    staleLockMs: 10,
+    retryDelayMs: 1,
+  });
+  const state = await persistence.load();
+  state.lifecycleStore.createThread();
+  await saveLoadedState(persistence, state);
+
+  const durable = JSON.parse(await readFile(fixture.statePath, "utf8")) as {
+    version: number;
+    generation: number;
+  };
+  assert.equal(durable.version, 7);
+  assert.equal(durable.generation, 1);
+});
+
+test("Lease fenced commit 与普通保存共用 Snapshot CAS", async (t) => {
+  const fixture = await createFixture(t);
+  const seedPersistence = new JsonFileRuntimePersistence(fixture.statePath);
+  const seed = await seedPersistence.load();
+  const job = seed.agentRuntimeStore.createJob({
+    threadId: "thread-fenced-cas",
+    rootTurnId: "turn-fenced-cas",
+    rootRunId: "run-fenced-cas",
+    configSnapshot: DEFAULT_AGENT_TEAM_CONFIG,
+  });
+  await saveLoadedState(seedPersistence, seed);
+
+  const persistenceA = new JsonFileRuntimePersistence(fixture.statePath);
+  const persistenceB = new JsonFileRuntimePersistence(fixture.statePath);
+  const stateA = await persistenceA.load();
+  const staleStateB = await persistenceB.load();
+  const leaseStore = new PersistentRuntimeLeaseStore(
+    join(fixture.directory, "runtime-leases.json"),
+  );
+  const leaseA = await leaseStore.acquire({
+    resource: { type: "job", id: job.id },
+    ownerId: "process-a",
+    ttlMs: 10_000,
+  });
+
+  stateA.agentRuntimeStore.setJobStatus(job.id, "completed");
+  await leaseStore.withFencedCommit(leaseA, () =>
+    saveLoadedState(persistenceA, stateA));
+
+  const unrelatedLeaseB = await leaseStore.acquire({
+    resource: { type: "job", id: "job-unrelated" },
+    ownerId: "process-b",
+    ttlMs: 10_000,
+  });
+  staleStateB.lifecycleStore.createThread();
+  await assert.rejects(
+    () => leaseStore.withFencedCommit(unrelatedLeaseB, () =>
+      saveLoadedState(persistenceB, staleStateB)),
+    (error) => {
+      assert.ok(error instanceof SnapshotConflictError);
+      assert.equal(error.expectedGeneration, 1);
+      assert.equal(error.actualGeneration, 2);
+      return true;
+    },
+  );
+
+  const durable = await new JsonFileRuntimePersistence(fixture.statePath).load();
+  assert.equal(durable.generation, 2);
+  assert.equal(durable.agentRuntimeStore.getJob(job.id)?.status, "completed");
 });
 
 test("拒绝损坏的 Runtime 状态文件", async (t) => {
@@ -184,7 +499,7 @@ test("重启时把遗留的 in_progress Turn 恢复为 interrupted", async (t) =
   );
 });
 
-test("v1 快照迁移到 v6 并初始化 Agent Runtime 与 Requirement 数据", async (t) => {
+test("v1 快照迁移到 v7 并初始化 Agent Runtime 与 Requirement 数据", async (t) => {
   const fixture = await createFixture(t);
   const base = await new JsonFileRuntimePersistence(fixture.statePath).load();
   const legacy = {
@@ -200,8 +515,38 @@ test("v1 快照迁移到 v6 并初始化 Agent Runtime 与 Requirement 数据", 
   await new JsonFileRuntimePersistence(fixture.statePath).save(
     loaded.lifecycleStore, loaded.contextCheckpointStore, loaded.agentRunStore,
   );
-  const persisted = JSON.parse(await readFile(fixture.statePath, "utf8")) as { version: number };
-  assert.equal(persisted.version, 6);
+  const persisted = JSON.parse(await readFile(fixture.statePath, "utf8")) as { version: number; generation: number };
+  assert.equal(persisted.version, 7);
+  assert.equal(persisted.generation, 1);
+});
+
+test("v1-v6 无 generation 快照均可加载并在首次保存时迁移", async (t) => {
+  const fixture = await createFixture(t);
+  const currentPersistence = new JsonFileRuntimePersistence(fixture.statePath);
+  const current = await currentPersistence.load();
+  await saveLoadedState(currentPersistence, current);
+  const currentSnapshot = JSON.parse(
+    await readFile(fixture.statePath, "utf8"),
+  ) as Record<string, unknown>;
+
+  for (const version of [1, 2, 3, 4, 5, 6]) {
+    const legacy = structuredClone(currentSnapshot);
+    legacy.version = version;
+    delete legacy.generation;
+    await writeFile(fixture.statePath, JSON.stringify(legacy), "utf8");
+
+    const persistence = new JsonFileRuntimePersistence(fixture.statePath);
+    const loaded = await persistence.load();
+    assert.equal(loaded.generation, 0, `v${version} should start at generation zero`);
+    await saveLoadedState(persistence, loaded);
+
+    const migrated = JSON.parse(await readFile(fixture.statePath, "utf8")) as {
+      version: number;
+      generation: number;
+    };
+    assert.equal(migrated.version, 7);
+    assert.equal(migrated.generation, 1);
+  }
 });
 
 test("v4 快照加载后 ModelInvocation 默认为空", async (t) => {
@@ -261,7 +606,7 @@ test("v5 快照加载后 ToolInvocation 默认为空", async (t) => {
   assert.deepEqual(loaded.toolInvocationStore.list(), []);
 });
 
-test("v6 快照往返保留 ModelInvocation WAL", async (t) => {
+test("v7 快照往返保留 ModelInvocation WAL", async (t) => {
   const fixture = await createFixture(t);
   const persistence = new JsonFileRuntimePersistence(fixture.statePath);
   const loaded = await persistence.load();
@@ -300,7 +645,7 @@ test("v6 快照往返保留 ModelInvocation WAL", async (t) => {
   const persisted = JSON.parse(
     await readFile(fixture.statePath, "utf8"),
   ) as { version: number; modelInvocations?: unknown };
-  assert.equal(persisted.version, 6);
+  assert.equal(persisted.version, 7);
   assert.deepEqual(persisted.modelInvocations, expected);
 
   const restored = await new JsonFileRuntimePersistence(fixture.statePath).load();
@@ -315,7 +660,7 @@ test("v6 快照往返保留 ModelInvocation WAL", async (t) => {
   );
 });
 
-test("v6 快照往返保留 ToolInvocation WAL", async (t) => {
+test("v7 快照往返保留 ToolInvocation WAL", async (t) => {
   const fixture = await createFixture(t);
   const persistence = new JsonFileRuntimePersistence(fixture.statePath);
   const loaded = await persistence.load();
@@ -351,7 +696,7 @@ test("v6 快照往返保留 ToolInvocation WAL", async (t) => {
   const persisted = JSON.parse(
     await readFile(fixture.statePath, "utf8"),
   ) as { version: number; toolInvocations?: unknown };
-  assert.equal(persisted.version, 6);
+  assert.equal(persisted.version, 7);
   assert.deepEqual(persisted.toolInvocations, expected);
 
   const restored = await new JsonFileRuntimePersistence(fixture.statePath).load();
