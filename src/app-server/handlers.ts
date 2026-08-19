@@ -462,7 +462,7 @@ export function registerAppServerHandlers(
     if (workflowBusyTurn) {
       const result = createWorkflowBusyResult(lifecycleStore, request.turnId);
       await saveState();
-      log(`[app-server] workflow busy; message queued outside active Job: ${request.turnId}\n`);
+      log(`[app-server] workflow busy; follow-up rejected while active Job continues: ${request.turnId}\n`);
       return result;
     }
     const reuseTeamRoot = activeTeamJob &&
@@ -824,7 +824,7 @@ function resolveWorkflowTurnResult(
 
 function createWorkflowBusyResult(lifecycleStore: LifecycleStore, turnId: string): TurnRunResult {
   const assistantMessage = lifecycleStore.appendItem(turnId, "assistant_message", {
-    text: "当前团队任务仍在执行，本条消息未合并到正在运行的阶段，也不会中断原任务。请等待当前阶段返回；如果 Runtime 请求补充信息，再发送针对该反馈的说明。",
+    text: "当前团队流程仍在执行，本条消息未进入队列、未合并到正在运行的阶段，也不会中断原任务。请等待当前流程完成或暂停后再发送；如果 Runtime 请求补充信息，再发送针对该反馈的说明。",
   });
   const turn = lifecycleStore.completeTurn(turnId);
   return { turn, assistantMessage };
