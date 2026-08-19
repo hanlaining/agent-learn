@@ -372,6 +372,10 @@ export class PersistentRuntimeLeaseStore {
         claimStat = await stat(claim.path);
       } catch (error) {
         if (hasErrorCode(error, "ENOENT")) return;
+        // Windows can report EPERM while another contender atomically renames
+        // or releases its claim. Treat it as still live for this scan: never
+        // delete an indeterminate claim, then re-read all claims in the loop.
+        if (process.platform === "win32" && hasErrorCode(error, "EPERM")) return;
         throw error;
       }
       if (Date.now() - claimStat.mtimeMs < this.staleLockMs) return;
