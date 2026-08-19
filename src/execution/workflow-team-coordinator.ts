@@ -2,6 +2,8 @@ import type { AgentRunResult } from "../agents/agent-run.js";
 import type { AgentStageCheckpoint } from "../agents/agent-runtime.js";
 import { AgentRunStore } from "../agents/agent-run-store.js";
 import { AgentRuntimeStore } from "../agents/agent-runtime-store.js";
+import { failureOriginForCode, safeFailureMessage } from "../agents/agent-presentation.js";
+import type { AgentFailureOrigin } from "../agents/agent-run.js";
 import type { FixedProductStage } from "../agents/fixed-software-team-coordinator.js";
 import { classifyRuntimeFailure, RuntimeFailure } from "../observability/runtime-failure.js";
 import { RuntimeMetricsLedger } from "../observability/runtime-metrics.js";
@@ -109,7 +111,7 @@ export class WorkflowTeamCoordinator {
     if (engineeringReturn !== undefined) return "engineering_return_ready";
     const productTask = this.taskFor(jobId, "product_role");
     if (productTask?.status === "completed") return "engineering_ready";
-    if (productTask?.status === "rework") return "rework";
+    if (productTask?.status === "rework" || productTask?.status === "blocked") return "rework";
     const productReturns = returns.filter((item) => item.stageId === "product" && item.jobAttempt === job?.attempt);
     if (productReturns.some((item) => item.businessAttempt === 2)) return "second_return_ready";
     if (productReturns.length > 0) return "first_return_ready";
@@ -252,6 +254,10 @@ export class WorkflowTeamCoordinator {
       fileClaims: writable ? [...context.scope] : [], maxAttempts: 2, status: "ready",
     });
     this.options.runStore.setTaskId(owner.id, task.id);
+    this.options.runStore.setPresentation(owner.id, {
+      attentionLevel: "neutral",
+      statusMessage: "已收到任务，等待阶段启动",
+    });
     return task;
   }
 
@@ -273,12 +279,7 @@ export class WorkflowTeamCoordinator {
     const result = parseStageResult(claimed.result.summary);
     if (result.status === "blocked" || result.nextStageRecommendation === "block") {
       this.options.runtimeStore.consumeReturn(envelope.id);
-      this.options.runtimeStore.setTaskStatus(task.id, "blocked");
-      this.options.runStore.setStatus(team.product.id, "resuming");
-      this.options.runStore.setStatus(team.lead.id, "waiting_children");
-      this.options.runStore.setStatus(team.root.id, "waiting_children");
-      this.options.runtimeStore.setJobStatus(jobId, "reviewing");
-      this.notify(team.product.id, team.lead.id, team.root.id);
+      this.pauseForFeedback(jobId, task.id, team.product.id, "产品阶段需要负责人补充信息");
       await this.options.persist?.();
       return;
     }
@@ -297,14 +298,19 @@ export class WorkflowTeamCoordinator {
         kind: "summary", title: "Product specification", summary: result.summary, confidence: "confirmed", visibility: "job",
         idempotencyKey: `${envelope.idempotencyKey}:board`, workflowVersion: team.job.workflowVersion, stageId: "product", stageAttempt: attempt });
       this.options.runStore.complete(team.product.id, { runId: team.product.id, taskId: task.id, status: "completed", summary: result.summary });
+      this.options.runStore.setPresentation(team.product.id, { attentionLevel: "success", statusMessage: "产品规格已通过验收" });
       this.options.runtimeStore.setJobStatus(jobId, "running");
     } else if (attempt < 2) {
       this.options.runtimeStore.setTaskStatus(task.id, "rework"); this.options.runStore.setStatus(team.product.id, "resuming");
+      this.options.runStore.setPresentation(team.product.id, {
+        coordinationStatus: "rework_required",
+        attentionLevel: "feedback",
+        statusMessage: "产品输出需要返工",
+      });
       this.options.runtimeStore.setJobStatus(jobId, "reviewing");
     } else {
-      this.options.runtimeStore.setTaskStatus(task.id, "failed"); this.options.runtimeStore.failJob(jobId, "failed", "stage_retry_exhausted");
-      this.options.runStore.closeActiveForJob(jobId, "failed", "Product stage retry exhausted");
-      this.options.runtimeStore.closeActiveTasks(jobId, "failed");
+      this.options.runtimeStore.setTaskStatus(task.id, "failed");
+      this.failWorkflow(jobId, "stage_retry_exhausted", "Product business acceptance failed", [team.product.id], "contract");
     }
     void review; await this.options.persist?.();
   }
@@ -312,7 +318,7 @@ export class WorkflowTeamCoordinator {
   private async runEngineering(jobId: string): Promise<void> {
     const team = this.team(jobId); const parent = this.ensureTask(jobId, "product_role");
     let task = this.ensureTask(jobId, "engineering_role", parent.id);
-    if (task.status === "rework") {
+    if (task.status === "rework" || task.status === "blocked") {
       this.options.runtimeStore.setTaskOwnerRun(task.id, team.engineering.id, task.attempt + 1);
       this.options.runStore.setStatus(team.engineering.id, "resuming");
       task = this.options.runtimeStore.getTask(task.id)!;
@@ -332,12 +338,7 @@ export class WorkflowTeamCoordinator {
     const result = parseStageResult(claimed.result.summary);
     if (result.status === "blocked" || result.nextStageRecommendation === "block") {
       this.options.runtimeStore.consumeReturn(envelope.id);
-      this.options.runtimeStore.setTaskStatus(task.id, "blocked");
-      this.options.runStore.setStatus(team.engineering.id, "resuming");
-      this.options.runStore.setStatus(team.lead.id, "waiting_children");
-      this.options.runStore.setStatus(team.root.id, "waiting_children");
-      this.options.runtimeStore.setJobStatus(jobId, "reviewing");
-      this.notify(team.engineering.id, team.lead.id, team.root.id);
+      this.pauseForFeedback(jobId, task.id, team.engineering.id, "工程阶段需要负责人补充信息");
       await this.options.persist?.();
       return;
     }
@@ -346,13 +347,18 @@ export class WorkflowTeamCoordinator {
         this.options.runtimeStore.consumeReturn(envelope.id);
         this.options.runtimeStore.setTaskStatus(task.id, "rework");
         this.options.runStore.setStatus(team.engineering.id, "resuming");
+        this.options.runStore.setPresentation(team.engineering.id, {
+          coordinationStatus: "rework_required",
+          attentionLevel: "feedback",
+          statusMessage: "工程输出需要返工",
+        });
         this.options.runtimeStore.setJobStatus(jobId, "reviewing");
         await this.options.persist?.();
         return;
       }
       this.options.runtimeStore.failReturn(envelope.id);
       this.options.runtimeStore.setTaskStatus(task.id, "failed");
-      this.failWorkflow(jobId, "stage_retry_exhausted", "Engineering business acceptance failed");
+      this.failWorkflow(jobId, "stage_retry_exhausted", "Engineering business acceptance failed", [team.engineering.id], "contract");
       await this.options.persist?.();
       return;
     }
@@ -366,7 +372,7 @@ export class WorkflowTeamCoordinator {
   private async runQuality(jobId: string): Promise<void> {
     const team = this.team(jobId); const engineering = this.ensureTask(jobId, "engineering_role");
     let task = this.ensureTask(jobId, "quality_role", engineering.id);
-    if (task.status === "rework") {
+    if (task.status === "rework" || task.status === "blocked") {
       this.options.runtimeStore.setTaskOwnerRun(task.id, team.quality.id, task.attempt + 1);
       this.options.runStore.setStatus(team.quality.id, "resuming");
       task = this.options.runtimeStore.getTask(task.id)!;
@@ -394,12 +400,7 @@ export class WorkflowTeamCoordinator {
     const result = parseStageResult(claimed.result.summary);
     if (result.status === "blocked" || result.nextStageRecommendation === "block") {
       this.options.runtimeStore.consumeReturn(envelope.id);
-      this.options.runtimeStore.setTaskStatus(task.id, "blocked");
-      this.options.runStore.setStatus(team.quality.id, "resuming");
-      this.options.runStore.setStatus(team.lead.id, "waiting_children");
-      this.options.runStore.setStatus(team.root.id, "waiting_children");
-      this.options.runtimeStore.setJobStatus(jobId, "reviewing");
-      this.notify(team.quality.id, team.lead.id, team.root.id);
+      this.pauseForFeedback(jobId, task.id, team.quality.id, "测试阶段需要负责人补充信息");
       await this.options.persist?.();
       return;
     }
@@ -408,13 +409,18 @@ export class WorkflowTeamCoordinator {
         this.options.runtimeStore.consumeReturn(envelope.id);
         this.options.runtimeStore.setTaskStatus(task.id, "rework");
         this.options.runStore.setStatus(team.quality.id, "resuming");
+        this.options.runStore.setPresentation(team.quality.id, {
+          coordinationStatus: "rework_required",
+          attentionLevel: "feedback",
+          statusMessage: "测试输出需要返工",
+        });
         this.options.runtimeStore.setJobStatus(jobId, "reviewing");
         await this.options.persist?.();
         return;
       }
       this.options.runtimeStore.failReturn(envelope.id);
       this.options.runtimeStore.setTaskStatus(task.id, "failed");
-      this.failWorkflow(jobId, "stage_retry_exhausted", "Quality business acceptance failed");
+      this.failWorkflow(jobId, "stage_retry_exhausted", "Quality business acceptance failed", [team.quality.id], "contract");
       await this.options.persist?.();
       return;
     }
@@ -427,7 +433,7 @@ export class WorkflowTeamCoordinator {
       const savedLeadResult = parseStageResult(savedLeadEvidence.summary);
       if (!isSuccessfulStageResult(savedLeadResult)) {
         this.options.runtimeStore.failReturn(envelope.id);
-        this.failWorkflow(jobId, "stage_contract_failed", "Persisted Lead evidence is invalid");
+        this.failWorkflow(jobId, "stage_contract_failed", "Persisted Lead evidence is invalid", [team.lead.id], "contract");
         await this.options.persist?.();
         throw new RuntimeFailure("stage_contract_failed", "Persisted Lead evidence is invalid", false);
       }
@@ -451,7 +457,7 @@ export class WorkflowTeamCoordinator {
     }
     if (savedLeadCheckpoint?.status === "completed") {
       this.options.runtimeStore.failReturn(envelope.id);
-      this.failWorkflow(jobId, "stage_contract_failed", "Completed Lead stage has no recoverable evidence");
+      this.failWorkflow(jobId, "stage_contract_failed", "Completed Lead stage has no recoverable evidence", [team.lead.id], "contract");
       await this.options.persist?.();
       throw new RuntimeFailure("stage_contract_failed", "Completed Lead stage has no recoverable evidence", false);
     }
@@ -460,9 +466,19 @@ export class WorkflowTeamCoordinator {
     let stage: AgentStageCheckpoint | undefined;
     try {
       stage = this.options.runtimeStore.beginStage(jobId, "lead", stageTemplate.retryPolicy.maxBusinessAttempts);
+      this.options.runStore.setStatus(team.lead.id, "running");
+      this.options.runStore.setPresentation(team.lead.id, { attentionLevel: "active", statusMessage: "负责人正在验收团队结果" });
       const leadResult = await this.executeStructured({ jobId, checkpointKey: stage.idempotencyKey, stageId: "lead", profileId: "software_team_lead", threadId: team.lead.threadId,
         attempt: stage.stageAttempt, allowedTools: stageTemplate.allowedTools,
         prompt: `只汇总已有 Product、Engineering、Quality 合法证据一次，不重新读取文件或执行 Worker 工作。\n\nQuality Return:\n${claimed.result.summary}` });
+      if (leadResult.result.status === "blocked") {
+        this.options.runtimeStore.retryReturn(envelope.id, 0);
+        this.options.runtimeStore.setStageStatus(stage.idempotencyKey, "failed_retryable", "stage_feedback_required");
+        this.pauseForFeedback(jobId, undefined, team.lead.id, "负责人需要补充信息后才能继续验收");
+        this.metrics.finish(stage);
+        await this.options.persist?.();
+        return;
+      }
       if (!isSuccessfulStageResult(leadResult.result)) {
         throw new RuntimeFailure("stage_contract_failed", "Lead business acceptance failed", true);
       }
@@ -473,6 +489,8 @@ export class WorkflowTeamCoordinator {
         result: { status: "completed", summary: JSON.stringify(leadResult.result), evidenceIds: [...claimed.result.evidenceIds, review.id], boardEntryIds: [] },
         idempotencyKey: stage.idempotencyKey, jobAttempt: team.job.attempt, workflowVersion: team.job.workflowVersion, stageId: "lead", stageAttempt: stage.stageAttempt });
       this.options.runtimeStore.setStageStatus(stage.idempotencyKey, "completed");
+      this.options.runStore.complete(team.lead.id, { runId: team.lead.id, taskId: task.id, status: "completed", summary: leadResult.result.summary });
+      this.options.runStore.setPresentation(team.lead.id, { attentionLevel: "success", statusMessage: "团队结果已验收并 Return God" });
       this.options.runtimeStore.setJobStatus(jobId, "waiting_returns");
       if (leadResult.invocationId !== undefined) {
         this.options.commitRecoveredModelExecution?.(
@@ -511,10 +529,14 @@ export class WorkflowTeamCoordinator {
       }
       if (terminal) {
         this.options.runtimeStore.failReturn(envelope.id);
-        this.failWorkflow(jobId, code, "Lead stage failed");
+        this.failWorkflow(jobId, code, "Lead stage failed", [team.lead.id], failureOriginForCode(code));
       } else {
         this.options.runtimeStore.retryReturn(envelope.id, 0);
         this.options.runStore.setStatus(team.lead.id, "resuming");
+        this.options.runStore.setPresentation(team.lead.id, {
+          coordinationStatus: "feedback_required", attentionLevel: "feedback",
+          statusMessage: safeFailureMessage(code), failureOrigin: failureOriginForCode(code),
+        });
         this.options.runtimeStore.setJobStatus(jobId, "waiting_returns");
       }
       await this.options.persist?.();
@@ -532,6 +554,8 @@ export class WorkflowTeamCoordinator {
       const claimed = this.options.runtimeStore.claimReturn(envelope.id);
       if (claimed === undefined) throw new RuntimeFailure("return_delivery_failed", "Lead Return cannot be claimed", true);
       stage = this.options.runtimeStore.beginStage(jobId, "return_god", 2);
+      this.options.runStore.setStatus(team.root.id, "resuming");
+      this.options.runStore.setPresentation(team.root.id, { attentionLevel: "active", statusMessage: "God 正在收口最终结果" });
       const deliveryEvidenceKey = `${stage.idempotencyKey}:evidence`;
       const savedDeliveryEvidence = this.options.runtimeStore.listEvidence(task.id)
         .find((item) => item.idempotencyKey === deliveryEvidenceKey);
@@ -601,10 +625,14 @@ export class WorkflowTeamCoordinator {
       }
       if (terminal) {
         this.options.runtimeStore.failReturn(envelope.id);
-        this.failWorkflow(jobId, code, "Final delivery failed");
+        this.failWorkflow(jobId, code, "Final delivery failed", [team.root.id], failureOriginForCode(code));
       } else {
         this.options.runtimeStore.retryReturn(envelope.id, 0);
         this.options.runtimeStore.setJobStatus(jobId, "waiting_returns");
+        this.options.runStore.setPresentation(team.root.id, {
+          coordinationStatus: "feedback_required", attentionLevel: "feedback",
+          statusMessage: safeFailureMessage(code), failureOrigin: failureOriginForCode(code),
+        });
       }
       await this.options.persist?.(); throw error;
     }
@@ -617,12 +645,15 @@ export class WorkflowTeamCoordinator {
     const existingEvidence = this.options.runtimeStore.listEvidence(input.taskId).find((item) => item.idempotencyKey === evidenceKey);
     if (checkpoint.status === "completed" && existingEvidence === undefined) {
       this.options.runtimeStore.setTaskStatus(input.taskId, "failed");
-      this.failWorkflow(input.jobId, "stage_contract_failed", `Completed ${input.stageId} stage has no recoverable evidence`);
+      this.failWorkflow(input.jobId, "stage_contract_failed", `Completed ${input.stageId} stage has no recoverable evidence`, [input.runId], "runtime");
       await this.options.persist?.();
       throw new RuntimeFailure("stage_contract_failed", `Completed ${input.stageId} stage has no recoverable evidence`, false);
     }
     try {
-      this.options.runtimeStore.setTaskStatus(input.taskId, "running"); this.options.runStore.setStatus(input.runId, "running"); await this.options.persist?.();
+      this.options.runtimeStore.setTaskStatus(input.taskId, "running"); this.options.runStore.setStatus(input.runId, "running");
+      this.markSupervisorsWaiting(input.jobId, input.runId);
+      this.options.runStore.setPresentation(input.runId, { attentionLevel: "active", statusMessage: "正在执行已分派任务" });
+      await this.options.persist?.();
       let result: StageResult; let turnId: string; let recoveredInvocationId: string | undefined;
       if (existingEvidence !== undefined) {
         result = parseStageResult(existingEvidence.summary); turnId = this.options.runStore.get(input.runId)?.turnId ?? input.threadId;
@@ -634,17 +665,30 @@ export class WorkflowTeamCoordinator {
       if (checkpoint.status === "running") this.options.runtimeStore.setStageStatus(checkpoint.idempotencyKey, "validating");
       this.options.runStore.rebindAttempt(input.runId, turnId, input.attempt);
       const evidence = this.options.runtimeStore.addEvidence({ jobId: input.jobId, taskId: input.taskId, runId: input.runId, kind: input.kind,
-        summary: JSON.stringify(result), producer: input.producer, verdict: result.status === "completed" ? "supported" : "failed",
+        summary: JSON.stringify(result), producer: input.producer, verdict: result.status === "failed" ? "failed" : "supported",
         idempotencyKey: evidenceKey, jobAttempt: team.job.attempt, workflowVersion: team.job.workflowVersion, stageId: input.stageId, stageAttempt: checkpoint.stageAttempt });
       if (result.status === "completed") {
         this.options.runStore.complete(input.runId, { runId: input.runId, taskId: input.taskId, status: "completed", summary: result.summary });
+        this.options.runStore.setPresentation(input.runId, {
+          attentionLevel: "success",
+          statusMessage: "阶段结果已返回，等待验收",
+        });
       } else {
         // blocked/failed 是待 Lead 验收的业务结果，不是 AgentLoop 崩溃。在验收决策前保持可续跑。
         this.options.runStore.setStatus(input.runId, "resuming");
+        this.options.runStore.setPresentation(input.runId, result.status === "blocked" ? {
+          coordinationStatus: "feedback_required",
+          attentionLevel: "feedback",
+          statusMessage: result.summary || "需要负责人补充信息后继续",
+        } : {
+          coordinationStatus: "rework_required",
+          attentionLevel: "feedback",
+          statusMessage: "阶段输出需要返工",
+        });
       }
       this.options.runtimeStore.createReturn({ jobId: input.jobId, rootRunId: team.root.rootRunId, parentRunId: input.parentRunId, childRunId: input.runId, taskId: input.taskId,
         sequence: input.stageId === "product" ? input.attempt : input.stageId === "engineering" ? 2 : 3,
-        result: { status: result.status === "completed" ? "completed" : "failed", summary: JSON.stringify(result), evidenceIds: [evidence.id], boardEntryIds: [] },
+        result: { status: result.status === "failed" ? "failed" : "completed", summary: JSON.stringify(result), evidenceIds: [evidence.id], boardEntryIds: [] },
         idempotencyKey: checkpoint.idempotencyKey, jobAttempt: team.job.attempt, workflowVersion: team.job.workflowVersion, stageId: input.stageId,
         stageAttempt: checkpoint.stageAttempt, businessAttempt: input.attempt });
       const currentCheckpoint = this.options.runtimeStore.listStageCheckpoints(input.jobId)
@@ -660,10 +704,14 @@ export class WorkflowTeamCoordinator {
       this.options.runtimeStore.setStageStatus(checkpoint.idempotencyKey, terminal ? "failed_terminal" : "failed_retryable", code);
       this.metrics.finish(checkpoint, { primaryFailureCode: code });
       if (terminal) {
-        this.options.runtimeStore.setTaskStatus(input.taskId, "failed"); this.options.runtimeStore.failJob(input.jobId, "failed", code);
-        this.options.runStore.closeActiveForJob(input.jobId, "failed", `Stage failed: ${code}`); this.options.runtimeStore.closeActiveTasks(input.jobId, "failed");
+        this.options.runtimeStore.setTaskStatus(input.taskId, "failed");
+        this.failWorkflow(input.jobId, code, `Stage failed: ${code}`, [input.runId], failureOriginForCode(code));
       } else {
         this.options.runtimeStore.setTaskStatus(input.taskId, "ready"); this.options.runStore.setStatus(input.runId, "resuming");
+        this.options.runStore.setPresentation(input.runId, {
+          coordinationStatus: "feedback_required", attentionLevel: "feedback",
+          statusMessage: safeFailureMessage(code), failureOrigin: failureOriginForCode(code),
+        });
       }
       await this.options.persist?.(); throw error;
     }
@@ -767,13 +815,81 @@ export class WorkflowTeamCoordinator {
     }) !== undefined;
   }
 
-  private failWorkflow(jobId: string, failureCode: string, summary: string): void {
+  private pauseForFeedback(jobId: string, taskId: string | undefined, runId: string, message: string): void {
+    if (taskId !== undefined) this.options.runtimeStore.setTaskStatus(taskId, "blocked");
+    this.options.runtimeStore.setJobStatus(jobId, "reviewing");
+    this.options.runStore.setStatus(runId, "resuming");
+    this.options.runStore.setPresentation(runId, {
+      coordinationStatus: "feedback_required", attentionLevel: "feedback", statusMessage: message,
+    });
+    this.markSupervisorsWaiting(jobId, runId);
+    const downstreamRunIds = this.downstreamRunIds(jobId, runId);
+    const blockedRuns = this.options.runStore.markUpstreamBlocked(jobId, downstreamRunIds, "上游需要补充信息，本角色尚未启动");
+    this.notify(runId, ...blockedRuns.map((run) => run.id));
+  }
+
+  private failWorkflow(
+    jobId: string,
+    failureCode: string,
+    summary: string,
+    responsibleRunIds: readonly string[] = [],
+    failureOrigin: AgentFailureOrigin = failureOriginForCode(failureCode),
+  ): void {
     const alreadyTerminal = ["failed", "cancelled"].includes(this.options.runtimeStore.getJob(jobId)?.status ?? "");
     this.options.runtimeStore.failJob(jobId, "failed", failureCode);
-    this.options.runtimeStore.closeActiveTasks(jobId, "failed");
-    const closed = this.options.runStore.closeActiveForJob(jobId, "failed", summary, failureCode);
+    const safeError = safeFailureMessage(failureCode);
+    for (const runId of responsibleRunIds) {
+      const run = this.options.runStore.get(runId);
+      if (run === undefined) continue;
+      if (run.taskId !== undefined) this.options.runtimeStore.setTaskStatus(run.taskId, "failed");
+      this.options.runStore.complete(runId, {
+        runId,
+        ...(run.taskId === undefined ? {} : { taskId: run.taskId }),
+        status: "failed",
+        summary,
+        safeError,
+        failureOrigin,
+      });
+      this.options.runStore.setPresentation(runId, {
+        attentionLevel: "error", statusMessage: safeError, failureOrigin,
+      });
+    }
+    const downstreamRunIds = responsibleRunIds.flatMap((runId) => this.downstreamRunIds(jobId, runId));
+    const downstreamTaskIds = this.options.runStore.listForJob(jobId)
+      .filter((run) => downstreamRunIds.includes(run.id) && run.taskId !== undefined)
+      .map((run) => run.taskId!);
+    this.options.runtimeStore.closeTasks(downstreamTaskIds);
+    this.options.runtimeStore.closeActiveTasks(jobId, "cancelled");
+    const downstream = this.options.runStore.closeAsUpstreamBlocked(jobId, downstreamRunIds, "上游阶段未完成，本角色未启动");
+    const nonResponsible = this.options.runStore.closeActiveForJob(jobId, "cancelled", "责任节点失败，流程已终止");
+    for (const run of nonResponsible) {
+      this.options.runStore.setPresentation(run.id, {
+        coordinationStatus: "skipped", attentionLevel: "neutral",
+        statusMessage: "责任节点失败，流程已终止",
+      });
+    }
     if (!alreadyTerminal) this.options.onFailed?.(jobId);
-    this.notify(...closed.map((run) => run.id));
+    this.notify(...responsibleRunIds, ...downstream.map((run) => run.id), ...nonResponsible.map((run) => run.id));
+  }
+
+  private markSupervisorsWaiting(jobId: string, responsibleRunId: string): void {
+    const team = this.team(jobId);
+    for (const supervisor of [team.root, team.lead]) {
+      if (supervisor.id === responsibleRunId) continue;
+      if (["failed", "cancelled", "timed_out"].includes(supervisor.status)) continue;
+      this.options.runStore.setStatus(supervisor.id, "waiting_children");
+      this.options.runStore.setPresentation(supervisor.id, {
+        coordinationStatus: "waiting_children", attentionLevel: "active",
+        statusMessage: supervisor.id === team.root.id ? "等待负责人继续协调" : "正在监督子 Agent并等待反馈",
+      });
+    }
+  }
+
+  private downstreamRunIds(jobId: string, responsibleRunId: string): string[] {
+    const team = this.team(jobId);
+    if (responsibleRunId === team.product.id) return [team.engineering.id, team.quality.id];
+    if (responsibleRunId === team.engineering.id) return [team.quality.id];
+    return [];
   }
 
   private notify(...runIds: string[]): void { for (const runId of runIds) this.options.onRunUpdated?.(runId); }

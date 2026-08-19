@@ -545,7 +545,14 @@ test("真实 turn\/run 从 child blocked 返回父级引导，同 Job 吸收用�
   assert.equal(productCalls, 1);
   assert.equal(engineeringCalls, 2);
   assert.equal(rootAgentCalls, 1);
-  assert.equal(rootStates.every((state) => state === "waiting_children"), true);
+  assert.deepEqual(rootStates, [
+    "waiting_children",
+    "waiting_children",
+    "waiting_children",
+    "waiting_children",
+    "waiting_children",
+    "resuming",
+  ]);
   assert.equal(runtime.listJobs().length, 1);
   assert.equal(runs.listForJob(completedJob.id).length, 5);
   assert.equal(runtime.getJob(completedJob.id)?.status, "completed");

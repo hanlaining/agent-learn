@@ -149,37 +149,48 @@ test("P0-5 Quality业务不合格最多验收两次，之后终止而非无限�
   assert.equal(secondReturn === undefined ? undefined : setup.runtime.listReturns(setup.jobId).find((item) => item.id === secondReturn.id)?.status, "failed");
 });
 
-test("P0-6 Lead返回blocked或failed时不得创建成功最终交付", async () => {
-  for (const leadStatus of ["blocked", "failed"] as const) {
-    const setup = createHarness((input) => input.profileId === "software_team_lead"
-      ? stageResult(`lead ${leadStatus}`, {
-          status: leadStatus,
-          blockers: [`lead ${leadStatus}`],
-          nextStageRecommendation: leadStatus === "blocked" ? "block" : "retry",
-        })
-      : stageResult("valid"));
-    await driveToQualityReturn(setup);
+test("P0-6 Lead返回blocked时进入橙色反馈，并在原 Job/Thread继续验收", async () => {
+  let leadCalls = 0;
+  const setup = createHarness((input) => input.profileId === "software_team_lead" && ++leadCalls === 1
+    ? stageResult("lead blocked", { status: "blocked", blockers: ["needs parent input"], nextStageRecommendation: "block" })
+    : stageResult("valid"));
+  await driveToQualityReturn(setup);
+  const leadThread = setup.runs.listForJob(setup.jobId).find((item) => item.agentProfileId === "software_team_lead")?.threadId;
 
-    await assert.rejects(
-      setup.coordinator.advance(setup.jobId, "quality_return_ready"),
-      /Lead business acceptance failed/,
-    );
-    assert.equal(setup.runtime.getJob(setup.jobId)?.status, "waiting_returns");
-    assert.equal(setup.coordinator.getStage(setup.jobId), "quality_return_ready");
-    assert.equal(setup.runtime.listStageCheckpoints(setup.jobId).filter((item) => item.stageId === "lead").at(-1)?.status, "failed_retryable");
-    assert.equal(setup.runtime.listReturns(setup.jobId).some((item) => item.stageId === "lead"), false);
-    assert.equal(setup.calls.filter((call) => call.profileId === "orchestrator").length, 0);
+  assert.equal((await setup.coordinator.advance(setup.jobId, "quality_return_ready")).stage, "quality_return_ready");
+  assert.equal(setup.runtime.getJob(setup.jobId)?.status, "reviewing");
+  assert.equal(setup.runtime.listReturns(setup.jobId).some((item) => item.stageId === "lead"), false);
+  assert.equal(setup.calls.filter((call) => call.profileId === "orchestrator").length, 0);
+  assert.equal(setup.runs.listForJob(setup.jobId).find((item) => item.agentProfileId === "software_team_lead")?.coordinationStatus, "feedback_required");
 
-    await assert.rejects(
-      setup.coordinator.advance(setup.jobId, "quality_return_ready"),
-      /Lead business acceptance failed/,
-    );
-    assert.equal(setup.runtime.getJob(setup.jobId)?.status, "failed");
-    assert.equal(setup.runtime.listStageCheckpoints(setup.jobId).filter((item) => item.stageId === "lead").at(-1)?.status, "failed_terminal");
-    assert.equal(setup.calls.filter((call) => call.profileId === "software_team_lead").length, 2);
-    assert.equal(setup.calls.filter((call) => call.profileId === "orchestrator").length, 0);
-    assert.equal(setup.runtime.listReturns(setup.jobId).some((item) => item.stageId === "lead"), false);
-  }
+  assert.equal((await setup.coordinator.advance(setup.jobId, "quality_return_ready")).stage, "lead_return_ready");
+  assert.equal((await setup.coordinator.advance(setup.jobId, "lead_return_ready")).stage, "completed");
+  assert.equal(setup.runtime.getJob(setup.jobId)?.status, "completed");
+  assert.equal(setup.runs.listForJob(setup.jobId).find((item) => item.agentProfileId === "software_team_lead")?.threadId, leadThread);
+});
+
+test("P0-6 Lead返回failed时有界重试后只标红责任节点", async () => {
+  const setup = createHarness((input) => input.profileId === "software_team_lead"
+    ? stageResult("lead failed", { status: "failed", blockers: ["invalid review"], nextStageRecommendation: "retry" })
+    : stageResult("valid"));
+  await driveToQualityReturn(setup);
+
+  await assert.rejects(setup.coordinator.advance(setup.jobId, "quality_return_ready"), /Lead business acceptance failed/);
+  assert.equal(setup.runtime.getJob(setup.jobId)?.status, "waiting_returns");
+  await assert.rejects(setup.coordinator.advance(setup.jobId, "quality_return_ready"), /Lead business acceptance failed/);
+  assert.equal(setup.runtime.getJob(setup.jobId)?.status, "failed");
+  const lead = setup.runs.listForJob(setup.jobId).find((item) => item.agentProfileId === "software_team_lead");
+  assert.equal(lead?.status, "failed");
+  assert.equal(lead?.failureOrigin, "contract");
+  const terminalRuns = setup.runs.listForJob(setup.jobId);
+  assert.equal(terminalRuns.some((item) => ["queued", "running", "waiting_children", "resuming"].includes(item.status)), false);
+  assert.deepEqual(terminalRuns.filter((item) => item.attentionLevel === "error").map((item) => item.id), [lead?.id]);
+  const root = terminalRuns.find((item) => item.agentProfileId === "orchestrator");
+  assert.equal(root?.status, "cancelled");
+  assert.equal(root?.attentionLevel, "neutral");
+  assert.equal(setup.calls.filter((call) => call.profileId === "software_team_lead").length, 2);
+  assert.equal(setup.calls.filter((call) => call.profileId === "orchestrator").length, 0);
+  assert.equal(setup.runtime.listReturns(setup.jobId).some((item) => item.stageId === "lead"), false);
 });
 
 function createHarness(result: (input: ExecutionInput) => string | Error) {

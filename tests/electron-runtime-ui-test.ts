@@ -671,7 +671,7 @@ test("产品双轮 Return 使用受控阶段按钮且返工状态不标红", () 
   assert.doesNotMatch(cssSource, /rework[^}]*var\(--negative\)/s);
 });
 
-test("真实 Agent 对话提示仅在安全错误存在时使用错误色", () => {
+test("真实 Agent 对话按统一 attention 语义区分反馈橙色与错误红色", () => {
   const appSource = readFileSync(
     resolve("src/electron/renderer/App.tsx"),
     "utf8",
@@ -683,7 +683,7 @@ test("真实 Agent 对话提示仅在安全错误存在时使用错误色", () =
 
   assert.match(
     appSource,
-    /run\.safeError === undefined \? "" : " is-error"/,
+    /presentation\.attention === "error"[\s\S]*presentation\.attention === "feedback"/,
   );
   assert.match(
     styles,
@@ -693,6 +693,12 @@ test("真实 Agent 对话提示仅在安全错误存在时使用错误色", () =
     styles,
     /\.history-agent-detail\.is-error \{ color: var\(--negative\)/,
   );
+  assert.match(
+    styles,
+    /\.history-agent-detail\.is-feedback \{ color: var\(--warning\)/,
+  );
+  assert.match(styles, /data-attention="feedback"[^}]*var\(--warning\)/);
+  assert.match(styles, /data-attention="error"[^}]*var\(--negative\)/);
 });
 
 test("可恢复 Runtime 错误使用琥珀色而不是红色", () => {

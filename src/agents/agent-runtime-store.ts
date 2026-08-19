@@ -427,6 +427,19 @@ export class AgentRuntimeStore {
     return closed;
   }
 
+  closeTasks(taskIds: readonly string[], terminal: "cancelled" | "lost" = "cancelled"): AgentTask[] {
+    const selected = new Set(taskIds);
+    const closed: AgentTask[] = [];
+    for (const task of this.tasks.values()) {
+      if (!selected.has(task.id) ||
+        ["completed", "failed", "cancelled", "lost"].includes(task.status)) continue;
+      task.status = terminal;
+      task.updatedAt = this.now();
+      closed.push(copy(task));
+    }
+    return closed;
+  }
+
   exportSnapshot(): AgentRuntimeSnapshot {
     return { version: 1, sequence: this.sequence, jobs: this.listJobs(), tasks: [...this.tasks.values()].map(copy), edges: [...this.edges.values()].map(copy), evidence: [...this.evidence.values()].map(copy), board: [...this.board.values()].map(copy), returns: this.listReturns(), returnReceipts: [...this.returnReceipts], stageCheckpoints: this.listStageCheckpoints(), stageMetrics: this.listStageMetrics() };
   }
