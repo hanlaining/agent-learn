@@ -9,6 +9,10 @@ import { STAGE_RESULT_CONTRACT_VERSION } from "../../../src/execution/stage-cont
 
 const LEASE_TTL_MS = 120_000;
 
+interface FakeProviderRequestCounts {
+  return_god: number;
+}
+
 export interface ProcessChaosReport {
   seed: string;
   productionEntry: string;
@@ -36,6 +40,7 @@ export interface ProcessChaosReport {
     ownerLeaseId: string;
     ownerLeaseDeadline: string;
     providerRequests: number;
+    providerRequestsByStage: FakeProviderRequestCounts;
     finalJobStatus: string;
     finalReturnStatus: string;
   };
@@ -142,6 +147,8 @@ export async function runProcessChaosHarness(caseDirectory: string, seed: string
       throw new Error("Return fault point has no persisted owner Lease");
     }
     assert.ok(heldLease.ownerId.includes(String(reloadPid)));
+    const finalDeliveryRequestsBeforeKill = provider.requestCountsByStage().return_god;
+    assert.equal(finalDeliveryRequestsBeforeKill, 1);
     await forceKill(reloadPid);
     await assert.rejects(execution);
 
@@ -171,6 +178,8 @@ export async function runProcessChaosHarness(caseDirectory: string, seed: string
     assert.equal(finalRpc.returns.find((item) => item.id === returnEnvelope.id)?.status, "consumed");
     assert.equal(finalRawJob?.status, "completed");
     assert.equal(finalRawReturn?.status, "consumed");
+    const providerRequestsByStage = provider.requestCountsByStage();
+    assert.equal(providerRequestsByStage.return_god, 1);
 
     const report: ProcessChaosReport = {
       seed,
@@ -210,6 +219,7 @@ export async function runProcessChaosHarness(caseDirectory: string, seed: string
         ownerLeaseId: heldLease.ownerId!,
         ownerLeaseDeadline: heldLease.expiresAt,
         providerRequests: provider.requestCount,
+        providerRequestsByStage,
         finalJobStatus: finalRawJob!.status,
         finalReturnStatus: finalRawReturn!.status,
       },
@@ -225,7 +235,9 @@ export async function runProcessChaosHarness(caseDirectory: string, seed: string
 class FakeResponsesServer {
   readonly baseUrl: string;
   requestCount = 0;
-  private finalDeliveryRequests = 0;
+  private readonly stageRequestCounts: FakeProviderRequestCounts = {
+    return_god: 0,
+  };
   private finalDeliveryResolve: (() => void) | undefined;
   private readonly finalDelivery = new Promise<void>((resolve) => { this.finalDeliveryResolve = resolve; });
 
@@ -250,7 +262,11 @@ class FakeResponsesServer {
   }
 
   waitForFinalDeliveryRequest(): Promise<void> {
-    return withTimeout(this.finalDelivery, 30_000, "final delivery provider request");
+    return withProcessChaosTimeout(this.finalDelivery, 30_000, "final delivery provider request");
+  }
+
+  requestCountsByStage(): FakeProviderRequestCounts {
+    return { ...this.stageRequestCounts };
   }
 
   close(): Promise<void> {
@@ -292,9 +308,9 @@ class FakeResponsesServer {
       return;
     }
     if (instructions.includes("Workflow 的唯一最终交付者")) {
-      this.finalDeliveryRequests += 1;
+      this.stageRequestCounts.return_god += 1;
       this.finalDeliveryResolve?.();
-      const wideningPayload = this.finalDeliveryRequests === 1 ? "x".repeat(2_000_000) : "";
+      const wideningPayload = this.stageRequestCounts.return_god === 1 ? "x".repeat(2_000_000) : "";
       respondJson(response, textResponse(requestId, `Final delivery recovered for ${this.seed}.${wideningPayload}`));
       return;
     }
@@ -420,9 +436,16 @@ function delay(milliseconds: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
 
-function withTimeout<T>(promise: Promise<T>, milliseconds: number, label: string): Promise<T> {
-  return Promise.race([
-    promise,
-    new Promise<T>((_, reject) => setTimeout(() => reject(new Error(`Timed out waiting for ${label}`)), milliseconds)),
-  ]);
+export async function withProcessChaosTimeout<T>(promise: Promise<T>, milliseconds: number, label: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<T>((_, reject) => {
+        timer = setTimeout(() => reject(new Error(`Timed out waiting for ${label}`)), milliseconds);
+      }),
+    ]);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
 }
