@@ -83,6 +83,35 @@ test("V2 normal team chain skips forced Product rework and completes in five mod
   assert.equal(setup.runs.listForJob(setup.jobId).some((item) => ["queued", "running", "waiting_children", "resuming"].includes(item.status)), false);
 });
 
+test("TeamWorkflow start provisions and drives the durable workflow without manual stage advance", async () => {
+  const setup = createTeamHarness(() => validResult("ok"));
+  let provisions = 0;
+  const engine = new TeamWorkflowExecutionEngine(setup.runtime, setup.coordinator, () => {
+    provisions += 1;
+  });
+  const job = setup.runtime.getJob(setup.jobId)!;
+
+  await engine.start({
+    jobId: job.id,
+    threadId: job.threadId,
+    rootRunId: job.rootRunId,
+    executionKind: job.executionKind,
+    workflowVersion: job.workflowVersion,
+  });
+  await engine.start({
+    jobId: job.id,
+    threadId: job.threadId,
+    rootRunId: job.rootRunId,
+    executionKind: job.executionKind,
+    workflowVersion: job.workflowVersion,
+  });
+
+  assert.equal(provisions, 2);
+  assert.equal(setup.runtime.getJob(setup.jobId)?.status, "completed");
+  assert.equal(setup.calls.length, 5);
+  assert.equal(setup.calls.filter((item) => item.profileId === "orchestrator").length, 1);
+});
+
 test("Invalid JSON and failed format repair do not pollute Evidence, Board or Return and remain locally retryable", async () => {
   const setup = createTeamHarness(() => "not-json");
   await assert.rejects(setup.coordinator.advance(setup.jobId, "ready_first_return"), /one tools=\[\] repair/);

@@ -33,6 +33,16 @@ import type { AgentRunResult } from "../src/agents/agent-run.js";
 import type { PersistedThreadConfig } from "../src/runtime/json-file-runtime-persistence.js";
 import { DEFAULT_AGENT_TEAM_CONFIG } from "../src/agents/agent-runtime.js";
 import { AgentRegistry } from "../src/agents/agent-registry.js";
+import { AgentRunStore } from "../src/agents/agent-run-store.js";
+import { AgentRuntimeStore } from "../src/agents/agent-runtime-store.js";
+import { RequirementStore } from "../src/requirements/requirement-store.js";
+import { ExecutionEngineRouter } from "../src/execution/execution-engine-router.js";
+import { DynamicAgentExecutionEngine } from "../src/execution/dynamic-agent-execution-engine.js";
+import { TeamWorkflowExecutionEngine } from "../src/execution/team-workflow-execution-engine.js";
+import { WorkflowTeamCoordinator } from "../src/execution/workflow-team-coordinator.js";
+import { SOFTWARE_PRODUCT_DELIVERY_TEMPLATE } from "../src/execution/workflows/software-product-delivery.js";
+import { ensureFixedSoftwareTeam } from "../src/agents/fixed-software-team.js";
+import { STAGE_RESULT_CONTRACT_VERSION } from "../src/execution/stage-contract.js";
 import {
   isThreadHistoryResult,
 } from "../src/runtime/thread-history.js";
@@ -45,6 +55,7 @@ import { OutcomeUnknownResolutionService } from "../src/runtime/outcome-unknown-
 import type { OutcomeUnknownActor } from "../src/runtime/outcome-unknown-resolution.js";
 
 function createTestAppServer(options: {
+  lifecycleStore?: LifecycleStore;
   saveState?: () => void | Promise<void>;
   agentLoop?: Pick<AgentLoop, "run" | "cancel">;
   runtimeCapabilities?: RuntimeCapabilities;
@@ -58,6 +69,10 @@ function createTestAppServer(options: {
   skillNames?: string[];
   outcomeUnknownResolutionService?: OutcomeUnknownResolutionService;
   resolveOutcomeUnknownActor?: () => OutcomeUnknownActor | undefined;
+  agentRunStore?: AgentRunStore;
+  agentRuntimeStore?: AgentRuntimeStore;
+  requirementStore?: RequirementStore;
+  executionEngineRouter?: ExecutionEngineRouter;
 } = {}) {
   const clientToServer: string[] = [];
   const serverToClient: string[] = [];
@@ -76,7 +91,7 @@ function createTestAppServer(options: {
     item: 0,
   };
 
-  const store = new LifecycleStore({
+  const store = options.lifecycleStore ?? new LifecycleStore({
     now: () => "2026-08-01T09:00:00.000Z",
     createId: (prefix) => {
       idSequence[prefix] += 1;
@@ -112,6 +127,10 @@ function createTestAppServer(options: {
     ...(options.resolveOutcomeUnknownActor === undefined
       ? {}
       : { resolveOutcomeUnknownActor: options.resolveOutcomeUnknownActor }),
+    ...(options.agentRunStore === undefined ? {} : { agentRunStore: options.agentRunStore }),
+    ...(options.agentRuntimeStore === undefined ? {} : { agentRuntimeStore: options.agentRuntimeStore }),
+    ...(options.requirementStore === undefined ? {} : { requirementStore: options.requirementStore }),
+    ...(options.executionEngineRouter === undefined ? {} : { executionEngineRouter: options.executionEngineRouter }),
   });
 
   // 测试中手动搬运 JSONL，模拟真实的 Client ↔ App Server 双向通道。
@@ -375,6 +394,282 @@ test("开启子 Agent 但需求未确认时不会开放执行工具", async () =
 
   assert.match(parentInstructions, /确认前不得执行命令/);
   assert.match(parentInstructions, /prepare_requirement_plan/);
+});
+
+test("真实 turn\/run 从 child blocked 返回父级引导，同 Job 吸收用户反馈后恢复且只交付一次", async () => {
+  const lifecycle = new LifecycleStore();
+  const runs = new AgentRunStore();
+  const runtime = new AgentRuntimeStore();
+  const requirements = new RequirementStore();
+  const stageProfiles: string[] = [];
+  const stagePrompts: string[] = [];
+  const rootStates: string[] = [];
+  let productCalls = 0;
+  let engineeringCalls = 0;
+  let rootAgentCalls = 0;
+
+  const finalRootAgent: Pick<AgentLoop, "run" | "cancel"> = {
+    cancel: () => false,
+    run: async (turnId) => {
+      rootAgentCalls += 1;
+      const before = lifecycle.getTurn(turnId);
+      assert.ok(before);
+      const assistantMessage = lifecycle.appendItem(turnId, "assistant_message", {
+        text: "团队已完成且只交付一次",
+      });
+      const turn = lifecycle.completeTurn(turnId);
+      return { turn, assistantMessage };
+    },
+  };
+  const coordinator = new WorkflowTeamCoordinator({
+    runStore: runs,
+    runtimeStore: runtime,
+    template: SOFTWARE_PRODUCT_DELIVERY_TEMPLATE,
+    requirement: () => ({
+      objective: "修复父 Agent 监督主链",
+      scope: ["src/**"],
+      nonGoals: ["不改 UI"],
+      deliverables: ["code"],
+      acceptanceCriteria: ["tests pass"],
+      prompt: "confirmed requirement",
+    }),
+    feedback: (jobId) => {
+      const job = runtime.getJob(jobId);
+      const item = job === undefined ? undefined : lifecycle.getItemsForTurn(job.rootTurnId)
+        .filter((candidate) => candidate.type === "user_message")
+        .at(-1);
+      const text = typeof item?.content === "object" && item.content !== null &&
+        "text" in item.content && typeof item.content.text === "string"
+        ? item.content.text
+        : undefined;
+      return job === undefined || text === undefined ? undefined : { turnId: job.rootTurnId, text };
+    },
+    execute: async (input) => {
+      stageProfiles.push(input.profileId);
+      stagePrompts.push(input.prompt);
+      const job = runtime.getJob(input.jobId);
+      assert.ok(job);
+      rootStates.push(runs.get(job.rootRunId)?.status ?? "missing");
+      if (input.profileId === "orchestrator") {
+        const delivered = await finalRootAgent.run(job.rootTurnId);
+        return { turnId: delivered.turn.id, summary: (delivered.assistantMessage.content as { text: string }).text };
+      }
+      if (input.profileId === "product_role") productCalls += 1;
+      const blocked = input.profileId === "engineering_role" && ++engineeringCalls === 1;
+      return {
+        turnId: `stage-turn-${stageProfiles.length}`,
+        summary: JSON.stringify({
+          status: blocked ? "blocked" : "completed",
+          summary: blocked ? "需要用户确认 API 兼容范围" : `${input.profileId} complete`,
+          deliverables: blocked ? [] : ["artifact"],
+          evidence: [blocked ? "missing API compatibility choice" : "verified"],
+          blockers: blocked ? ["API compatibility choice is required"] : [],
+          nextStageRecommendation: blocked ? "block" : "continue",
+          contractVersion: STAGE_RESULT_CONTRACT_VERSION,
+        }),
+      };
+    },
+  });
+  const router = new ExecutionEngineRouter([
+    new DynamicAgentExecutionEngine(runtime),
+    new TeamWorkflowExecutionEngine(runtime, coordinator, (context) => {
+      const root = runs.get(context.rootRunId);
+      assert.ok(root);
+      ensureFixedSoftwareTeam(lifecycle, runs, root);
+    }),
+  ]);
+  const app = createTestAppServer({
+    lifecycleStore: lifecycle,
+    agentLoop: finalRootAgent,
+    agentRegistry: new AgentRegistry(),
+    agentRunStore: runs,
+    agentRuntimeStore: runtime,
+    requirementStore: requirements,
+    executionEngineRouter: router,
+  });
+
+  await completeHandshake(app);
+  const threadRequest = app.client.sendRequest("thread/start");
+  await app.flushClientRequest();
+  const thread = await threadRequest as { id: string };
+  const planned = requirements.prepare(thread.id, {
+    executionKind: "software_product_delivery",
+    title: "P0 Parent Supervisor",
+    objective: "修复父 Agent 监督主链",
+    scope: ["src/**"],
+    nonGoals: ["不改 UI"],
+    constraints: ["单一控制面"],
+    deliverables: ["code"],
+    acceptanceCriteria: ["tests pass"],
+    testCases: [{ id: "TC-P0", title: "真实入口", kind: "integration", steps: ["turn/run"], expected: "自动收口" }],
+    executionSteps: ["产品", "工程", "测试", "负责人", "交付"],
+  }, { path: "D:/plans/p0.md", contentHash: "p0-hash", generatedAt: "2026-08-19T00:00:00.000Z" });
+  requirements.confirm(planned.id, planned.revision, planned.planArtifact.contentHash);
+
+  const turnRequest = app.client.sendRequest("turn/start", { threadId: thread.id, input: "确认执行" });
+  await app.flushClientRequest();
+  const started = await turnRequest as { turn: { id: string } };
+  const runRequest = app.client.sendRequest("turn/run", { turnId: started.turn.id });
+  await app.flushClientRequest();
+  const paused = await runRequest as { assistantMessage: { content: { text: string } } };
+
+  const pausedJob = runtime.getJobByRequirement(planned.id, planned.revision);
+  assert.ok(pausedJob);
+  assert.match(paused.assistantMessage.content.text, /需要你补充信息/);
+  assert.equal(runtime.getJob(pausedJob.id)?.status, "reviewing");
+  assert.equal(requirements.get(planned.id)?.executionState, "executing");
+  assert.equal(runs.get(pausedJob.rootRunId)?.status, "waiting_children");
+  assert.equal(runs.listForJob(pausedJob.id).find((item) => item.agentProfileId === "software_team_lead")?.status, "waiting_children");
+  assert.equal(runs.listForJob(pausedJob.id).some((item) => item.status === "failed"), false);
+  assert.deepEqual(stageProfiles, ["product_role", "engineering_role"]);
+  assert.equal(rootAgentCalls, 0);
+  assert.equal(runtime.listJobs().length, 1);
+  assert.equal(runs.listForJob(pausedJob.id).length, 5);
+
+  const feedbackText = "补充反馈：保留 v1 API 兼容，新能力放到 v2";
+  const feedbackTurnRequest = app.client.sendRequest("turn/start", { threadId: thread.id, input: feedbackText });
+  await app.flushClientRequest();
+  const feedbackTurn = await feedbackTurnRequest as { turn: { id: string } };
+  const resumeRequest = app.client.sendRequest("turn/run", { turnId: feedbackTurn.turn.id });
+  await app.flushClientRequest();
+  const result = await resumeRequest as { turn: { id: string }; assistantMessage: { content: { text: string } } };
+
+  const completedJob = runtime.getJobByRequirement(planned.id, planned.revision);
+  assert.ok(completedJob);
+  assert.equal(completedJob.id, pausedJob.id);
+  assert.equal(completedJob.rootTurnId, feedbackTurn.turn.id);
+  assert.equal(result.turn.id, feedbackTurn.turn.id);
+  assert.equal(result.assistantMessage.content.text, "团队已完成且只交付一次");
+  assert.deepEqual(stageProfiles, ["product_role", "engineering_role", "engineering_role", "quality_role", "software_team_lead", "orchestrator"]);
+  assert.match(stagePrompts[2] ?? "", /保留 v1 API 兼容/);
+  assert.equal(productCalls, 1);
+  assert.equal(engineeringCalls, 2);
+  assert.equal(rootAgentCalls, 1);
+  assert.equal(rootStates.every((state) => state === "waiting_children"), true);
+  assert.equal(runtime.listJobs().length, 1);
+  assert.equal(runs.listForJob(completedJob.id).length, 5);
+  assert.equal(runtime.getJob(completedJob.id)?.status, "completed");
+  assert.equal(runs.get(completedJob.rootRunId)?.status, "completed");
+  assert.equal(requirements.get(planned.id)?.executionState, "completed");
+});
+
+test("运行中的 Team Workflow 拒绝第二 Turn 且不重绑或复制原 Job 与五角色团队", async () => {
+  const lifecycle = new LifecycleStore();
+  const runs = new AgentRunStore();
+  const runtime = new AgentRuntimeStore();
+  const requirements = new RequirementStore();
+  let rootAgentCalls = 0;
+  const coordinator = new WorkflowTeamCoordinator({
+    runStore: runs,
+    runtimeStore: runtime,
+    template: SOFTWARE_PRODUCT_DELIVERY_TEMPLATE,
+    requirement: () => ({
+      objective: "保持运行中工作流边界",
+      scope: ["src/**"],
+      nonGoals: [],
+      deliverables: ["code"],
+      acceptanceCriteria: ["第二 Turn 不影响原工作流"],
+      prompt: "confirmed requirement",
+    }),
+    execute: async () => {
+      throw new Error("busy handler must not drive the existing workflow");
+    },
+  });
+  const router = new ExecutionEngineRouter([
+    new DynamicAgentExecutionEngine(runtime),
+    new TeamWorkflowExecutionEngine(runtime, coordinator, (context) => {
+      const root = runs.get(context.rootRunId);
+      assert.ok(root);
+      ensureFixedSoftwareTeam(lifecycle, runs, root);
+    }),
+  ]);
+  const app = createTestAppServer({
+    lifecycleStore: lifecycle,
+    agentLoop: {
+      cancel: () => false,
+      run: async () => {
+        rootAgentCalls += 1;
+        throw new Error("busy handler must not call the root Agent");
+      },
+    },
+    agentRegistry: new AgentRegistry(),
+    agentRunStore: runs,
+    agentRuntimeStore: runtime,
+    requirementStore: requirements,
+    executionEngineRouter: router,
+  });
+
+  await completeHandshake(app);
+  const threadRequest = app.client.sendRequest("thread/start");
+  await app.flushClientRequest();
+  const thread = await threadRequest as { id: string };
+  const planned = requirements.prepare(thread.id, {
+    executionKind: "software_product_delivery",
+    title: "P0 Active Workflow Boundary",
+    objective: "保持运行中工作流边界",
+    scope: ["src/**"],
+    nonGoals: [],
+    constraints: ["同一需求只允许一个活动 Job"],
+    deliverables: ["code"],
+    acceptanceCriteria: ["第二 Turn 不影响原工作流"],
+    testCases: [{ id: "TC-P0-BUSY", title: "并发第二 Turn", kind: "integration", steps: ["turn/run"], expected: "非破坏性拒绝" }],
+    executionSteps: ["产品", "工程", "测试", "负责人", "交付"],
+  }, { path: "D:/plans/active-workflow.md", contentHash: "active-workflow-hash", generatedAt: "2026-08-19T00:00:00.000Z" });
+  requirements.confirm(planned.id, planned.revision, planned.planArtifact.contentHash);
+
+  const originalTurnRequest = app.client.sendRequest("turn/start", { threadId: thread.id, input: "确认执行原工作流" });
+  await app.flushClientRequest();
+  const originalTurn = await originalTurnRequest as { turn: { id: string } };
+  const jobId = `job-${planned.id}-v${planned.revision}`;
+  const root = runs.ensureRoot(thread.id, originalTurn.turn.id, "orchestrator", jobId);
+  const job = runtime.createJob({
+    threadId: thread.id,
+    rootTurnId: originalTurn.turn.id,
+    rootRunId: root.id,
+    configSnapshot: DEFAULT_AGENT_TEAM_CONFIG,
+    executionKind: "software_product_delivery",
+    workflowVersion: "software_product_delivery_v2",
+    requirementId: planned.id,
+    requirementRevision: planned.revision,
+  });
+  runtime.setJobStatus(job.id, "running");
+  runs.setStatus(root.id, "waiting_children");
+  ensureFixedSoftwareTeam(lifecycle, runs, runs.get(root.id)!);
+  requirements.attachJob(planned.id, job.id);
+
+  const originalJob = runtime.getJob(job.id);
+  const originalRoot = runs.get(root.id);
+  const originalTeam = runs.listForJob(job.id);
+  const originalTurnFact = lifecycle.getTurn(originalTurn.turn.id);
+  assert.ok(originalJob);
+  assert.ok(originalRoot);
+  assert.equal(originalTeam.length, 5);
+
+  const secondTurnRequest = app.client.sendRequest("turn/start", { threadId: thread.id, input: "运行期间的第二条消息" });
+  await app.flushClientRequest();
+  const secondTurn = await secondTurnRequest as { turn: { id: string } };
+  const secondRunRequest = app.client.sendRequest("turn/run", { turnId: secondTurn.turn.id });
+  await app.flushClientRequest();
+  const result = await secondRunRequest as { turn: { id: string; status: string }; assistantMessage: { content: { text: string } } };
+
+  assert.equal(result.turn.id, secondTurn.turn.id);
+  assert.equal(result.turn.status, "completed");
+  assert.match(result.assistantMessage.content.text, /仍在执行/);
+  assert.match(result.assistantMessage.content.text, /未进入队列/);
+  assert.match(result.assistantMessage.content.text, /完成或暂停后再发送/);
+  assert.equal(rootAgentCalls, 0);
+  assert.equal(runtime.listJobs().length, 1);
+  assert.deepEqual(runtime.getJob(job.id), originalJob);
+  assert.deepEqual(runs.get(root.id), originalRoot);
+  assert.deepEqual(runs.listForJob(job.id), originalTeam);
+  assert.deepEqual(lifecycle.getTurn(originalTurn.turn.id), originalTurnFact);
+  assert.equal(runtime.getJob(job.id)?.rootTurnId, originalTurn.turn.id);
+  assert.equal(runtime.getJob(job.id)?.rootRunId, root.id);
+  assert.equal(runtime.getJob(job.id)?.status, "running");
+  assert.equal(runs.list().length, 5);
+  assert.equal(runs.listForJob(job.id).some((item) => item.status === "failed"), false);
+  assert.equal(requirements.get(planned.id)?.jobId, job.id);
+  assert.equal(requirements.get(planned.id)?.executionState, "executing");
 });
 
 type TestAppServer =
