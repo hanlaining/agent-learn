@@ -396,6 +396,42 @@ test("开启子 Agent 但需求未确认时不会开放执行工具", async () =
   assert.match(parentInstructions, /prepare_requirement_plan/);
 });
 
+test("Dynamic Engine 是确认执行后父 AgentLoop 的唯一驱动者", async () => {
+  const lifecycle = new LifecycleStore(); const runs = new AgentRunStore();
+  const runtime = new AgentRuntimeStore(); const requirements = new RequirementStore();
+  let rootCalls = 0;
+  const rootAgent = { cancel: () => false, run: async (turnId: string) => {
+    rootCalls += 1;
+    const assistantMessage = lifecycle.appendItem(turnId, "assistant_message", { text: "dynamic delivered once" });
+    return { turn: lifecycle.completeTurn(turnId), assistantMessage };
+  } };
+  const router = new ExecutionEngineRouter([
+    new DynamicAgentExecutionEngine(runtime, { runStore: runs }),
+    new TeamWorkflowExecutionEngine(runtime, {} as never, () => undefined),
+  ]);
+  const app = createTestAppServer({ lifecycleStore: lifecycle, agentLoop: rootAgent,
+    agentRegistry: new AgentRegistry(), agentRunStore: runs, agentRuntimeStore: runtime,
+    requirementStore: requirements, executionEngineRouter: router });
+  await completeHandshake(app);
+  const threadRequest = app.client.sendRequest("thread/start"); await app.flushClientRequest();
+  const thread = await threadRequest as { id: string };
+  const planned = requirements.prepare(thread.id, { executionKind: "software_change", title: "dynamic owner",
+    objective: "prove single owner", scope: ["src/**"], nonGoals: [], constraints: [], deliverables: ["code"],
+    acceptanceCriteria: ["one call"], testCases: [{ id: "TC-DYNAMIC-OWNER", title: "single owner", kind: "integration", steps: ["turn/run"], expected: "one drive" }],
+    executionSteps: ["execute"] }, { path: "D:/plans/dynamic-owner.md", contentHash: "dynamic-owner-hash", generatedAt: "2026-08-19T00:00:00.000Z" });
+  requirements.confirm(planned.id, planned.revision, planned.planArtifact.contentHash);
+  const startRequest = app.client.sendRequest("turn/start", { threadId: thread.id, input: "确认执行" }); await app.flushClientRequest();
+  const started = await startRequest as { turn: { id: string } };
+  const runRequest = app.client.sendRequest("turn/run", { turnId: started.turn.id }); await app.flushClientRequest();
+  const delivered = await runRequest as { assistantMessage: { content: { text: string } } };
+  assert.equal(delivered.assistantMessage.content.text, "dynamic delivered once");
+  assert.equal(rootCalls, 1);
+  const job = runtime.getJobByRequirement(planned.id, planned.revision);
+  assert.equal(job?.status, "completed");
+  assert.equal(runtime.getDynamicExecution(job!.id)?.recoveryAction, "terminate");
+  assert.equal(runs.listForJob(job!.id).length, 1);
+});
+
 test("真实 turn\/run 从 child blocked 返回父级引导，同 Job 吸收用户反馈后恢复且只交付一次", async () => {
   const lifecycle = new LifecycleStore();
   const runs = new AgentRunStore();

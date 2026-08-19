@@ -20,8 +20,8 @@ export class LegacyTeamExecutionEngineAdapter implements StageAdvancingExecution
   ) {}
 
   supports(kind: RequirementExecutionKind): boolean { return kind === "software_product_delivery"; }
-  async start(_context: ExecutionContext): Promise<void> {}
-  async resume(_jobId: string): Promise<void> {}
+  async start(_context: ExecutionContext): Promise<{}> { return {}; }
+  async resume(_jobId: string): Promise<{}> { return {}; }
   async cancel(jobId: string): Promise<void> { this.runtimeStore.cancelJob(jobId); }
   async recover(_jobId: string): Promise<void> { this.coordinator.recoverPersistedCheckpoints(); }
   advance(jobId: string, expectedStage: FixedProductStage): Promise<{ stage: FixedProductStage; changed: boolean }> {

@@ -5,6 +5,7 @@ import type { RequirementExecutionKind } from "../requirements/requirement.js";
 import type { ExecutionContext } from "./execution-context.js";
 import type { ExecutionEngineSnapshot } from "./execution-engine.js";
 import type { ExecutionFeedback } from "./execution-engine.js";
+import type { ExecutionEngineResult } from "./execution-engine.js";
 import type { StageAdvancingExecutionEngine } from "./execution-engine-router.js";
 
 export class TeamWorkflowExecutionEngine implements StageAdvancingExecutionEngine {
@@ -26,12 +27,13 @@ export class TeamWorkflowExecutionEngine implements StageAdvancingExecutionEngin
   provideFeedback(jobId: string, feedback: ExecutionFeedback): Promise<boolean> {
     return this.coordinator.provideFeedback(jobId, feedback);
   }
-  async start(context: ExecutionContext): Promise<void> {
+  async start(context: ExecutionContext): Promise<ExecutionEngineResult> {
     this.provision(context);
-    await this.resume(context.jobId);
+    return this.resume(context.jobId);
   }
-  async resume(jobId: string): Promise<void> {
+  async resume(jobId: string): Promise<ExecutionEngineResult> {
     await this.runDrive(jobId, true);
+    return {};
   }
   async cancel(jobId: string): Promise<void> { this.runtimeStore.cancelJob(jobId); }
   async recover(jobId: string): Promise<void> {

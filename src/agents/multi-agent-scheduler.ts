@@ -7,8 +7,10 @@ import { DEFAULT_AGENT_TEAM_CONFIG, type AgentTeamConfig } from "./agent-runtime
 
 export interface ChildAgentRequest {
   parentTurnId: string; profileId: string; task: string;
+  taskId?: string;
   dependsOnTaskIds?: string[]; fileClaims?: string[];
   requiredOutputs?: string[]; acceptanceCriteria?: string[];
+  signal?: AbortSignal; deadlineAt?: string;
 }
 export interface ChildAgentExecution {
   threadId: string;
@@ -25,17 +27,24 @@ export interface MultiAgentSchedulerOptions {
   onRunUpdated?: (rootThreadId: string, parentTurnId: string, runId: string) => void;
   review?: (input: { taskId: string; jobId: string; workerRunId: string; summary: string }) => Promise<{ passed: boolean; summary: string; severity?: "P0" | "P1" | "P2" | "P3" }>;
   enableAutomaticReview?: boolean;
+  waitTimeoutMs?: number;
+}
+
+interface CapacityWaiter {
+  jobId: string; jobLimit: number;
+  resolve: () => void; reject: (error: Error) => void;
 }
 
 export class MultiAgentScheduler {
   private active = 0;
-  private readonly queue: Array<{ jobId: string; jobLimit: number; resolve: () => void }> = [];
+  private readonly queue: CapacityWaiter[] = [];
   private readonly childrenByParent = new Map<string, Set<string>>();
   private readonly activeTurnsByParent = new Map<string, Set<string>>();
   private readonly activeByJob = new Map<string, number>();
   private readonly lastServedJobs: string[] = [];
   private readonly runtimeStore: AgentRuntimeStore;
   private readonly legacyReceiptMode: boolean;
+  private readonly waitTimeoutMs: number;
   readonly maxConcurrentRuns: number;
   readonly maxDepth: number;
   readonly maxChildrenPerRun: number;
@@ -46,6 +55,7 @@ export class MultiAgentScheduler {
     this.maxChildrenPerRun = options.maxChildrenPerRun ?? 4;
     this.runtimeStore = options.runtimeStore ?? new AgentRuntimeStore();
     this.legacyReceiptMode = options.runtimeStore === undefined;
+    this.waitTimeoutMs = options.waitTimeoutMs ?? 120_000;
   }
 
   async runAgent(request: ChildAgentRequest): Promise<AgentRunResult> {
@@ -72,25 +82,43 @@ export class MultiAgentScheduler {
     let workerCompleted = false;
     let acquired = false;
     try {
-      const task = this.runtimeStore.createTask({ jobId: job.id, rootRunId: parent.rootRunId, ownerRunId: `pending:${parent.id}`,
+      const resumedTask = request.taskId === undefined ? undefined : this.runtimeStore.getTask(request.taskId);
+      if (request.taskId !== undefined && (resumedTask === undefined || resumedTask.jobId !== job.id || resumedTask.parentTaskId !== undefined)) {
+        throw new Error("Resumed Task is unavailable for this Job");
+      }
+      if (resumedTask !== undefined && (["completed", "cancelled"].includes(resumedTask.status) || resumedTask.attempt >= resumedTask.maxAttempts)) {
+        throw new Error("Resumed Task has no eligible attempt");
+      }
+      const attempt = resumedTask === undefined ? 1 : resumedTask.attempt + 1;
+      const task = resumedTask ?? this.runtimeStore.createTask({ jobId: job.id, rootRunId: parent.rootRunId, ownerRunId: `pending:${parent.id}`,
         profileId: profile.id, title: request.task.slice(0, 80), objective: request.task,
         scope: { allowedPaths: [], deniedPaths: [], nonGoals: [] }, requiredOutputs: request.requiredOutputs ?? ["结构化子任务结论"],
         acceptanceCriteria: request.acceptanceCriteria ?? ["子 Agent 返回可验证结果"], fileClaims: request.fileClaims ?? [], maxAttempts: 2, status: "draft" });
+      if (resumedTask !== undefined) this.runtimeStore.setTaskStatus(task.id, "draft");
       taskId = task.id;
-      const execution = this.options.prepare(profile, request.task, parent.id, task.id, 1);
+      const execution = this.options.prepare(profile, request.task, parent.id, task.id, attempt);
       const child = this.options.store.create({ jobId: job.id, threadId: execution.threadId, turnId: execution.turnId,
-        agentProfileId: profile.id, parentRunId: parent.id, task: request.task, depth: parent.depth + 1, attempt: 1 });
+        agentProfileId: profile.id, parentRunId: parent.id, task: request.task, depth: parent.depth + 1, attempt });
       childId = child.id; children.add(child.id); this.childrenByParent.set(parent.id, children);
-      this.runtimeStore.setTaskOwnerRun(task.id, child.id, 1);
+      this.runtimeStore.setTaskOwnerRun(task.id, child.id, attempt);
       this.options.store.setTaskId(child.id, task.id);
-      for (const dependencyId of request.dependsOnTaskIds ?? []) {
+      for (const dependencyId of resumedTask === undefined ? request.dependsOnTaskIds ?? [] : []) {
         this.runtimeStore.addEdge({ jobId: job.id, fromTaskId: dependencyId, toTaskId: task.id, type: "depends_on", hard: true });
       }
-      await this.waitUntilReady(job.id, task.id);
-      await this.acquire(job.id, config.maxConcurrent);
+      const deadlineAt = request.deadlineAt ?? new Date(Date.now() + this.waitTimeoutMs).toISOString();
+      const readyBeforeWait = this.runtimeStore.readyTasks(job.id).some((item) => item.id === task.id);
+      this.recordDynamic(job.id, readyBeforeWait ? "queued" : "waiting_dependencies", "explicit_model_resume",
+        readyBeforeWait ? "Child Task is durably queued" : "Child Task is waiting for durable dependency facts", [task.id], [], deadlineAt);
+      await this.options.persist?.();
+      await this.waitUntilReady(job.id, task.id, deadlineAt, request.signal);
+      await this.acquire(job.id, config.maxConcurrent, deadlineAt, request.signal);
       acquired = true;
       this.runtimeStore.claimTask(task.id, child.id, 30_000);
       this.runtimeStore.setTaskStatus(task.id, "running");
+      const runningTask = this.runtimeStore.getTask(task.id);
+      this.recordDynamic(job.id, "child_running", "manual_intervention",
+        "Child attempt is in flight and cannot be replayed without an outcome decision", [task.id], [], runningTask?.leaseExpiresAt);
+      await this.options.persist?.();
       const activeTurns = this.activeTurnsByParent.get(parent.id) ?? new Set<string>();
       activeTurns.add(execution.turnId);
       this.activeTurnsByParent.set(parent.id, activeTurns);
@@ -132,10 +160,12 @@ export class MultiAgentScheduler {
           summary: "当前 Job 未要求独立 Reviewer，Runtime 按验收合同关闭", producer: "reviewer", verdict: "passed" });
         this.runtimeStore.reviewTask(task.id);
       }
-      this.runtimeStore.createReturn({ jobId: job.id, rootRunId: parent.rootRunId, parentRunId: parent.id,
+      const envelope = this.runtimeStore.createReturn({ jobId: job.id, rootRunId: parent.rootRunId, parentRunId: parent.id,
         childRunId: deliveryRunId, taskId: task.id, sequence: parent.childRunIds.length,
         result: { status: "completed", summary: deliverySummary, evidenceIds: [...deliveryEvidenceIds, ...this.runtimeStore.listEvidence(task.id).filter((item) => item.kind === "review").map((item) => item.id)], boardEntryIds },
         idempotencyKey: `${job.id}:${deliveryRunId}` });
+      this.recordDynamic(job.id, "return_ready", "explicit_model_resume", "Durable child Return awaits parent continuation",
+        [task.id], [envelope.id]);
       this.notify(parentFact.threadId, request.parentTurnId, child.id);
       this.options.store.setStatus(parent.id, "resuming");
       this.notify(parentFact.threadId, request.parentTurnId, parent.id);
@@ -154,10 +184,12 @@ export class MultiAgentScheduler {
         const evidence = this.runtimeStore.addEvidence({ jobId: job.id, taskId, runId: childId,
           kind: "summary", summary: result.summary, producer: "runtime", verdict: "failed" });
         this.runtimeStore.setTaskStatus(taskId, "failed");
-        this.runtimeStore.createReturn({ jobId: job.id, rootRunId: parent.rootRunId, parentRunId: parent.id,
+        const envelope = this.runtimeStore.createReturn({ jobId: job.id, rootRunId: parent.rootRunId, parentRunId: parent.id,
           childRunId: childId, taskId, sequence: parent.childRunIds.length,
           result: { status: "failed", summary: result.summary, evidenceIds: [evidence.id], boardEntryIds: [] },
           idempotencyKey: `${job.id}:${childId}` });
+        this.recordDynamic(job.id, "return_ready", "explicit_model_resume", "Failed child feedback awaits parent decision",
+          [taskId], [envelope.id]);
       }
       await this.options.persist?.();
       if (this.legacyReceiptMode && childId !== undefined) this.options.store.receiveReturn(result);
@@ -195,9 +227,30 @@ export class MultiAgentScheduler {
     return cancelled;
   }
 
-  private async acquire(jobId: string, jobLimit: number): Promise<void> {
+  recoverJob(jobId: string): void {
+    this.rejectQueued(jobId, new Error("Scheduler queue was discarded during deterministic restart recovery"));
+    this.activeByJob.delete(jobId);
+    this.pump();
+  }
+
+  cancelJob(jobId: string): void {
+    this.rejectQueued(jobId, abortError("Scheduler wait cancelled"));
+  }
+
+  private async acquire(jobId: string, jobLimit: number, deadlineAt: string, signal?: AbortSignal): Promise<void> {
     if (this.hasCapacity(jobId, jobLimit)) { this.reserve(jobId); return; }
-    await new Promise<void>((resolve) => { this.queue.push({ jobId, jobLimit, resolve }); this.pump(); });
+    await new Promise<void>((resolve, reject) => {
+      if (signal?.aborted) { reject(abortError("Scheduler wait cancelled")); return; }
+      const remaining = Date.parse(deadlineAt) - Date.now();
+      if (remaining <= 0) { reject(new Error("Scheduler capacity deadline exceeded")); return; }
+      let waiter!: CapacityWaiter;
+      const onAbort = () => this.removeWaiter(waiter, abortError("Scheduler wait cancelled"));
+      const timer = setTimeout(() => this.removeWaiter(waiter, new Error("Scheduler capacity deadline exceeded")), remaining);
+      const cleanup = () => { clearTimeout(timer); signal?.removeEventListener("abort", onAbort); };
+      waiter = { jobId, jobLimit, resolve: () => { cleanup(); resolve(); }, reject: (error) => { cleanup(); reject(error); } };
+      signal?.addEventListener("abort", onAbort, { once: true });
+      this.queue.push(waiter); this.pump();
+    });
   }
   private release(jobId: string): void { this.active -= 1; this.activeByJob.set(jobId, Math.max(0, (this.activeByJob.get(jobId) ?? 1) - 1)); this.pump(); }
   private hasCapacity(jobId: string, jobLimit: number): boolean { return this.active < this.maxConcurrentRuns && (this.activeByJob.get(jobId) ?? 0) < jobLimit; }
@@ -212,12 +265,37 @@ export class MultiAgentScheduler {
       const previous = this.lastServedJobs.indexOf(waiter!.jobId); if (previous >= 0) this.lastServedJobs.splice(previous, 1); this.lastServedJobs.push(waiter!.jobId);
     }
   }
-  private async waitUntilReady(jobId: string, taskId: string): Promise<void> {
+  private async waitUntilReady(jobId: string, taskId: string, deadlineAt: string, signal?: AbortSignal): Promise<void> {
     while (!this.runtimeStore.readyTasks(jobId).some((item) => item.id === taskId)) {
       const task = this.runtimeStore.getTask(taskId);
       if (task === undefined || ["cancelled", "failed"].includes(task.status)) throw new Error("Task became unavailable while waiting for dependencies");
-      await new Promise((resolve) => setTimeout(resolve, 5));
+      await this.waitForRuntimeChange(deadlineAt, signal);
     }
+  }
+
+  private waitForRuntimeChange(deadlineAt: string, signal?: AbortSignal): Promise<void> {
+    return new Promise<void>((resolve, reject) => {
+      if (signal?.aborted) { reject(abortError("Dependency wait cancelled")); return; }
+      const remaining = Date.parse(deadlineAt) - Date.now();
+      if (remaining <= 0) { reject(new Error("Dependency wait deadline exceeded")); return; }
+      let unsubscribe: () => void = () => undefined;
+      const finish = (error?: Error) => { clearTimeout(timer); signal?.removeEventListener("abort", onAbort); unsubscribe(); error === undefined ? resolve() : reject(error); };
+      const onAbort = () => finish(abortError("Dependency wait cancelled"));
+      const timer = setTimeout(() => finish(new Error("Dependency wait deadline exceeded")), remaining);
+      unsubscribe = this.runtimeStore.onChange(() => finish());
+      signal?.addEventListener("abort", onAbort, { once: true });
+    });
+  }
+
+  private removeWaiter(waiter: CapacityWaiter, error: Error): void {
+    const index = this.queue.indexOf(waiter);
+    if (index < 0) return;
+    this.queue.splice(index, 1);
+    waiter.reject(error);
+  }
+
+  private rejectQueued(jobId: string, error: Error): void {
+    for (const waiter of [...this.queue]) if (waiter.jobId === jobId) this.removeWaiter(waiter, error);
   }
   private async runIndependentReviewer(jobId: string, parentRunId: string, workerRunId: string, workerTaskId: string,
     request: ChildAgentRequest, workerSummary: string, config: AgentTeamConfig): Promise<{ passed: boolean; summary: string; severity?: "P0" | "P1" | "P2" | "P3" }> {
@@ -296,6 +374,16 @@ export class MultiAgentScheduler {
   private countTaskRuns(jobId: string): number {
     return this.options.store.listForJob(jobId).filter((run) => run.taskId !== undefined).length;
   }
+
+  private recordDynamic(jobId: string,
+    phase: import("./agent-runtime.js").DynamicAgentExecutionPhase,
+    recoveryAction: import("./agent-runtime.js").DynamicAgentRecoveryAction,
+    reason: string, taskIds: string[], returnIds: string[], deadlineAt?: string): void {
+    const job = this.runtimeStore.getJob(jobId);
+    if (job?.workflowVersion !== "dynamic_v1") return;
+    this.runtimeStore.setDynamicExecution({ jobId, jobAttempt: job.attempt, phase, recoveryAction, reason,
+      taskIds, returnIds, ...(deadlineAt === undefined ? {} : { deadlineAt }) });
+  }
 }
 
 function parseReviewerVerdict(raw: string): { passed: boolean; summary: string; severity?: "P0" | "P1" | "P2" | "P3" } {
@@ -320,4 +408,10 @@ function parseReviewerVerdict(raw: string): { passed: boolean; summary: string; 
   }
   const severity = /\b(P[0-3])\b/i.exec(raw)?.[1]?.toUpperCase() as "P0" | "P1" | "P2" | "P3" | undefined;
   return { passed: severity === undefined && /^\s*PASS\b/i.test(raw), summary: raw.trim(), ...(severity === undefined ? {} : { severity }) };
+}
+
+function abortError(message: string): Error {
+  const error = new Error(message);
+  error.name = "AbortError";
+  return error;
 }
