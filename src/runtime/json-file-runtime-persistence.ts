@@ -288,17 +288,17 @@ export class JsonFileRuntimePersistence {
     const identity = this.requireStateIdentity(state);
     const snapshot: Omit<RuntimeStateSnapshot, "generation"> = {
       version: 7,
-      lifecycle: state.lifecycleStore.exportSnapshot(),
+      lifecycle: identity.lifecycleStore.exportSnapshot(),
       contextCheckpoints:
-        state.contextCheckpointStore.exportSnapshot(),
-      threadConfigs: structuredClone(state.threadConfigs),
-      agentProfiles: structuredClone(state.agentProfiles),
-      agentRuns: state.agentRunStore.exportSnapshot(),
-      agentRuntime: state.agentRuntimeStore.exportSnapshot(),
-      runtimeSessions: structuredClone(state.runtimeSessions),
-      requirements: state.requirementStore.exportSnapshot(),
-      modelInvocations: state.modelInvocationStore.exportSnapshot(),
-      toolInvocations: state.toolInvocationStore.exportSnapshot(),
+        identity.contextCheckpointStore.exportSnapshot(),
+      threadConfigs: structuredClone(identity.threadConfigs),
+      agentProfiles: structuredClone(identity.agentProfiles),
+      agentRuns: identity.agentRunStore.exportSnapshot(),
+      agentRuntime: identity.agentRuntimeStore.exportSnapshot(),
+      runtimeSessions: structuredClone(identity.runtimeSessions),
+      requirements: identity.requirementStore.exportSnapshot(),
+      modelInvocations: identity.modelInvocationStore.exportSnapshot(),
+      toolInvocations: identity.toolInvocationStore.exportSnapshot(),
     };
     const operation = this.saveQueue.then(() =>
       this.writeSnapshot(state, identity, snapshot),
@@ -316,7 +316,6 @@ export class JsonFileRuntimePersistence {
     snapshot: Omit<RuntimeStateSnapshot, "generation">,
   ): Promise<void> {
     await this.stateLock.withLock(async () => {
-      this.requireStateIdentity(state, identity);
       const expectedGeneration = identity.generation;
       const actualGeneration = await this.readDiskGeneration();
       if (actualGeneration !== expectedGeneration) {

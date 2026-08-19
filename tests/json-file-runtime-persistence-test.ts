@@ -183,6 +183,133 @@ test("同一状态身份的排队保存连续推进 generation", async (t) => {
   assert.equal(durable.lifecycleStore.exportSnapshot().threads.length, 2);
 });
 
+test("alternating AgentRuntime getter 不能在身份校验之间序列化旧 Job", async (t) => {
+  const fixture = await createFixture(t);
+  const seedPersistence = new JsonFileRuntimePersistence(fixture.statePath);
+  const seed = await seedPersistence.load();
+  const job = seed.agentRuntimeStore.createJob({
+    threadId: "thread-alternating-store",
+    rootTurnId: "turn-alternating-store",
+    rootRunId: "run-alternating-store",
+    configSnapshot: DEFAULT_AGENT_TEAM_CONFIG,
+  });
+  await seedPersistence.save(seed);
+
+  const persistence = new JsonFileRuntimePersistence(fixture.statePath);
+  const state = await persistence.load();
+  const staleState = await new JsonFileRuntimePersistence(fixture.statePath).load();
+  state.agentRuntimeStore.setJobStatus(job.id, "completed");
+  await persistence.save(state);
+
+  const authorizedStore = state.agentRuntimeStore;
+  let getterReads = 0;
+  Object.defineProperty(state, "agentRuntimeStore", {
+    configurable: true,
+    get() {
+      getterReads += 1;
+      return getterReads === 2
+        ? staleState.agentRuntimeStore
+        : authorizedStore;
+    },
+  });
+
+  await persistence.save(state);
+
+  const durable = await new JsonFileRuntimePersistence(fixture.statePath).load();
+  assert.equal(durable.generation, 3);
+  assert.equal(durable.agentRuntimeStore.getJob(job.id)?.status, "completed");
+  assert.equal(getterReads, 1, "save must capture each wrapper reference once");
+});
+
+test("所有快照字段共用稳定引用捕获，数组 getter 不能注入旧容器", async (t) => {
+  const fixture = await createFixture(t);
+  const persistence = new JsonFileRuntimePersistence(fixture.statePath);
+  const state = await persistence.load();
+  state.threadConfigs.push({
+    threadId: "thread-stable-array",
+    model: "test-model",
+    reasoningEffort: "medium",
+    agentProfileId: "profile-stable-array",
+  });
+  const authorizedConfigs = state.threadConfigs;
+  const staleConfigs: LoadedRuntimeState["threadConfigs"] = [];
+  let getterReads = 0;
+  Object.defineProperty(state, "threadConfigs", {
+    configurable: true,
+    get() {
+      getterReads += 1;
+      return getterReads === 2 ? staleConfigs : authorizedConfigs;
+    },
+  });
+
+  await persistence.save(state);
+
+  const durable = await new JsonFileRuntimePersistence(fixture.statePath).load();
+  assert.deepEqual(
+    durable.threadConfigs.map((config) => config.threadId),
+    ["thread-stable-array"],
+  );
+  assert.equal(getterReads, 1, "save must capture each wrapper reference once");
+});
+
+test("wrapper getter 或未授权 Proxy 抛错时不写快照", async (t) => {
+  const fixture = await createFixture(t);
+  const persistence = new JsonFileRuntimePersistence(fixture.statePath);
+  const state = await persistence.load();
+  state.lifecycleStore.createThread();
+  await persistence.save(state);
+  const durableBefore = await readFile(fixture.statePath, "utf8");
+
+  Object.defineProperty(state, "agentProfiles", {
+    configurable: true,
+    get() {
+      throw new Error("agentProfiles getter exploded");
+    },
+  });
+  await assert.rejects(
+    () => persistence.save(state),
+    /agentProfiles getter exploded/,
+  );
+  assert.equal(await readFile(fixture.statePath, "utf8"), durableBefore);
+
+  const proxy = new Proxy(state, {
+    get() {
+      throw new Error("proxy getter exploded");
+    },
+  });
+  await assert.rejects(
+    () => persistence.save(proxy),
+    SnapshotStateIdentityError,
+  );
+  assert.equal(await readFile(fixture.statePath, "utf8"), durableBefore);
+});
+
+test("普通 wrapper 的 Store 与数组原位更新仍可保存", async (t) => {
+  const fixture = await createFixture(t);
+  const persistence = new JsonFileRuntimePersistence(fixture.statePath);
+  const state = await persistence.load();
+  state.lifecycleStore.createThread();
+  state.agentProfiles.push({
+    id: "profile-in-place",
+    name: "In-place profile",
+    description: "Verify in-place profile persistence",
+    instructions: "Preserve container identity",
+    defaultModel: "test-model",
+    reasoningEffort: "medium",
+    allowedTools: ["*"],
+    allowedSkills: ["*"],
+  });
+
+  await persistence.save(state);
+
+  const durable = await new JsonFileRuntimePersistence(fixture.statePath).load();
+  assert.equal(durable.lifecycleStore.exportSnapshot().threads.length, 1);
+  assert.deepEqual(
+    durable.agentProfiles.map((profile) => profile.id),
+    ["profile-in-place"],
+  );
+});
+
 test("旧实例的非 Job 保存不能把磁盘上的 completed Job 覆盖回 planning", async (t) => {
   const fixture = await createFixture(t);
   const seedPersistence = new JsonFileRuntimePersistence(fixture.statePath);
