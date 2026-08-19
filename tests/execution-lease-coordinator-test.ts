@@ -216,6 +216,155 @@ test("independent async callers for the same Job join the active local Lease ses
   assert.equal(acquireCalls, 1);
 });
 
+test("concurrent first callers single-flight the persistent Job Lease acquisition", async (t) => {
+  const { statePath } = await fixture(t);
+  const acquireStarted = deferred();
+  const releaseAcquire = deferred();
+  let acquireCalls = 0;
+  const backing = new PersistentRuntimeLeaseStore(statePath);
+  const store: ExecutionLeaseStore = {
+    acquire: async (input) => {
+      acquireCalls += 1;
+      acquireStarted.resolve();
+      await releaseAcquire.promise;
+      return backing.acquire(input);
+    },
+    renew: (lease, ttlMs) => backing.renew(lease, ttlMs),
+    release: (lease) => backing.release(lease),
+    withFencedCommit: (lease, commit) => backing.withFencedCommit(lease, commit),
+  };
+  const coordinator = new ExecutionLeaseCoordinator(store, {
+    ownerId: "single-flight-owner", ttlMs: 1_000, renewIntervalMs: 500, maxRenewals: 0,
+  });
+  const contexts: unknown[] = [];
+  const first = coordinator.runWithJobLease("job-single-flight", async (context) => {
+    contexts.push(context);
+    return "first";
+  });
+  await acquireStarted.promise;
+  const second = coordinator.runWithJobLease("job-single-flight", async (context) => {
+    contexts.push(context);
+    return "second";
+  });
+  await Promise.resolve();
+
+  assert.equal(acquireCalls, 1, "the pending acquisition must be visible before Store.acquire resolves");
+  releaseAcquire.resolve();
+  const outcomes = await Promise.all([first, second]);
+
+  assert.deepEqual(outcomes.map((item) => item.status), ["acquired", "acquired"]);
+  assert.deepEqual(outcomes.map((item) => item.status === "acquired" ? item.value : undefined), ["first", "second"]);
+  assert.equal(contexts.length, 2);
+  assert.equal(contexts[0], contexts[1]);
+  assert.equal(acquireCalls, 1);
+});
+
+test("concurrent first callers share a diagnostic waiting result and leave no pending acquisition", async (t) => {
+  const { statePath } = await fixture(t);
+  const backing = new PersistentRuntimeLeaseStore(statePath);
+  const held = await backing.acquire({
+    resource: { type: "job", id: "job-single-flight-waiting" }, ownerId: "other-owner", ttlMs: 10_000,
+  });
+  const acquireStarted = deferred();
+  const releaseAcquire = deferred();
+  let acquireCalls = 0;
+  const store: ExecutionLeaseStore = {
+    acquire: async (input) => {
+      acquireCalls += 1;
+      acquireStarted.resolve();
+      await releaseAcquire.promise;
+      return backing.acquire(input);
+    },
+    renew: (lease, ttlMs) => backing.renew(lease, ttlMs),
+    release: (lease) => backing.release(lease),
+    withFencedCommit: (lease, commit) => backing.withFencedCommit(lease, commit),
+  };
+  const coordinator = new ExecutionLeaseCoordinator(store, {
+    ownerId: "waiting-owner", ttlMs: 1_000, renewIntervalMs: 500, maxRenewals: 0,
+  });
+  let operations = 0;
+  const run = () => coordinator.runWithJobLease("job-single-flight-waiting", async () => {
+    operations += 1;
+  });
+  const first = run();
+  await acquireStarted.promise;
+  const second = run();
+  await Promise.resolve();
+
+  assert.equal(acquireCalls, 1);
+  releaseAcquire.resolve();
+  const outcomes = await Promise.all([first, second]);
+
+  assert.equal(outcomes[0]?.status, "waiting");
+  assert.equal(outcomes[1]?.status, "waiting");
+  if (outcomes[0]?.status === "waiting" && outcomes[1]?.status === "waiting") {
+    assert.deepEqual(outcomes[0].currentLease, held);
+    assert.deepEqual(outcomes[1].currentLease, held);
+  }
+  assert.equal(operations, 0);
+  assert.equal(acquireCalls, 1);
+
+  await backing.release(held);
+  const retry = await coordinator.runWithJobLease("job-single-flight-waiting", async () => "retry-acquired");
+  assert.equal(retry.status, "acquired", "a waiting single-flight must not leak its pending entry");
+  if (retry.status === "acquired") assert.equal(retry.value, "retry-acquired");
+  assert.equal(acquireCalls, 2);
+});
+
+test("concurrent first callers share an acquisition failure and a later retry can acquire", async (t) => {
+  const { statePath } = await fixture(t);
+  const backing = new PersistentRuntimeLeaseStore(statePath);
+  const acquireStarted = deferred();
+  const releaseAcquire = deferred();
+  const diagnostic = new Error("lease backend unavailable: audit-e2");
+  let acquireCalls = 0;
+  let failAcquire = true;
+  const store: ExecutionLeaseStore = {
+    acquire: async (input) => {
+      acquireCalls += 1;
+      if (failAcquire) {
+        acquireStarted.resolve();
+        await releaseAcquire.promise;
+        throw diagnostic;
+      }
+      return backing.acquire(input);
+    },
+    renew: (lease, ttlMs) => backing.renew(lease, ttlMs),
+    release: (lease) => backing.release(lease),
+    withFencedCommit: (lease, commit) => backing.withFencedCommit(lease, commit),
+  };
+  const coordinator = new ExecutionLeaseCoordinator(store, {
+    ownerId: "failing-single-flight-owner", ttlMs: 1_000, renewIntervalMs: 500, maxRenewals: 0,
+  });
+  let operations = 0;
+  const capture = (promise: Promise<unknown>) => promise.then(
+    (value) => ({ ok: true as const, value }),
+    (error: unknown) => ({ ok: false as const, error }),
+  );
+  const run = () => capture(coordinator.withJob("job-single-flight-failure", async () => {
+    operations += 1;
+  }));
+  const first = run();
+  await acquireStarted.promise;
+  const second = run();
+  await Promise.resolve();
+
+  assert.equal(acquireCalls, 1);
+  releaseAcquire.resolve();
+  const outcomes = await Promise.all([first, second]);
+
+  assert.deepEqual(outcomes.map((item) => item.ok), [false, false]);
+  assert.equal(outcomes[0]?.ok === false ? outcomes[0].error : undefined, diagnostic);
+  assert.equal(outcomes[1]?.ok === false ? outcomes[1].error : undefined, diagnostic);
+  assert.equal(operations, 0);
+  assert.equal(acquireCalls, 1);
+
+  failAcquire = false;
+  await coordinator.withJob("job-single-flight-failure", async () => { operations += 1; });
+  assert.equal(operations, 1, "a failed single-flight must not leak its pending entry");
+  assert.equal(acquireCalls, 2);
+});
+
 test("required fenced commit rejects a silent commit without an active Lease", async (t) => {
   const { statePath } = await fixture(t);
   const coordinator = new ExecutionLeaseCoordinator(

@@ -73,6 +73,11 @@ interface ActiveExecutionLease {
   joinedOperations: Set<Promise<unknown>>;
 }
 
+type PendingJobAcquisitionResult =
+  | { status: "acquired"; session: ActiveExecutionLease }
+  | { status: "waiting"; currentLease?: RuntimeLease }
+  | { status: "failed"; error: unknown };
+
 const DEFAULT_TTL_MS = 120_000;
 
 /**
@@ -94,6 +99,7 @@ export class ExecutionLeaseCoordinator {
   private readonly releaseRetryDelayMs: (attempt: number) => number;
   private readonly active = new AsyncLocalStorage<ActiveExecutionLease>();
   private readonly localJobSessions = new Map<string, ActiveExecutionLease>();
+  private readonly pendingJobAcquisitions = new Map<string, Promise<PendingJobAcquisitionResult>>();
 
   constructor(
     private readonly store: ExecutionLeaseStore,
@@ -155,20 +161,53 @@ export class ExecutionLeaseCoordinator {
       return this.joinLocalSession(localSession, operation);
     }
 
-    const acquired = await this.acquireBounded(resource);
-    if (acquired.status === "waiting") return acquired;
-    const session: ActiveExecutionLease = {
-      lease: acquired.lease,
-      context: toContext(acquired.lease, this.ttlMs),
-      stopped: false,
-      acceptingJoins: true,
-      renewals: 0,
-      queue: Promise.resolve(),
-      joinedOperations: new Set(),
-    };
-    this.localJobSessions.set(jobId, session);
-    this.scheduleRenewal(session);
+    const pending = this.pendingJobAcquisitions.get(jobId);
+    if (pending !== undefined) return this.joinPendingAcquisition(pending, operation);
 
+    let resolvePending: (result: PendingJobAcquisitionResult) => void = () => undefined;
+    const pendingAcquisition = new Promise<PendingJobAcquisitionResult>((resolve) => {
+      resolvePending = resolve;
+    });
+    this.pendingJobAcquisitions.set(jobId, pendingAcquisition);
+    let acquisition: PendingJobAcquisitionResult;
+    try {
+      const acquired = await this.acquireBounded(resource);
+      if (acquired.status === "waiting") {
+        acquisition = acquired;
+      } else {
+        const session: ActiveExecutionLease = {
+          lease: acquired.lease,
+          context: toContext(acquired.lease, this.ttlMs),
+          stopped: false,
+          acceptingJoins: true,
+          renewals: 0,
+          queue: Promise.resolve(),
+          joinedOperations: new Set(),
+        };
+        this.localJobSessions.set(jobId, session);
+        this.scheduleRenewal(session);
+        acquisition = { status: "acquired", session };
+      }
+    } catch (error) {
+      acquisition = { status: "failed", error };
+    }
+    resolvePending(acquisition);
+    if (this.pendingJobAcquisitions.get(jobId) === pendingAcquisition) {
+      this.pendingJobAcquisitions.delete(jobId);
+    }
+    // Let every caller that observed the pending acquisition join before the
+    // owning operation can close an immediately-resolved local session.
+    await Promise.resolve();
+    if (acquisition.status === "waiting") return acquisition;
+    if (acquisition.status === "failed") throw acquisition.error;
+    return this.runSessionOwner(jobId, acquisition.session, operation);
+  }
+
+  private async runSessionOwner<T>(
+    jobId: string,
+    session: ActiveExecutionLease,
+    operation: (context: ExecutionLeaseContext) => Promise<T>,
+  ): Promise<ExecutionLeaseRunResult<T>> {
     let value: T | undefined;
     let operationFailed = false;
     let operationError: unknown;
@@ -186,6 +225,16 @@ export class ExecutionLeaseCoordinator {
     if (session.renewalFailure !== undefined) throw session.renewalFailure;
     if (cleanupError !== undefined) throw cleanupError;
     return { status: "acquired", context: session.context, value: value! };
+  }
+
+  private async joinPendingAcquisition<T>(
+    pending: Promise<PendingJobAcquisitionResult>,
+    operation: (context: ExecutionLeaseContext) => Promise<T>,
+  ): Promise<ExecutionLeaseRunResult<T>> {
+    const acquisition = await pending;
+    if (acquisition.status === "waiting") return acquisition;
+    if (acquisition.status === "failed") throw acquisition.error;
+    return this.joinLocalSession(acquisition.session, operation);
   }
 
   private async joinLocalSession<T>(

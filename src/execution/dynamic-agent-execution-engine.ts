@@ -131,6 +131,10 @@ export class DynamicAgentExecutionEngine implements ExecutionEngine {
       const driven = await context.drive({ kind: continuation ? "parent_continuation" : "root",
         ...(!continuation && !hasPersistedChildren ? {} : { guidance: this.buildParentGuidance(jobId) }) });
       await this.persist("model_commit");
+      // Cancellation is linearized by its fenced commit. A provider may still
+      // return successfully after Abort; that late result must not consume a
+      // Return or move the Job out of its already-published terminal state.
+      if (TERMINAL_JOB_STATUSES.has(this.requireDynamicJob(jobId).status)) return driven;
       for (const item of claimedReturns) {
         const current = this.runtimeStore.listReturns(jobId).find((candidate) => candidate.id === item.id);
         if (current?.status === "delivering") this.runtimeStore.consumeReturn(item.id);

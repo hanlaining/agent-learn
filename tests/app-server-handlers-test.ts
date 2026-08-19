@@ -172,7 +172,11 @@ async function drainServerResponses(app: TestAppServer): Promise<void> {
   }
 }
 
-async function createConcurrentDynamicApp(t: TestContext, suffix: string) {
+async function createConcurrentDynamicApp(
+  t: TestContext,
+  suffix: string,
+  options: { completeAfterCancel?: boolean } = {},
+) {
   const directory = await mkdtemp(join(tmpdir(), `handler-concurrent-${suffix}-`));
   t.after(() => rm(directory, { recursive: true, force: true }));
   const leaseStore = new PersistentRuntimeLeaseStore(join(directory, "leases.json"));
@@ -195,7 +199,7 @@ async function createConcurrentDynamicApp(t: TestContext, suffix: string) {
       assert.equal(executionLeases.currentContext()?.resource.id, runtime.getJobByTurn(turnId)?.id);
       driveStarted.resolve();
       await releaseDrive.promise;
-      if (cancelled) {
+      if (cancelled && options.completeAfterCancel !== true) {
         const error = new Error("cancelled by concurrent RPC");
         error.name = "AbortError";
         throw error;
@@ -673,6 +677,40 @@ test("运行中的 Dynamic drive 持 Lease 时并发 turn/cancel 复用本机 se
   assert.equal(runOutcome.ok, false, "the running model drive must observe Abort");
   const job = setup.runtime.getJobByRequirement(setup.planned.id, setup.planned.revision);
   assert.equal(job?.status, "cancelled");
+});
+
+test("turn/cancel 与不可中止的 Dynamic drive 同时完成时 cancelled 终态不可回退", async (t) => {
+  const setup = await createConcurrentDynamicApp(t, "cancel-linearized", { completeAfterCancel: true });
+  const runRequest = setup.app.client.sendRequest("turn/run", { turnId: setup.started.turn.id });
+  const runOutcomePromise = runRequest.then(
+    (value) => ({ ok: true as const, value }),
+    (error: unknown) => ({ ok: false as const, error }),
+  );
+  const runTransport = setup.app.server.receive(setup.app.clientToServer.shift()!);
+  await setup.driveStarted.promise;
+
+  const cancelRequest = setup.app.client.sendRequest("turn/cancel", { turnId: setup.started.turn.id });
+  const cancelOutcomePromise = cancelRequest.then(
+    (value) => ({ ok: true as const, value }),
+    (error: unknown) => ({ ok: false as const, error }),
+  );
+  const cancelTransport = setup.app.server.receive(setup.app.clientToServer.shift()!);
+  await cancelTransport;
+  await drainServerResponses(setup.app);
+  const cancelOutcome = await cancelOutcomePromise;
+  await runTransport;
+  await drainServerResponses(setup.app);
+  const runOutcome = await runOutcomePromise;
+
+  assert.deepEqual(cancelOutcome, {
+    ok: true,
+    value: { turnId: setup.started.turn.id, cancelled: true },
+  });
+  assert.equal(setup.cancelCalls(), 1);
+  assert.equal(runOutcome.ok, true, "the provider result may win the remote race after local cancellation");
+  const job = setup.runtime.getJobByRequirement(setup.planned.id, setup.planned.revision);
+  assert.equal(job?.status, "cancelled", "a completed drive must not overwrite a linearized cancellation");
+  assert.equal(setup.runtime.getDynamicExecution(job!.id)?.recoveryAction, "terminate");
 });
 
 test("运行中的 Dynamic drive 持 Lease 时并发 follow-up 在同一 session 返回 busy", async (t) => {
