@@ -3,6 +3,7 @@ import type {
   AgentRuntimeSnapshot, AgentTask, AgentTaskEdge, AgentTaskStatus,
   AgentTeamConfig, SharedBoardEntry,
   AgentStageCheckpoint,
+  DynamicAgentExecutionState,
 } from "./agent-runtime.js";
 import { normalizeAgentTeamConfig } from "./agent-runtime.js";
 import type { RuntimeStageMetric } from "../observability/runtime-metrics.js";
@@ -21,6 +22,8 @@ export class AgentRuntimeStore {
   private readonly returnReceipts = new Set<string>();
   private readonly stageCheckpoints = new Map<string, AgentStageCheckpoint>();
   private readonly stageMetrics = new Map<string, RuntimeStageMetric>();
+  private readonly dynamicExecutions = new Map<string, DynamicAgentExecutionState>();
+  private readonly changeListeners = new Set<() => void>();
 
   constructor(private readonly now: () => string = () => new Date().toISOString()) {}
 
@@ -59,6 +62,7 @@ export class AgentRuntimeStore {
     });
     value.stageCheckpoints?.forEach((item) => store.stageCheckpoints.set(item.idempotencyKey, structuredClone(item)));
     value.stageMetrics?.forEach((item) => store.recordStageMetric(item));
+    value.dynamicExecutions?.forEach((item) => store.dynamicExecutions.set(item.jobId, structuredClone(item)));
     store.validateReferences();
     return store;
   }
@@ -92,6 +96,7 @@ export class AgentRuntimeStore {
     const job = this.requireJob(id); job.status = status;
     if (["completed", "partial", "failed", "cancelled"].includes(status)) job.completedAt = this.now();
     else delete job.completedAt;
+    this.emitChange();
   }
   rebindJobTurn(id: string, rootTurnId: string): AgentJob {
     const job = this.requireJob(id);
@@ -182,6 +187,7 @@ export class AgentRuntimeStore {
       if (parent.jobId !== task.jobId) throw new Error("Cross-job parent task is forbidden");
     }
     this.tasks.set(task.id, task);
+    this.emitChange();
     return copy(task);
   }
 
@@ -196,7 +202,7 @@ export class AgentRuntimeStore {
     if (attempt !== undefined) task.attempt = attempt;
     task.updatedAt = this.now();
   }
-  setTaskStatus(id: string, status: AgentTaskStatus): void { const task = this.requireTask(id); task.status = status; task.updatedAt = this.now(); }
+  setTaskStatus(id: string, status: AgentTaskStatus): void { const task = this.requireTask(id); task.status = status; task.updatedAt = this.now(); this.emitChange(); }
 
   addEdge(input: Omit<AgentTaskEdge, "id" | "createdAt">): AgentTaskEdge {
     const from = this.requireTask(input.fromTaskId); const to = this.requireTask(input.toTaskId);
@@ -205,6 +211,7 @@ export class AgentRuntimeStore {
     this.edges.set(edge.id, edge);
     if (this.hasCycle(input.jobId)) { this.edges.delete(edge.id); throw new Error("Task dependency cycle detected"); }
     if (edge.hard && !to.dependencyIds.includes(from.id)) to.dependencyIds.push(from.id);
+    this.emitChange();
     return copy(edge);
   }
 
@@ -242,6 +249,7 @@ export class AgentRuntimeStore {
         task.status = "lost"; delete task.leaseOwner; delete task.leaseExpiresAt; task.updatedAt = this.now(); expired.push(copy(task));
       }
     }
+    if (expired.length > 0) this.emitChange();
     return expired;
   }
 
@@ -327,7 +335,7 @@ export class AgentRuntimeStore {
     const existing = [...this.returns.values()].find((item) => item.idempotencyKey === input.idempotencyKey);
     if (existing !== undefined) return copy(existing);
     const item: AgentReturnEnvelope = { ...structuredClone(input), id: this.id("return"), status: "ready", attempts: 0, createdAt: this.now() };
-    this.returns.set(item.id, item); return copy(item);
+    this.returns.set(item.id, item); this.emitChange(); return copy(item);
   }
   listReturns(jobId?: string): AgentReturnEnvelope[] { return [...this.returns.values()].filter((item) => jobId === undefined || item.jobId === jobId).sort((a, b) => a.sequence - b.sequence).map(copy); }
   claimReturn(id: string): AgentReturnEnvelope | undefined {
@@ -349,7 +357,28 @@ export class AgentRuntimeStore {
   consumeReturn(id: string): boolean {
     const item = this.requireReturn(id); if (this.returnReceipts.has(item.idempotencyKey)) return false;
     if (item.status !== "delivering") throw new Error("Return is not delivering");
-    item.status = "consumed"; item.consumedAt = this.now(); delete item.nextAttemptAt; this.returnReceipts.add(item.idempotencyKey); return true;
+    item.status = "consumed"; item.consumedAt = this.now(); delete item.nextAttemptAt; this.returnReceipts.add(item.idempotencyKey); this.emitChange(); return true;
+  }
+
+  getDynamicExecution(jobId: string): DynamicAgentExecutionState | undefined {
+    return clone(this.dynamicExecutions.get(jobId));
+  }
+
+  setDynamicExecution(input: Omit<DynamicAgentExecutionState, "generation" | "updatedAt">): DynamicAgentExecutionState {
+    const job = this.requireJob(input.jobId);
+    if (job.workflowVersion !== "dynamic_v1") throw new Error("Dynamic execution state requires a dynamic Job");
+    const previous = this.dynamicExecutions.get(input.jobId);
+    const value: DynamicAgentExecutionState = {
+      ...structuredClone(input), generation: (previous?.generation ?? 0) + 1, updatedAt: this.now(),
+    };
+    this.dynamicExecutions.set(input.jobId, value);
+    this.emitChange();
+    return copy(value);
+  }
+
+  onChange(listener: () => void): () => void {
+    this.changeListeners.add(listener);
+    return () => this.changeListeners.delete(listener);
   }
 
   beginStage(jobId: string, stageId: string, maxAttempts = 2, forceNewAttempt = false): AgentStageCheckpoint {
@@ -441,8 +470,10 @@ export class AgentRuntimeStore {
   }
 
   exportSnapshot(): AgentRuntimeSnapshot {
-    return { version: 1, sequence: this.sequence, jobs: this.listJobs(), tasks: [...this.tasks.values()].map(copy), edges: [...this.edges.values()].map(copy), evidence: [...this.evidence.values()].map(copy), board: [...this.board.values()].map(copy), returns: this.listReturns(), returnReceipts: [...this.returnReceipts], stageCheckpoints: this.listStageCheckpoints(), stageMetrics: this.listStageMetrics() };
+    return { version: 1, sequence: this.sequence, jobs: this.listJobs(), tasks: [...this.tasks.values()].map(copy), edges: [...this.edges.values()].map(copy), evidence: [...this.evidence.values()].map(copy), board: [...this.board.values()].map(copy), returns: this.listReturns(), returnReceipts: [...this.returnReceipts], stageCheckpoints: this.listStageCheckpoints(), stageMetrics: this.listStageMetrics(), dynamicExecutions: [...this.dynamicExecutions.values()].map(copy) };
   }
+
+  private emitChange(): void { for (const listener of this.changeListeners) listener(); }
 
   private reconcileSoftwareProductDeliveryJob(job: AgentJob): AgentJobStatus {
     const checkpoints = this.listStageCheckpoints(job.id).filter((item) => item.jobAttempt === job.attempt);

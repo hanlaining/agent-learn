@@ -13,6 +13,7 @@ export function createRunAgentTool(
         // 没有依赖或文件声明时，模型传空数组即可，调度语义保持不变。
         profileId: { type: "string", enum: ["investigator", "researcher", "coder", "tester", "reviewer"] },
         task: { type: "string", minLength: 1, maxLength: 8000 },
+        taskId: { type: ["string", "null"], description: "重试持久化 Task 时填写原 taskId；新任务填写 null" },
         dependsOnTaskIds: { type: "array", items: { type: "string" } },
         fileClaims: { type: "array", items: { type: "string" } },
       }),
@@ -31,6 +32,7 @@ export function createRunAgentTool(
         parentTurnId: turnId,
         profileId: value.profileId,
         task: value.task,
+        ...(typeof value.taskId === "string" ? { taskId: value.taskId } : {}),
         ...(isStringArray(value.dependsOnTaskIds) ? { dependsOnTaskIds: value.dependsOnTaskIds } : {}),
         ...(isStringArray(value.fileClaims) ? { fileClaims: value.fileClaims } : {}),
       });

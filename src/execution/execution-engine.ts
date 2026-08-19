@@ -7,6 +7,10 @@ export interface ExecutionEngineSnapshot {
   workflowVersion?: string;
   stage?: string;
   terminal?: boolean;
+  phase?: string;
+  recoveryAction?: string;
+  reason?: string;
+  deadlineAt?: string;
 }
 
 /**
@@ -16,7 +20,11 @@ export interface ExecutionEngineSnapshot {
  * versioned workflow drives every stage, including the exactly-once final
  * delivery, so the generic root AgentLoop must not run in parallel.
  */
-export type ExecutionControl = "turn_agent" | "workflow";
+export type ExecutionControl = "turn_agent" | "engine" | "workflow";
+
+export interface ExecutionEngineResult {
+  output?: unknown;
+}
 
 export interface ExecutionFeedback {
   turnId: string;
@@ -30,8 +38,8 @@ export interface ExecutionEngine {
   isActive?(jobId: string): boolean;
   validateStart?(allowedTools: string[]): void;
   provideFeedback?(jobId: string, feedback: ExecutionFeedback): Promise<boolean>;
-  start(context: ExecutionContext): Promise<void>;
-  resume(jobId: string): Promise<void>;
+  start(context: ExecutionContext): Promise<ExecutionEngineResult>;
+  resume(jobId: string): Promise<ExecutionEngineResult>;
   cancel(jobId: string): Promise<void>;
   recover(jobId: string): Promise<void>;
   snapshot(jobId: string): ExecutionEngineSnapshot;

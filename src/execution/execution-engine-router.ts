@@ -1,7 +1,7 @@
 import type { RequirementExecutionKind } from "../requirements/requirement.js";
 import type { FixedProductStage } from "../agents/fixed-software-team-coordinator.js";
 import type { ExecutionContext } from "./execution-context.js";
-import type { ExecutionEngine, ExecutionEngineSnapshot } from "./execution-engine.js";
+import type { ExecutionEngine, ExecutionEngineResult, ExecutionEngineSnapshot } from "./execution-engine.js";
 import type { ExecutionControl, ExecutionFeedback } from "./execution-engine.js";
 
 export interface StageAdvancingExecutionEngine extends ExecutionEngine {
@@ -19,7 +19,7 @@ export class ExecutionEngineRouter {
     return matches[0]!;
   }
 
-  start(context: ExecutionContext): Promise<void> { return this.route(context.executionKind).start(context); }
+  start(context: ExecutionContext): Promise<ExecutionEngineResult> { return this.route(context.executionKind).start(context); }
   control(kind: RequirementExecutionKind): ExecutionControl { return this.route(kind).control; }
   isActive(kind: RequirementExecutionKind, jobId: string): boolean {
     return this.route(kind).isActive?.(jobId) ?? false;
@@ -28,7 +28,7 @@ export class ExecutionEngineRouter {
     return this.route(kind).provideFeedback?.(jobId, feedback) ?? Promise.resolve(false);
   }
   validateStart(kind: RequirementExecutionKind, allowedTools: string[]): void { this.route(kind).validateStart?.(allowedTools); }
-  resume(kind: RequirementExecutionKind, jobId: string): Promise<void> { return this.route(kind).resume(jobId); }
+  resume(kind: RequirementExecutionKind, jobId: string): Promise<ExecutionEngineResult> { return this.route(kind).resume(jobId); }
   cancel(kind: RequirementExecutionKind, jobId: string): Promise<void> { return this.route(kind).cancel(jobId); }
   recover(kind: RequirementExecutionKind, jobId: string): Promise<void> { return this.route(kind).recover(jobId); }
   snapshot(kind: RequirementExecutionKind, jobId: string): ExecutionEngineSnapshot { return this.route(kind).snapshot(jobId); }

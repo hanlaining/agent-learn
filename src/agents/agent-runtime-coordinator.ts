@@ -38,6 +38,8 @@ export class AgentRuntimeCoordinator {
         const claimed = selected.map((item) => this.options.store.claimReturn(item.id)).filter((item) => item !== undefined);
         if (claimed.length === 0) throw new Error("Agent Return is not ready for delivery");
         this.options.store.setJobStatus(job.id, "resuming");
+        this.recordDynamicContinuation(job, claimed.map((item) => item.id), "parent_continuation",
+          "Parent continuation is in flight; restart requires an explicit outcome decision");
         await this.options.persist?.();
         try {
           const result = await continuation();
@@ -45,6 +47,8 @@ export class AgentRuntimeCoordinator {
           await this.options.persist?.();
           claimed.forEach((item) => this.options.store.consumeReturn(item.id));
           this.options.store.reconcileJobStatus(job.id);
+          this.recordDynamicContinuation(job, [], "parent_running",
+            "Parent continuation committed and the parent loop owns the next transition");
           await this.options.persist?.();
           return result;
         } catch (error) {
@@ -57,6 +61,8 @@ export class AgentRuntimeCoordinator {
             if (current?.status === "delivering") this.options.store.retryReturn(item.id, 0);
           }
           this.options.store.setJobStatus(job.id, "waiting_returns");
+          this.recordDynamicContinuation(job, claimed.map((item) => item.id), "manual_intervention",
+            "Parent continuation failed after Return claim; retry needs an explicit decision");
           await this.options.persist?.();
           if (attempt < this.maxAttempts) await delay(this.retryDelayMs(attempt));
         }
@@ -138,6 +144,14 @@ export class AgentRuntimeCoordinator {
     }
   }
 
+  private recordDynamicContinuation(job: AgentJob, returnIds: string[],
+    phase: "parent_continuation" | "parent_running" | "manual_intervention", reason: string): void {
+    if (job.workflowVersion !== "dynamic_v1") return;
+    this.options.store.setDynamicExecution({ jobId: job.id, jobAttempt: job.attempt, phase,
+      recoveryAction: "manual_intervention", reason,
+      taskIds: this.options.store.listTasks(job.id).filter((task) => task.jobAttempt === job.attempt).map((task) => task.id),
+      returnIds });
+  }
 }
 
 function delay(milliseconds: number): Promise<void> {

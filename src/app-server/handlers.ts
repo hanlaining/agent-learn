@@ -448,16 +448,20 @@ export function registerAppServerHandlers(
       agentRuntimeStore?.getJobByRequirement(requirement.id, requirement.revision);
     agentRegistry?.requireAll(jobTeamConfig.allowedProfiles);
     if (jobTeamConfig.independentReview) agentRegistry?.require("reviewer");
-    if (executionRequested) executionEngineRouter?.validateStart(executionKind, jobTeamConfig.allowedTools ?? ["*"]);
+    if (executionRequested) executionEngineRouter?.validateStart(executionKind,
+      existingRequirementJob?.configSnapshot.allowedTools ?? jobTeamConfig.allowedTools ?? ["*"]);
     const activeTeamJob = existingRequirementJob?.executionKind === "software_product_delivery" &&
       !["completed", "partial", "failed", "cancelled"].includes(existingRequirementJob.status);
-    const currentAttemptBlocked = activeTeamJob && agentRuntimeStore?.listTasks(existingRequirementJob.id)
+    const activeDynamicJob = existingRequirementJob !== undefined && existingRequirementJob.workflowVersion === "dynamic_v1" &&
+      !["completed", "partial", "failed", "cancelled"].includes(existingRequirementJob.status);
+    const activeManagedJob = activeTeamJob || activeDynamicJob;
+    const currentAttemptBlocked = activeManagedJob && agentRuntimeStore?.listTasks(existingRequirementJob.id)
       .some((item) => item.jobAttempt === existingRequirementJob.attempt && item.status === "blocked") === true;
-    const workflowDriveActive = activeTeamJob && executionEngineRouter?.isActive(
+    const workflowDriveActive = activeManagedJob && executionEngineRouter?.isActive(
       existingRequirementJob.executionKind, existingRequirementJob.id) === true;
-    const workflowFeedbackTurn = activeTeamJob && existingRequirementJob.status === "reviewing" &&
-      currentAttemptBlocked && existingRequirementJob.rootTurnId !== request.turnId && !workflowDriveActive;
-    const workflowBusyTurn = activeTeamJob && !workflowFeedbackTurn &&
+    const workflowFeedbackTurn = activeManagedJob && existingRequirementJob.rootTurnId !== request.turnId && !workflowDriveActive &&
+      (activeDynamicJob || (existingRequirementJob.status === "reviewing" && currentAttemptBlocked));
+    const workflowBusyTurn = activeManagedJob && !workflowFeedbackTurn &&
       (workflowDriveActive || existingRequirementJob.rootTurnId !== request.turnId);
     if (workflowBusyTurn) {
       const result = createWorkflowBusyResult(lifecycleStore, request.turnId);
@@ -465,7 +469,7 @@ export function registerAppServerHandlers(
       log(`[app-server] workflow busy; follow-up rejected while active Job continues: ${request.turnId}\n`);
       return result;
     }
-    const reuseTeamRoot = activeTeamJob &&
+    const reuseTeamRoot = activeManagedJob &&
       (workflowFeedbackTurn || existingRequirementJob.rootTurnId === request.turnId);
     const rootRun = turnFact === undefined || requirement === undefined || !executionRequested
       ? undefined
@@ -482,7 +486,7 @@ export function registerAppServerHandlers(
       job = agentRuntimeStore?.startJobAttempt(job.id, request.turnId, rootRun.rootRunId);
       if (job !== undefined) agentRunStore?.rebindAttempt(rootRun.id, request.turnId, job.attempt);
     }
-    if (job !== undefined && rootRun !== undefined && workflowFeedbackTurn) {
+    if (job !== undefined && rootRun !== undefined && workflowFeedbackTurn && job.executionKind === "software_product_delivery") {
       agentRuntimeStore?.rebindJobTurn(job.id, request.turnId);
       agentRunStore?.rebindAttempt(rootRun.id, request.turnId, job.attempt);
       job = agentRuntimeStore?.getJob(job.id);
@@ -491,16 +495,18 @@ export function registerAppServerHandlers(
     const executionControl = job === undefined || executionEngineRouter === undefined
       ? "turn_agent" as const
       : executionEngineRouter.control(job.executionKind);
+    const frozenJobTeamConfig = job?.configSnapshot ?? jobTeamConfig;
+    let engineResult: import("../execution/execution-engine.js").ExecutionEngineResult | undefined;
 
     try {
       if (job?.executionKind === "software_product_delivery" && executionEngineRouter === undefined) {
         throw new Error("Team Workflow engine is unavailable");
       }
-      if (rootRun !== undefined) {
+      if (rootRun !== undefined && executionControl !== "engine") {
         agentRunStore?.setStatus(rootRun.id,
           executionControl === "workflow" ? "waiting_children" : "running");
       }
-      if (job !== undefined) {
+      if (job !== undefined && executionControl !== "engine") {
         const awaitingFeedback = executionControl === "workflow" && !workflowFeedbackTurn &&
           agentRuntimeStore?.listTasks(job.id).some((item) => item.status === "blocked") === true;
         agentRuntimeStore?.setJobStatus(job.id, awaitingFeedback ? "reviewing" : "running");
@@ -512,13 +518,25 @@ export function registerAppServerHandlers(
             text: turnUserInput,
           });
         }
-        await executionEngineRouter.start({ jobId: job.id, threadId: job.threadId, rootRunId: rootRun.id,
-          executionKind: job.executionKind, workflowVersion: job.workflowVersion });
+        engineResult = await executionEngineRouter.start({ jobId: job.id, threadId: job.threadId, rootRunId: rootRun.id,
+          executionKind: job.executionKind, workflowVersion: job.workflowVersion,
+          ...(executionControl !== "engine" ? {} : { drive: async (driveRequest) => ({ output: await agentLoop.run(request.turnId, {
+            ...(request.model === undefined ? {} : { model: request.model }),
+            ...(request.reasoningEffort === undefined ? {} : { reasoningEffort: request.reasoningEffort }),
+            ...(profile === undefined ? {} : { instructions: `${buildParentAgentInstructions(
+              profile.instructions, frozenJobTeamConfig.mode, undefined, executionConfirmed, requirement,
+            )}${driveRequest.guidance === undefined ? "" : `\n\n${driveRequest.guidance}`}` }),
+            ...(profile === undefined ? {} : { allowedTools: applyRequirementGateToTools(applyAgentModeToTools(intersectCapabilities(profile.allowedTools, frozenJobTeamConfig.allowedTools), frozenJobTeamConfig.mode), executionConfirmed),
+              allowedSkills: intersectCapabilities(profile.allowedSkills, frozenJobTeamConfig.allowedSkills) }),
+          }) }) }),
+        });
       }
 
       const result: TurnRunResult = executionControl === "workflow"
         ? resolveWorkflowTurnResult(lifecycleStore, agentRuntimeStore, job?.id, request.turnId)
-        : await agentLoop.run(request.turnId, {
+        : executionControl === "engine"
+          ? requireTurnRunResult(engineResult?.output)
+          : await agentLoop.run(request.turnId, {
             ...(request.model === undefined ? {} : { model: request.model }),
             ...(request.reasoningEffort === undefined
               ? {}
@@ -546,7 +564,9 @@ export function registerAppServerHandlers(
         });
       }
       if (job !== undefined) {
-        const status = agentRuntimeStore?.reconcileJobStatus(job.id);
+        const status = executionControl === "engine"
+          ? agentRuntimeStore?.getJob(job.id)?.status
+          : agentRuntimeStore?.reconcileJobStatus(job.id);
         const requirementState = requirementExecutionStateForJobStatus(status);
         if (requirementState !== undefined && requirement !== undefined) {
           requirementStore?.setExecutionState(requirement.id, requirementState);
@@ -564,7 +584,7 @@ export function registerAppServerHandlers(
         : lifecycleStore.getTurn(request.turnId)?.status === "interrupted"
           ? "cancelled" as const
           : "failed" as const;
-      if (rootRun !== undefined) {
+      if (rootRun !== undefined && executionControl !== "engine") {
         agentRunStore?.complete(rootRun.id, {
           runId: rootRun.id,
           status: terminalStatus,
@@ -572,7 +592,7 @@ export function registerAppServerHandlers(
           safeError: "Agent 执行失败",
         });
       }
-      if (job !== undefined) {
+      if (job !== undefined && executionControl !== "engine") {
         agentRunStore?.closeActiveForJob(job.id,
           terminalStatus, "Job 已终结，未完成 Agent 已安全关闭", "父 Agent 未完成任务");
         agentRuntimeStore?.closeActiveTasks(job.id,
@@ -605,7 +625,7 @@ export function registerAppServerHandlers(
     }
   });
 
-  connection.onRequest("turn/cancel", (params) => {
+  connection.onRequest("turn/cancel", async (params) => {
     requireInitialized();
 
     if (agentLoop === undefined) {
@@ -613,6 +633,13 @@ export function registerAppServerHandlers(
     }
 
     const request = parseTurnCancelParams(params);
+
+    const ownedJob = agentRuntimeStore?.getJobByTurn(request.turnId);
+    if (ownedJob !== undefined && executionEngineRouter !== undefined &&
+      !["completed", "partial", "failed", "cancelled"].includes(ownedJob.status)) {
+      await executionEngineRouter.cancel(ownedJob.executionKind, ownedJob.id);
+      return { turnId: request.turnId, cancelled: true } satisfies TurnCancelResult;
+    }
 
     cancelChildAgentRuns(request.turnId);
 
@@ -820,6 +847,14 @@ function resolveWorkflowTurnResult(
   });
   const turn = lifecycleStore.completeTurn(turnId);
   return { turn, assistantMessage };
+}
+
+function requireTurnRunResult(value: unknown): TurnRunResult {
+  if (!isRecord(value) || !isRecord(value.turn) || typeof value.turn.id !== "string" ||
+    !isRecord(value.assistantMessage)) {
+    throw new Error("Dynamic Engine completed without a root-turn result");
+  }
+  return value as unknown as TurnRunResult;
 }
 
 function createWorkflowBusyResult(lifecycleStore: LifecycleStore, turnId: string): TurnRunResult {

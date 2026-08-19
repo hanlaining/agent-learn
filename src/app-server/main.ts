@@ -484,8 +484,16 @@ const workflowTeamCoordinator = agentLoop === undefined ? undefined : new Workfl
   },
   persist: persistWorkflowState,
 });
+const dynamicExecutionEngine = new DynamicAgentExecutionEngine(agentRuntimeStore, {
+  runStore: agentRunStore,
+  persist: () => persistRuntimeState(),
+  cancelTurn: (turnId) => agentLoop?.cancel(turnId) ?? false,
+  cancelScheduler: (jobId) => multiAgentScheduler?.cancelJob(jobId),
+  cancelChildren: (turnId) => multiAgentScheduler?.cancelChildren(turnId, (childTurnId) => agentLoop?.cancel(childTurnId) ?? false) ?? 0,
+  recoverScheduler: (jobId) => multiAgentScheduler?.recoverJob(jobId),
+});
 const executionEngineRouter = workflowTeamCoordinator === undefined ? undefined : new ExecutionEngineRouter([
-  new DynamicAgentExecutionEngine(agentRuntimeStore),
+  dynamicExecutionEngine,
   new TeamWorkflowExecutionEngine(agentRuntimeStore, workflowTeamCoordinator, (context) => {
     const job = agentRuntimeStore.getJob(context.jobId);
     if (job === undefined) throw new Error("Execution Job is unavailable");
@@ -701,10 +709,13 @@ if (interruptedRuntime.lostTasks.length > 0 || interruptedRuntime.pendingReturns
 
 if (executionEngineRouter !== undefined) {
   for (const job of agentRuntimeStore.listJobs().filter((item) =>
-    item.executionKind === "software_product_delivery" &&
-    item.workflowVersion === "software_product_delivery_v2" &&
     !["completed", "partial", "failed", "cancelled"].includes(item.status))) {
     await executionEngineRouter.recover(job.executionKind, job.id);
+  }
+} else {
+  for (const job of agentRuntimeStore.listJobs().filter((item) =>
+    item.workflowVersion === "dynamic_v1" && !["completed", "partial", "failed", "cancelled"].includes(item.status))) {
+    await dynamicExecutionEngine.recover(job.id);
   }
 }
 

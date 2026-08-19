@@ -65,6 +65,29 @@ export interface AgentJob {
   requirementRevision?: number;
 }
 
+export type DynamicAgentExecutionPhase =
+  | "queued" | "parent_running" | "waiting_dependencies" | "child_running"
+  | "return_ready" | "parent_continuation" | "waiting_user"
+  | "manual_intervention" | "terminal";
+
+export type DynamicAgentRecoveryAction =
+  | "zero_model_recovery" | "explicit_model_resume" | "wait_user"
+  | "manual_intervention" | "terminate";
+
+/** Durable engine control state; request callbacks and lease ownership stay outside this record. */
+export interface DynamicAgentExecutionState {
+  jobId: string;
+  jobAttempt: number;
+  phase: DynamicAgentExecutionPhase;
+  recoveryAction: DynamicAgentRecoveryAction;
+  reason: string;
+  deadlineAt?: string;
+  taskIds: string[];
+  returnIds: string[];
+  generation: number;
+  updatedAt: string;
+}
+
 export type AgentStageStatus =
   | "pending"
   | "running"
@@ -213,6 +236,7 @@ export interface AgentRuntimeSnapshot {
   returnReceipts: string[];
   stageCheckpoints?: AgentStageCheckpoint[];
   stageMetrics?: RuntimeStageMetric[];
+  dynamicExecutions?: DynamicAgentExecutionState[];
 }
 
 export function normalizeAgentTeamConfig(value: Partial<AgentTeamConfig> = {}): AgentTeamConfig {

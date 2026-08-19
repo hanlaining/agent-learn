@@ -5,6 +5,7 @@ import type { RequirementExecutionKind } from "../requirements/requirement.js";
 import type { ExecutionContext } from "./execution-context.js";
 import type { ExecutionEngineSnapshot } from "./execution-engine.js";
 import type { ExecutionFeedback } from "./execution-engine.js";
+import type { ExecutionEngineResult } from "./execution-engine.js";
 import type { StageAdvancingExecutionEngine } from "./execution-engine-router.js";
 import type { ExecutionLeaseCoordinator } from "../runtime/execution-lease-coordinator.js";
 
@@ -30,11 +31,13 @@ export class TeamWorkflowExecutionEngine implements StageAdvancingExecutionEngin
     return this.withExecutionLease(jobId, false, () =>
       this.coordinator.provideFeedback(jobId, feedback));
   }
-  async start(context: ExecutionContext): Promise<void> {
+  async start(context: ExecutionContext): Promise<ExecutionEngineResult> {
     await this.runDrive(context.jobId, true, context);
+    return {};
   }
-  async resume(jobId: string): Promise<void> {
+  async resume(jobId: string): Promise<ExecutionEngineResult> {
     await this.runDrive(jobId, true);
+    return {};
   }
   async cancel(jobId: string): Promise<void> {
     await this.withExecutionLease(jobId, undefined, async () => {
