@@ -48,6 +48,9 @@ export function ensureFixedSoftwareTeam(
     task: "组织软件产品演示团队并逐级验收 Return",
     depth: rootRun.depth + 1,
     attempt: 1,
+    coordinationStatus: "waiting_assignment",
+    attentionLevel: "neutral",
+    statusMessage: "等待 God 派发团队任务",
   });
 
   const roles = ROLE_CONTRACTS.map((contract) => {
@@ -62,6 +65,9 @@ export function ensureFixedSoftwareTeam(
       task: contract.task,
       depth: lead.depth + 1,
       attempt: 1,
+      coordinationStatus: "waiting_assignment",
+      attentionLevel: "neutral",
+      statusMessage: "等待负责人派发真实任务",
     });
   });
   return [lead, ...roles];

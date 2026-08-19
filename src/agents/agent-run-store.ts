@@ -1,4 +1,7 @@
-import type { AgentRun, AgentRunResult, AgentRunSnapshot, AgentRunStatus } from "./agent-run.js";
+import type {
+  AgentAttentionLevel, AgentCoordinationStatus, AgentFailureOrigin,
+  AgentRun, AgentRunResult, AgentRunSnapshot, AgentRunStatus,
+} from "./agent-run.js";
 
 export class AgentRunStore {
   private readonly runs = new Map<string, AgentRun>();
@@ -100,6 +103,22 @@ export class AgentRunStore {
   }
 
   setStatus(id: string, status: AgentRunStatus): void { this.require(id).status = status; }
+  setPresentation(id: string, input: {
+    coordinationStatus?: AgentCoordinationStatus;
+    attentionLevel?: AgentAttentionLevel;
+    statusMessage?: string;
+    failureOrigin?: AgentFailureOrigin;
+  }): void {
+    const run = this.require(id);
+    if (input.coordinationStatus === undefined) delete run.coordinationStatus;
+    else run.coordinationStatus = input.coordinationStatus;
+    if (input.attentionLevel === undefined) delete run.attentionLevel;
+    else run.attentionLevel = input.attentionLevel;
+    if (input.statusMessage === undefined) delete run.statusMessage;
+    else run.statusMessage = input.statusMessage;
+    if (input.failureOrigin === undefined) delete run.failureOrigin;
+    else run.failureOrigin = input.failureOrigin;
+  }
   setTaskId(id: string, taskId: string): void { this.require(id).taskId = taskId; }
   rebindAttempt(id: string, turnId: string, attempt: number): void {
     const run = this.require(id);
@@ -110,6 +129,7 @@ export class AgentRunStore {
   }
   complete(id: string, result: AgentRunResult): void {
     const run = this.require(id); run.status = result.status; run.result = structuredClone(result); run.completedAt = new Date().toISOString();
+    if (result.failureOrigin !== undefined) run.failureOrigin = result.failureOrigin;
   }
   closeActiveForJob(jobId: string, status: "failed" | "cancelled" | "timed_out", summary: string, safeError?: string): AgentRun[] {
     const closed: AgentRun[] = [];
@@ -125,6 +145,20 @@ export class AgentRunStore {
       closed.push(structuredClone(this.require(run.id)));
     }
     return closed;
+  }
+  markUpstreamBlocked(jobId: string, downstreamRunIds: readonly string[], summary: string): AgentRun[] {
+    const downstream = new Set(downstreamRunIds);
+    const updated: AgentRun[] = [];
+    for (const run of this.runs.values()) {
+      if (run.jobId !== jobId || !downstream.has(run.id) ||
+        !["queued", "running", "waiting_children", "resuming"].includes(run.status)) continue;
+      run.coordinationStatus = "upstream_blocked";
+      run.attentionLevel = "feedback";
+      run.statusMessage = summary;
+      run.failureOrigin = "dependency";
+      updated.push(structuredClone(run));
+    }
+    return updated;
   }
   receiveReturn(result: AgentRunResult): boolean {
     if (this.returnReceipts.has(result.runId)) return false;

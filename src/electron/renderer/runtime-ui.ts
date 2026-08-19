@@ -6,7 +6,9 @@ import type {
 } from "../../runtime/runtime-session.js";
 import type {
   DesktopEvent,
+  DesktopAgentRun,
 } from "../desktop-types.js";
+import { coordinationStatusLabel, deriveAttentionLevel, safeFailureMessage } from "../../agents/agent-presentation.js";
 
 export type SafeInlineToken =
   | { kind: "text"; text: string }
@@ -289,6 +291,27 @@ export function summarizeRuntimeStatus(status: RuntimeSessionStatus): string {
   if (status === "failed") return "请求未完成";
   if (status === "cancelled") return "已取消";
   return "已超时";
+}
+
+export interface AgentPresentation {
+  label: string;
+  attention: import("../../agents/agent-run.js").AgentAttentionLevel;
+  message?: string;
+}
+
+export function getAgentPresentation(run: DesktopAgentRun): AgentPresentation {
+  const statusLabels: Record<DesktopAgentRun["status"], string> = {
+    queued: "排队中", running: "运行中", waiting_children: "等待子 Agent",
+    resuming: "自动续跑", completed: "已返回", failed: "失败", cancelled: "已停止", timed_out: "超时",
+  };
+  const rawMessage = run.statusMessage ?? run.safeError;
+  const message = rawMessage === undefined ? undefined
+    : /^[a-z][a-z0-9_]+$/u.test(rawMessage) ? safeFailureMessage(rawMessage) : rawMessage;
+  return {
+    label: run.coordinationStatus === undefined ? statusLabels[run.status] : coordinationStatusLabel(run.coordinationStatus),
+    attention: deriveAttentionLevel(run.status, run.coordinationStatus, run.attentionLevel),
+    ...(message === undefined ? {} : { message }),
+  };
 }
 
 export function getActivityGroupStatus(

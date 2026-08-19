@@ -170,6 +170,10 @@ export interface DesktopAgentRun {
   agentProfileId: string;
   parentRunId?: string;
   status: "queued" | "running" | "waiting_children" | "resuming" | "completed" | "failed" | "cancelled" | "timed_out";
+  coordinationStatus?: import("../agents/agent-run.js").AgentCoordinationStatus;
+  attentionLevel?: import("../agents/agent-run.js").AgentAttentionLevel;
+  statusMessage?: string;
+  failureOrigin?: import("../agents/agent-run.js").AgentFailureOrigin;
   task: string;
   depth: number;
   safeError?: string;
@@ -434,6 +438,10 @@ function isDesktopAgentRun(value: unknown): value is DesktopAgentRun {
     ["queued", "running", "waiting_children", "resuming", "completed", "failed", "cancelled", "timed_out"]
       .includes(String(value.status)) && typeof value.task === "string" &&
     Number.isInteger(value.depth) && (value.depth as number) >= 0 &&
+    (value.coordinationStatus === undefined || ["waiting_assignment", "waiting_parent", "waiting_children", "waiting_review", "feedback_required", "rework_required", "upstream_blocked", "skipped"].includes(String(value.coordinationStatus))) &&
+    (value.attentionLevel === undefined || ["neutral", "active", "success", "feedback", "error"].includes(String(value.attentionLevel))) &&
+    (value.statusMessage === undefined || typeof value.statusMessage === "string") &&
+    (value.failureOrigin === undefined || ["self", "parent", "dependency", "runtime", "provider", "tool", "contract"].includes(String(value.failureOrigin))) &&
     (value.safeError === undefined || typeof value.safeError === "string");
 }
 

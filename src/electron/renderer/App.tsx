@@ -66,6 +66,7 @@ import {
 import { RuntimeTimeline } from "./RuntimeTimeline.js";
 import {
   coalesceDesktopEvents,
+  getAgentPresentation,
   isNearBottom,
 } from "./runtime-ui.js";
 import { DESKTOP_COMMAND_REGISTRY } from "../../shortcuts/builtins.js";
@@ -1477,7 +1478,8 @@ function AgentFlowProgress({ runs, runtime, requirement, activeAgentThreadId, op
   const reworkTasks = runtime?.tasks.filter((item) => item.status === "rework").length ?? 0;
   const requirementConfirmed = requirement !== undefined && !["clarifying", "planned"].includes(requirement.status);
   const dispatched = childRuns.length > 0 || (runtime?.tasks.length ?? 0) > 0;
-  const hasRework = reworkTasks > 0 || failedReviews > 0;
+  const feedbackRuns = childRuns.filter((run) => getAgentPresentation(run).attention === "feedback").length;
+  const hasRework = reworkTasks > 0 || failedReviews > 0 || feedbackRuns > 0;
   const jobStatus = runtime?.job?.status;
   const jobCompleted = jobStatus === "completed" || requirement?.status === "completed";
   const executionFinished = childRuns.length > 0 && finishedRuns === childRuns.length;
@@ -1551,10 +1553,11 @@ function AgentFlowProgress({ runs, runtime, requirement, activeAgentThreadId, op
         {childRuns.length === 0 ? <p className="agent-flow-empty">任务分派后，这里会显示每个 Agent 的最新工作。</p> : (
           <ul>{childRuns.map((run) => {
             const latestWork = formatAgentLatestWork(run, runtime);
-            return <li key={run.id} data-status={run.status}>
+            const presentation = getAgentPresentation(run);
+            return <li key={run.id} data-status={run.status} data-attention={presentation.attention}>
               <button type="button" className="agent-flow-agent-button" aria-current={activeAgentThreadId === run.threadId} onClick={() => openAgent(run)}>
                 <span className="agent-status-dot" />
-                <span><span><strong>{formatAgentProfileName(run.agentProfileId)}</strong><small>{formatAgentState(run.status)}</small></span><small className="agent-flow-agent-latest" title={latestWork}>{latestWork}</small></span>
+                <span><span><strong>{formatAgentProfileName(run.agentProfileId)}</strong><small>{presentation.label}</small></span><small className="agent-flow-agent-latest" title={latestWork}>{latestWork}</small></span>
                 <ChevronRight />
               </button>
             </li>;
@@ -1577,20 +1580,23 @@ function HistoryAgentTree({ runs, requirement, runtime, selectedId, select }: {
     if (run.parentRunId === undefined) continue;
     children.set(run.parentRunId, [...(children.get(run.parentRunId) ?? []), run]);
   }
-  const renderRun = (run: typeof runs[number]) => <li key={run.id} data-status={run.status}>
-    <button type="button" aria-expanded={selectedId === run.id} onClick={() => select(selectedId === run.id ? undefined : run)}>
-      <span className="agent-status-dot" />
-      <span><strong>{formatAgentProfileName(run.agentProfileId)}</strong><small>{formatAgentState(run.status)} · {formatAgentResponsibility(run.agentProfileId)}</small></span>
-      <ChevronRight />
-    </button>
-    {selectedId === run.id && <small className={`history-agent-detail${run.safeError === undefined ? "" : " is-error"}`}>{run.safeError ?? `打开真实对话：${run.task}`}</small>}
-    {(children.get(run.id)?.length ?? 0) > 0 && <ul>{children.get(run.id)!.map(renderRun)}</ul>}
-  </li>;
+  const renderRun = (run: typeof runs[number]) => {
+    const presentation = getAgentPresentation(run);
+    return <li key={run.id} data-status={run.status} data-attention={presentation.attention}>
+      <button type="button" aria-expanded={selectedId === run.id} onClick={() => select(selectedId === run.id ? undefined : run)}>
+        <span className="agent-status-dot" />
+        <span><strong>{formatAgentProfileName(run.agentProfileId)}</strong><small>{presentation.label} · {formatAgentResponsibility(run.agentProfileId)}</small></span>
+        <ChevronRight />
+      </button>
+      {selectedId === run.id && <small className={`history-agent-detail${presentation.attention === "error" ? " is-error" : presentation.attention === "feedback" ? " is-feedback" : ""}`}>{presentation.message ?? `打开真实对话：${run.task}`}</small>}
+      {(children.get(run.id)?.length ?? 0) > 0 && <ul>{children.get(run.id)!.map(renderRun)}</ul>}
+    </li>;
+  };
   const roots = runs.filter((run) => run.parentRunId === undefined);
   return <div className="history-workflow-tree">
     <div className="history-god-node"><strong>God</strong><small>{requirement === undefined ? "当前 Chat" : `${requirement.title} · v${requirement.revision}`}</small></div>
     <details className="history-team-node" open>
-      <summary><strong>软件产品演示团队</strong><small>{runtime?.job?.status ?? "等待启动"} · 1 位负责人 / 3 个角色</small></summary>
+      <summary><strong>软件产品演示团队</strong><small>{formatAgentJobState(runtime?.job?.status)} · 1 位负责人 / 3 个角色</small></summary>
       <p>目标：产品、工程、测试逐级向负责人 Return，负责人验收后再 Return God。</p>
       <ul className="history-agent-tree" aria-label="当前 Chat 固定软件团队树">
         {roots.flatMap((root) => children.get(root.id) ?? []).map(renderRun)}
@@ -1614,7 +1620,8 @@ function formatAgentLatestWork(run: import("../desktop-types.js").DesktopAgentRu
   }
   const task = runtime?.tasks.find((item) => item.id === run.taskId);
   const latest = candidates.sort((left, right) => Date.parse(right.createdAt) - Date.parse(left.createdAt))[0]?.summary.trim();
-  return latest || run.safeError || (task === undefined ? run.task : `${formatAgentState(run.status)} · ${task.objective || task.title}`);
+  const presentation = getAgentPresentation(run);
+  return latest || presentation.message || (task === undefined ? run.task : `${presentation.label} · ${task.objective || task.title}`);
 }
 
 function formatAgentProfileName(profileId: string | undefined): string {
@@ -1679,12 +1686,14 @@ function formatThreadState(state: import("../desktop-types.js").DesktopTurnState
   return "空闲";
 }
 
-function formatAgentState(state: import("../desktop-types.js").DesktopAgentRun["status"]): string {
-  const labels: Record<typeof state, string> = {
-    queued: "排队中", running: "运行中", waiting_children: "等待子 Agent",
-    resuming: "自动续跑", completed: "已返回", failed: "失败", cancelled: "已取消", timed_out: "超时",
-  };
-  return labels[state];
+function formatAgentJobState(state: import("../../agents/agent-runtime.js").AgentJobStatus | undefined): string {
+  if (state === undefined) return "等待启动";
+  if (state === "partial") return "需要反馈";
+  if (state === "failed") return "执行失败";
+  if (state === "completed") return "已完成";
+  if (state === "reviewing") return "等待验收";
+  if (state === "waiting_returns") return "等待回传";
+  return "进行中";
 }
 
 function ModuleButton(props: {
