@@ -18,11 +18,18 @@ export interface ExecutionEngineSnapshot {
  */
 export type ExecutionControl = "turn_agent" | "workflow";
 
+export interface ExecutionFeedback {
+  turnId: string;
+  text: string;
+}
+
 export interface ExecutionEngine {
   readonly id: string;
   readonly control: ExecutionControl;
   supports(kind: RequirementExecutionKind): boolean;
+  isActive?(jobId: string): boolean;
   validateStart?(allowedTools: string[]): void;
+  provideFeedback?(jobId: string, feedback: ExecutionFeedback): Promise<boolean>;
   start(context: ExecutionContext): Promise<void>;
   resume(jobId: string): Promise<void>;
   cancel(jobId: string): Promise<void>;

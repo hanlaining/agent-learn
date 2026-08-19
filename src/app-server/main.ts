@@ -438,6 +438,18 @@ const workflowTeamCoordinator = agentLoop === undefined ? undefined : new Workfl
     return { objective: requirement.objective, scope: requirement.scope, nonGoals: requirement.nonGoals,
       deliverables: requirement.deliverables, acceptanceCriteria: requirement.acceptanceCriteria, prompt };
   },
+  feedback: (jobId) => {
+    const job = agentRuntimeStore.getJob(jobId);
+    if (job === undefined) return undefined;
+    const item = lifecycleStore.getItemsForTurn(job.rootTurnId)
+      .filter((candidate) => candidate.type === "user_message")
+      .at(-1);
+    const text = typeof item?.content === "object" && item.content !== null &&
+      "text" in item.content && typeof item.content.text === "string"
+      ? item.content.text
+      : undefined;
+    return text === undefined ? undefined : { turnId: job.rootTurnId, text };
+  },
   persist: () => persistRuntimeState(),
 });
 const executionEngineRouter = workflowTeamCoordinator === undefined ? undefined : new ExecutionEngineRouter([

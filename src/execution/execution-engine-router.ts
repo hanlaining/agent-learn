@@ -2,7 +2,7 @@ import type { RequirementExecutionKind } from "../requirements/requirement.js";
 import type { FixedProductStage } from "../agents/fixed-software-team-coordinator.js";
 import type { ExecutionContext } from "./execution-context.js";
 import type { ExecutionEngine, ExecutionEngineSnapshot } from "./execution-engine.js";
-import type { ExecutionControl } from "./execution-engine.js";
+import type { ExecutionControl, ExecutionFeedback } from "./execution-engine.js";
 
 export interface StageAdvancingExecutionEngine extends ExecutionEngine {
   advance(jobId: string, expectedStage: FixedProductStage): Promise<{ stage: FixedProductStage; changed: boolean }>;
@@ -21,6 +21,12 @@ export class ExecutionEngineRouter {
 
   start(context: ExecutionContext): Promise<void> { return this.route(context.executionKind).start(context); }
   control(kind: RequirementExecutionKind): ExecutionControl { return this.route(kind).control; }
+  isActive(kind: RequirementExecutionKind, jobId: string): boolean {
+    return this.route(kind).isActive?.(jobId) ?? false;
+  }
+  provideFeedback(kind: RequirementExecutionKind, jobId: string, feedback: ExecutionFeedback): Promise<boolean> {
+    return this.route(kind).provideFeedback?.(jobId, feedback) ?? Promise.resolve(false);
+  }
   validateStart(kind: RequirementExecutionKind, allowedTools: string[]): void { this.route(kind).validateStart?.(allowedTools); }
   resume(kind: RequirementExecutionKind, jobId: string): Promise<void> { return this.route(kind).resume(jobId); }
   cancel(kind: RequirementExecutionKind, jobId: string): Promise<void> { return this.route(kind).cancel(jobId); }

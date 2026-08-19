@@ -66,6 +66,34 @@ test("engineering_ready自动恢复零付费，显式resume继续推进且不重
   assert.equal(restored.runtime.listStageCheckpoints(restored.jobId).filter((item) => item.stageId === "product").length, 1);
 });
 
+test("反馈已持久化但返工未开始时，启动recover不把旧Evidence当新attempt且零模型调用", async () => {
+  let engineeringCalls = 0;
+  const blocked = JSON.stringify({
+    status: "blocked",
+    summary: "need user feedback",
+    deliverables: [],
+    evidence: ["missing choice"],
+    blockers: ["API compatibility choice"],
+    nextStageRecommendation: "block",
+    contractVersion: STAGE_RESULT_CONTRACT_VERSION,
+  });
+  const setup = createHarness((input) => input.profileId === "engineering_role" && ++engineeringCalls === 1
+    ? blocked
+    : validResult("ok"));
+  await driveThroughProduct(setup);
+  await setup.coordinator.advance(setup.jobId, "engineering_ready");
+  await setup.coordinator.advance(setup.jobId, "engineering_return_ready");
+  assert.equal(setup.runtime.listTasks(setup.jobId).find((item) => item.profileId === "engineering_role")?.status, "blocked");
+  await setup.coordinator.provideFeedback(setup.jobId, { turnId: "feedback-turn", text: "keep v1 API" });
+
+  const restored = restoreHarness(setup, () => validResult("must not execute during startup recover"));
+  await restored.engine.recover(restored.jobId);
+
+  assert.equal(restored.calls.length, 0);
+  assert.equal(restored.runtime.listTasks(restored.jobId).find((item) => item.profileId === "engineering_role")?.status, "rework");
+  assert.equal(restored.runtime.getJob(restored.jobId)?.status, "reviewing");
+});
+
 test("已完成Engineering Stage恢复时只验收持久化Return，不重复Worker模型调用", async () => {
   const beforeRestart = createHarness(() => validResult("before restart"));
   await driveThroughProduct(beforeRestart);

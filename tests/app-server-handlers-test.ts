@@ -396,13 +396,16 @@ test("开启子 Agent 但需求未确认时不会开放执行工具", async () =
   assert.match(parentInstructions, /prepare_requirement_plan/);
 });
 
-test("真实 turn\/run 入口由 Team Workflow 单一控制并在最终交付前保持 Root waiting_children", async () => {
+test("真实 turn\/run 从 child blocked 返回父级引导，同 Job 吸收用户反馈后恢复且只交付一次", async () => {
   const lifecycle = new LifecycleStore();
   const runs = new AgentRunStore();
   const runtime = new AgentRuntimeStore();
   const requirements = new RequirementStore();
   const stageProfiles: string[] = [];
+  const stagePrompts: string[] = [];
   const rootStates: string[] = [];
+  let productCalls = 0;
+  let engineeringCalls = 0;
   let rootAgentCalls = 0;
 
   const finalRootAgent: Pick<AgentLoop, "run" | "cancel"> = {
@@ -430,8 +433,20 @@ test("真实 turn\/run 入口由 Team Workflow 单一控制并在最终交付前
       acceptanceCriteria: ["tests pass"],
       prompt: "confirmed requirement",
     }),
+    feedback: (jobId) => {
+      const job = runtime.getJob(jobId);
+      const item = job === undefined ? undefined : lifecycle.getItemsForTurn(job.rootTurnId)
+        .filter((candidate) => candidate.type === "user_message")
+        .at(-1);
+      const text = typeof item?.content === "object" && item.content !== null &&
+        "text" in item.content && typeof item.content.text === "string"
+        ? item.content.text
+        : undefined;
+      return job === undefined || text === undefined ? undefined : { turnId: job.rootTurnId, text };
+    },
     execute: async (input) => {
       stageProfiles.push(input.profileId);
+      stagePrompts.push(input.prompt);
       const job = runtime.getJob(input.jobId);
       assert.ok(job);
       rootStates.push(runs.get(job.rootRunId)?.status ?? "missing");
@@ -439,15 +454,17 @@ test("真实 turn\/run 入口由 Team Workflow 单一控制并在最终交付前
         const delivered = await finalRootAgent.run(job.rootTurnId);
         return { turnId: delivered.turn.id, summary: (delivered.assistantMessage.content as { text: string }).text };
       }
+      if (input.profileId === "product_role") productCalls += 1;
+      const blocked = input.profileId === "engineering_role" && ++engineeringCalls === 1;
       return {
         turnId: `stage-turn-${stageProfiles.length}`,
         summary: JSON.stringify({
-          status: "completed",
-          summary: `${input.profileId} complete`,
-          deliverables: ["artifact"],
-          evidence: ["verified"],
-          blockers: [],
-          nextStageRecommendation: "continue",
+          status: blocked ? "blocked" : "completed",
+          summary: blocked ? "需要用户确认 API 兼容范围" : `${input.profileId} complete`,
+          deliverables: blocked ? [] : ["artifact"],
+          evidence: [blocked ? "missing API compatibility choice" : "verified"],
+          blockers: blocked ? ["API compatibility choice is required"] : [],
+          nextStageRecommendation: blocked ? "block" : "continue",
           contractVersion: STAGE_RESULT_CONTRACT_VERSION,
         }),
       };
@@ -494,16 +511,45 @@ test("真实 turn\/run 入口由 Team Workflow 单一控制并在最终交付前
   const started = await turnRequest as { turn: { id: string } };
   const runRequest = app.client.sendRequest("turn/run", { turnId: started.turn.id });
   await app.flushClientRequest();
-  const result = await runRequest as { assistantMessage: { content: { text: string } } };
+  const paused = await runRequest as { assistantMessage: { content: { text: string } } };
 
-  const job = runtime.getJobByRequirement(planned.id, planned.revision);
-  assert.ok(job);
+  const pausedJob = runtime.getJobByRequirement(planned.id, planned.revision);
+  assert.ok(pausedJob);
+  assert.match(paused.assistantMessage.content.text, /需要你补充信息/);
+  assert.equal(runtime.getJob(pausedJob.id)?.status, "reviewing");
+  assert.equal(requirements.get(planned.id)?.executionState, "executing");
+  assert.equal(runs.get(pausedJob.rootRunId)?.status, "waiting_children");
+  assert.equal(runs.listForJob(pausedJob.id).find((item) => item.agentProfileId === "software_team_lead")?.status, "waiting_children");
+  assert.equal(runs.listForJob(pausedJob.id).some((item) => item.status === "failed"), false);
+  assert.deepEqual(stageProfiles, ["product_role", "engineering_role"]);
+  assert.equal(rootAgentCalls, 0);
+  assert.equal(runtime.listJobs().length, 1);
+  assert.equal(runs.listForJob(pausedJob.id).length, 5);
+
+  const feedbackText = "补充反馈：保留 v1 API 兼容，新能力放到 v2";
+  const feedbackTurnRequest = app.client.sendRequest("turn/start", { threadId: thread.id, input: feedbackText });
+  await app.flushClientRequest();
+  const feedbackTurn = await feedbackTurnRequest as { turn: { id: string } };
+  const resumeRequest = app.client.sendRequest("turn/run", { turnId: feedbackTurn.turn.id });
+  await app.flushClientRequest();
+  const result = await resumeRequest as { turn: { id: string }; assistantMessage: { content: { text: string } } };
+
+  const completedJob = runtime.getJobByRequirement(planned.id, planned.revision);
+  assert.ok(completedJob);
+  assert.equal(completedJob.id, pausedJob.id);
+  assert.equal(completedJob.rootTurnId, feedbackTurn.turn.id);
+  assert.equal(result.turn.id, feedbackTurn.turn.id);
   assert.equal(result.assistantMessage.content.text, "团队已完成且只交付一次");
-  assert.deepEqual(stageProfiles, ["product_role", "engineering_role", "quality_role", "software_team_lead", "orchestrator"]);
+  assert.deepEqual(stageProfiles, ["product_role", "engineering_role", "engineering_role", "quality_role", "software_team_lead", "orchestrator"]);
+  assert.match(stagePrompts[2] ?? "", /保留 v1 API 兼容/);
+  assert.equal(productCalls, 1);
+  assert.equal(engineeringCalls, 2);
   assert.equal(rootAgentCalls, 1);
   assert.equal(rootStates.every((state) => state === "waiting_children"), true);
-  assert.equal(runtime.getJob(job.id)?.status, "completed");
-  assert.equal(runs.get(job.rootRunId)?.status, "completed");
+  assert.equal(runtime.listJobs().length, 1);
+  assert.equal(runs.listForJob(completedJob.id).length, 5);
+  assert.equal(runtime.getJob(completedJob.id)?.status, "completed");
+  assert.equal(runs.get(completedJob.rootRunId)?.status, "completed");
   assert.equal(requirements.get(planned.id)?.executionState, "completed");
 });
 
