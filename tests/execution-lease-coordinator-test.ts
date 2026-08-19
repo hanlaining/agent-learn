@@ -150,6 +150,48 @@ test("renewal advances CAS version without changing the fencing token", async (t
   assert.equal(await store.read({ type: "job", id: "job-renew" }), undefined);
 });
 
+test("same-Job nesting reuses one Lease while different-Job nesting is rejected", async (t) => {
+  const { statePath } = await fixture(t);
+  let acquireCalls = 0;
+  const backing = new PersistentRuntimeLeaseStore(statePath);
+  const store: ExecutionLeaseStore = {
+    acquire: (input) => { acquireCalls += 1; return backing.acquire(input); },
+    renew: (lease, ttlMs) => backing.renew(lease, ttlMs),
+    release: (lease) => backing.release(lease),
+    withFencedCommit: (lease, commit) => backing.withFencedCommit(lease, commit),
+  };
+  const coordinator = new ExecutionLeaseCoordinator(store, {
+    ownerId: "nested-owner", ttlMs: 1_000, renewIntervalMs: 500, maxRenewals: 0,
+  });
+
+  await coordinator.withJob("job-a", async () => {
+    const outer = coordinator.currentContext();
+    await coordinator.withJob("job-a", async () => {
+      assert.equal(coordinator.currentContext(), outer);
+      await coordinator.withRequiredActiveFencedCommit("runtime_state", () => undefined);
+    });
+    await assert.rejects(
+      coordinator.withJob("job-b", async () => undefined),
+      /Cannot nest execution leases for different Jobs/,
+    );
+  });
+  assert.equal(acquireCalls, 1);
+});
+
+test("required fenced commit rejects a silent commit without an active Lease", async (t) => {
+  const { statePath } = await fixture(t);
+  const coordinator = new ExecutionLeaseCoordinator(
+    new PersistentRuntimeLeaseStore(statePath),
+    { ownerId: "strict-owner", ttlMs: 1_000, renewIntervalMs: 500, maxRenewals: 0 },
+  );
+  let committed = false;
+  await assert.rejects(
+    coordinator.withRequiredActiveFencedCommit("runtime_state", () => { committed = true; }),
+    /No active execution lease/,
+  );
+  assert.equal(committed, false);
+});
+
 test("explicit cancellation commits while fenced and then releases the Job", async (t) => {
   const { statePath } = await fixture(t);
   const store = new PersistentRuntimeLeaseStore(statePath);

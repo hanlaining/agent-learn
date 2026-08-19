@@ -35,7 +35,10 @@ import {
   ModelInvocationStartupRecovery,
 } from "../runtime/model-invocation-startup-recovery.js";
 import { PersistentRuntimeLeaseStore } from "../runtime/persistent-runtime-lease-store.js";
-import { ExecutionLeaseCoordinator } from "../runtime/execution-lease-coordinator.js";
+import {
+  ExecutionLeaseCoordinator,
+  ExecutionLeaseUnavailableError,
+} from "../runtime/execution-lease-coordinator.js";
 import {
   WorkspaceSandbox,
 } from "../sandbox/workspace-sandbox.js";
@@ -486,7 +489,11 @@ const workflowTeamCoordinator = agentLoop === undefined ? undefined : new Workfl
 });
 const dynamicExecutionEngine = new DynamicAgentExecutionEngine(agentRuntimeStore, {
   runStore: agentRunStore,
-  persist: () => persistRuntimeState(),
+  ownership: executionLeaseCoordinator,
+  persist: (boundary) => executionLeaseCoordinator.withRequiredActiveFencedCommit(
+    boundary,
+    () => persistRuntimeStateUnfenced(),
+  ),
   cancelTurn: (turnId) => agentLoop?.cancel(turnId) ?? false,
   cancelScheduler: (jobId) => multiAgentScheduler?.cancelJob(jobId),
   cancelChildren: (turnId) => multiAgentScheduler?.cancelChildren(turnId, (childTurnId) => agentLoop?.cancel(childTurnId) ?? false) ?? 0,
@@ -651,6 +658,7 @@ registerAppServerHandlers(connection, {
   skillNames: skillLoader.list().map((skill) => skill.name),
   waitForStartupRecovery: () => startupRecoveryPromise,
   ...(executionEngineRouter === undefined ? {} : { executionEngineRouter }),
+  executionOwnership: executionLeaseCoordinator,
   ...(multiAgentScheduler === undefined ? {} : {
     cancelChildAgentRuns: (turnId: string) =>
       multiAgentScheduler.cancelChildren(
@@ -658,18 +666,7 @@ registerAppServerHandlers(connection, {
         (childTurnId) => agentLoop?.cancel(childTurnId) ?? false,
       ),
   }),
-  saveState: () => runtimePersistence.save(
-    lifecycleStore,
-    contextCheckpointStore,
-    agentRunStore,
-    [...threadConfigs.values()],
-    agentRegistry.list(),
-    [...runtimeSessions.values()],
-    agentRuntimeStore,
-    requirementStore,
-    modelInvocationStore,
-    toolInvocationStore,
-  ),
+  saveState: persistRuntimeState,
   // 日志写 stderr，避免污染 stdout 上的 JSONL 协议数据。
   log: (message) => process.stderr.write(message),
 });
@@ -689,33 +686,42 @@ if (loadedRuntimeState.recoveredTurnIds.length > 0) {
   );
 }
 
-agentRuntimeStore.reconcilePersistedJobs();
-for (const job of agentRuntimeStore.listJobs().filter((item) =>
-  ["completed", "partial", "failed", "cancelled"].includes(item.status))) {
-  agentRunStore.closeActiveForJob(job.id, job.status === "failed" || job.status === "partial" ? "failed" : "cancelled",
-    "Runtime 恢复时关闭终态 Job 遗留的 Agent", job.failureCode);
-  agentRuntimeStore.closeActiveTasks(job.id, job.status === "failed" || job.status === "partial" ? "failed" : "cancelled");
-  if (job.requirementId !== undefined && requirementStore.get(job.requirementId) !== undefined) {
-    requirementStore.setExecutionState(job.requirementId,
-      job.status === "completed" ? "completed" : job.status === "cancelled" ? "cancelled" : "failed_retryable");
-  }
-}
-await persistRuntimeState();
-const interruptedRuntime = agentRuntimeStore.recoverInterruptedWork();
-if (interruptedRuntime.lostTasks.length > 0 || interruptedRuntime.pendingReturns.length > 0) {
-  await persistRuntimeState();
-  process.stderr.write(`[app-server] recovered ${interruptedRuntime.lostTasks.length} lost Task lease(s) and ${interruptedRuntime.pendingReturns.length} pending Return(s)\n`);
-}
+for (const job of agentRuntimeStore.listJobs()) {
+  try {
+    await executionLeaseCoordinator.withJob(job.id, async () => {
+      const terminal = ["completed", "partial", "failed", "cancelled"].includes(job.status);
+      if (terminal) {
+        agentRunStore.closeActiveForJob(job.id, job.status === "failed" || job.status === "partial" ? "failed" : "cancelled",
+          "Runtime 恢复时关闭终态 Job 遗留的 Agent", job.failureCode);
+        agentRuntimeStore.closeActiveTasks(job.id, job.status === "failed" || job.status === "partial" ? "failed" : "cancelled");
+        if (job.requirementId !== undefined && requirementStore.get(job.requirementId) !== undefined) {
+          requirementStore.setExecutionState(job.requirementId,
+            job.status === "completed" ? "completed" : job.status === "cancelled" ? "cancelled" : "failed_retryable");
+        }
+        await executionLeaseCoordinator.withRequiredActiveFencedCommit(
+          "runtime_state",
+          () => persistRuntimeStateUnfenced(),
+        );
+        return;
+      }
 
-if (executionEngineRouter !== undefined) {
-  for (const job of agentRuntimeStore.listJobs().filter((item) =>
-    !["completed", "partial", "failed", "cancelled"].includes(item.status))) {
-    await executionEngineRouter.recover(job.executionKind, job.id);
-  }
-} else {
-  for (const job of agentRuntimeStore.listJobs().filter((item) =>
-    item.workflowVersion === "dynamic_v1" && !["completed", "partial", "failed", "cancelled"].includes(item.status))) {
-    await dynamicExecutionEngine.recover(job.id);
+      const interruptedRuntime = agentRuntimeStore.recoverInterruptedWork(undefined, job.id);
+      if (interruptedRuntime.lostTasks.length > 0 || interruptedRuntime.pendingReturns.length > 0) {
+        await executionLeaseCoordinator.withRequiredActiveFencedCommit(
+          "runtime_state",
+          () => persistRuntimeStateUnfenced(),
+        );
+        process.stderr.write(`[app-server] recovered ${interruptedRuntime.lostTasks.length} lost Task lease(s) and ${interruptedRuntime.pendingReturns.length} pending Return(s) for ${job.id}\n`);
+      }
+      if (executionEngineRouter !== undefined) {
+        await executionEngineRouter.recover(job.executionKind, job.id);
+      } else if (job.workflowVersion === "dynamic_v1") {
+        await dynamicExecutionEngine.recover(job.id);
+      }
+    });
+  } catch (error) {
+    if (!(error instanceof ExecutionLeaseUnavailableError)) throw error;
+    process.stderr.write(`[app-server] ${job.id} waiting for active execution owner; startup recovery deferred\n`);
   }
 }
 

@@ -122,6 +122,12 @@ export class ExecutionLeaseCoordinator {
     return this.active.getStore()?.context;
   }
 
+  async withJob<T>(jobId: string, operation: () => Promise<T>): Promise<T> {
+    const result = await this.runWithJobLease(jobId, () => operation());
+    if (result.status === "waiting") throw new ExecutionLeaseUnavailableError(jobId);
+    return result.value;
+  }
+
   async runWithJobLease<T>(
     jobId: string,
     operation: (context: ExecutionLeaseContext) => Promise<T>,
@@ -174,14 +180,16 @@ export class ExecutionLeaseCoordinator {
   ): Promise<T> {
     const session = this.active.getStore();
     if (session === undefined) return commit();
-    if (session.stopped) throw new Error("Execution lease is no longer active");
-    return this.serialize(session, async () => {
-      if (session.renewalFailure !== undefined) throw session.renewalFailure;
-      return this.store.withFencedCommit(
-        session.lease,
-        (fencingToken) => commit(fencingToken),
-      );
-    });
+    return this.commitWithSession(session, commit);
+  }
+
+  async withRequiredActiveFencedCommit<T>(
+    _boundary: ExecutionLeaseCommitBoundary,
+    commit: (fencingToken: number) => T | Promise<T>,
+  ): Promise<T> {
+    const session = this.active.getStore();
+    if (session === undefined) throw new Error("No active execution lease");
+    return this.commitWithSession(session, commit);
   }
 
   async renewActiveLease(): Promise<ExecutionLeaseContext> {
@@ -277,6 +285,17 @@ export class ExecutionLeaseCoordinator {
     const result = session.queue.then(operation);
     session.queue = result.then(() => undefined, () => undefined);
     return result;
+  }
+
+  private commitWithSession<T>(
+    session: ActiveExecutionLease,
+    commit: (fencingToken: number) => T | Promise<T>,
+  ): Promise<T> {
+    if (session.stopped) return Promise.reject(new Error("Execution lease is no longer active"));
+    return this.serialize(session, async () => {
+      if (session.renewalFailure !== undefined) throw session.renewalFailure;
+      return this.store.withFencedCommit(session.lease, commit);
+    });
   }
 }
 

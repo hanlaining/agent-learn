@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 import { AgentRegistry } from "../src/agents/agent-registry.js";
@@ -6,7 +7,118 @@ import { AgentRunStore } from "../src/agents/agent-run-store.js";
 import { DEFAULT_AGENT_TEAM_CONFIG } from "../src/agents/agent-runtime.js";
 import { AgentRuntimeStore } from "../src/agents/agent-runtime-store.js";
 import { MultiAgentScheduler } from "../src/agents/multi-agent-scheduler.js";
-import { DynamicAgentExecutionEngine } from "../src/execution/dynamic-agent-execution-engine.js";
+import {
+  DynamicAgentExecutionEngine,
+  type DynamicExecutionOwnership,
+} from "../src/execution/dynamic-agent-execution-engine.js";
+import type { ExecutionLeaseCommitBoundary } from "../src/runtime/execution-lease-coordinator.js";
+
+class TrackingOwnership implements DynamicExecutionOwnership {
+  activeJobId: string | undefined;
+  readonly entries: string[] = [];
+
+  async withJob<T>(jobId: string, operation: () => Promise<T>): Promise<T> {
+    assert.equal(this.activeJobId, undefined);
+    this.activeJobId = jobId;
+    this.entries.push(jobId);
+    try {
+      return await operation();
+    } finally {
+      this.activeJobId = undefined;
+    }
+  }
+}
+
+test("Dynamic Engine 的五个公开操作及持久提交都处于同一 Job ownership", async () => {
+  const setup = createFixture("all-owned-operations");
+  const ownership = new TrackingOwnership();
+  const boundaries: ExecutionLeaseCommitBoundary[] = [];
+  let drives = 0;
+  const engine = new DynamicAgentExecutionEngine(setup.runtime, {
+    runStore: setup.runs,
+    ownership,
+    persist: (boundary) => {
+      assert.equal(ownership.activeJobId, setup.jobId);
+      boundaries.push(boundary);
+    },
+  });
+  const context = {
+    jobId: setup.jobId,
+    threadId: setup.threadId,
+    rootRunId: setup.rootRunId,
+    executionKind: "software_change" as const,
+    workflowVersion: "dynamic_v1",
+    drive: async () => {
+      drives += 1;
+      return {};
+    },
+  };
+
+  assert.equal(await engine.provideFeedback(setup.jobId, {
+    turnId: `feedback-${setup.jobId}`,
+    text: "continue",
+  }), true);
+  await engine.recover(setup.jobId);
+  await engine.start(context);
+  await engine.resume(setup.jobId);
+  await engine.cancel(setup.jobId);
+
+  assert.equal(drives, 1, "recover and terminal resume must not invoke the model drive");
+  assert.deepEqual(ownership.entries, Array(5).fill(setup.jobId));
+  assert.ok(boundaries.length >= 4);
+  assert.equal(boundaries.every((boundary) => boundary !== undefined), true);
+  assert.ok(boundaries.includes("cancel"));
+  assert.ok(boundaries.includes("parent_continuation"));
+});
+
+test("Dynamic Engine 未取得 Job ownership 时五个公开操作均不推进事实", async () => {
+  const operations = ["feedback", "recover", "start", "resume", "cancel"] as const;
+  for (const operation of operations) {
+    const setup = createFixture(`ownership-wait-${operation}`);
+    const before = setup.runtime.exportSnapshot();
+    let drives = 0;
+    let persists = 0;
+    const ownership: DynamicExecutionOwnership = {
+      withJob: async () => { throw new Error("lease waiting"); },
+    };
+    const engine = new DynamicAgentExecutionEngine(setup.runtime, {
+      ownership,
+      persist: () => { persists += 1; },
+    });
+    const context = {
+      jobId: setup.jobId,
+      threadId: setup.threadId,
+      rootRunId: setup.rootRunId,
+      executionKind: "software_change" as const,
+      workflowVersion: "dynamic_v1",
+      drive: async () => { drives += 1; return {}; },
+    };
+    const invoke = () => operation === "feedback"
+      ? engine.provideFeedback(setup.jobId, { turnId: "feedback-turn", text: "continue" })
+      : operation === "recover"
+        ? engine.recover(setup.jobId)
+        : operation === "start"
+          ? engine.start(context)
+          : operation === "resume"
+            ? engine.resume(setup.jobId)
+            : engine.cancel(setup.jobId);
+
+    await assert.rejects(invoke, /lease waiting/);
+    assert.deepEqual(setup.runtime.exportSnapshot(), before, `${operation} mutated Runtime without ownership`);
+    assert.equal(drives, 0);
+    assert.equal(persists, 0);
+  }
+});
+
+test("生产 main 为 Dynamic Engine 注入共享 Lease 并把占用态留作可观察等待", async () => {
+  const source = await readFile(new URL("../src/app-server/main.ts", import.meta.url), "utf8");
+  assert.match(source, /new DynamicAgentExecutionEngine[\s\S]*?ownership:\s*executionLeaseCoordinator/);
+  assert.match(source, /persist:\s*\(boundary\)[\s\S]*?withRequiredActiveFencedCommit/);
+  assert.match(source, /registerAppServerHandlers[\s\S]*?executionOwnership:\s*executionLeaseCoordinator/);
+  assert.match(source, /registerAppServerHandlers[\s\S]*?saveState:\s*persistRuntimeState/);
+  assert.match(source, /ExecutionLeaseUnavailableError/);
+  assert.match(source, /waiting for active execution owner/);
+});
 
 test("五个 kill/restart 窗口恢复为唯一持久裁决且启动恢复零模型", async () => {
   const cases = [
@@ -57,6 +169,43 @@ test("父 continuation 由 Dynamic Engine 唯一驱动并只消费一次 Return"
   assert.equal(setup.runtime.getDynamicExecution(setup.jobId)?.recoveryAction, "terminate");
   await engine.resume(setup.jobId);
   assert.equal(drives, 1, "terminal resume must not redeliver");
+});
+
+test("Return claim、父 continuation、模型结果与 consume 使用同一 ownership 的独立 fencing 边界", async () => {
+  const setup = createFixture("continuation-boundaries");
+  const task = addTask(setup, "completed");
+  addReturn(setup, task.id, "completed");
+  const ownership = new TrackingOwnership();
+  const boundaries: ExecutionLeaseCommitBoundary[] = [];
+  const engine = new DynamicAgentExecutionEngine(setup.runtime, {
+    ownership,
+    persist: (boundary) => {
+      assert.equal(ownership.activeJobId, setup.jobId);
+      boundaries.push(boundary);
+    },
+  });
+
+  await engine.start({
+    jobId: setup.jobId,
+    threadId: setup.threadId,
+    rootRunId: setup.rootRunId,
+    executionKind: "software_change",
+    workflowVersion: "dynamic_v1",
+    drive: async () => {
+      assert.equal(setup.runtime.listReturns(setup.jobId)[0]?.status, "delivering");
+      assert.equal(ownership.activeJobId, setup.jobId);
+      return {};
+    },
+  });
+
+  assert.deepEqual(boundaries, [
+    "return_claim",
+    "parent_continuation",
+    "model_commit",
+    "return_consume",
+  ]);
+  assert.deepEqual(ownership.entries, [setup.jobId]);
+  assert.equal(setup.runtime.listReturns(setup.jobId)[0]?.status, "consumed");
 });
 
 test("失败 child 接收反馈后沿用同 Job、原 Task/Thread并创建新 attempt", async () => {
