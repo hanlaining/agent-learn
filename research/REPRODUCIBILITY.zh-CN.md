@@ -1,6 +1,6 @@
 # God-Agent Research Artifact v0.1 第三方复现 SOP
 
-> 状态：RRA-03 已完成审稿，等待总控冻结 Artifact
+> 状态：baseline、三层 Frozen Artifact 与同机干净副本复现已完成；本提交即 artifact Commit，Push 与 PR 更新以外部页面为准
 > 适用范围：Windows 本机、离线科研 Runner、确定性 Fake Provider
 > 事实来源：当前仓库 `package.json`、科研 Runner 源码、D08/D09/D10
 > 证据边界：协议级 Model Check、生产实现 Implementation Check、窄范围 Process Check 必须分别记录，不能相互替代
@@ -54,7 +54,7 @@
 ## 4. 固定源码与空结果起点
 
 1. 获取总控冻结并校验过的源码包，解压到任意普通目录。路径不得依赖原作者机器。
-2. D10 记录的集成候选为 `e65767f960967a21ab2191503363e53280d4ba62`，但最终 Artifact 必须由总控在集成时填写并确认最终冻结版本；复核者不能只凭本文把候选值当作最终版本。
+2. Research Artifact v0.1 的 baseline Commit 已固定为 `05680a4ecf0f13f7b1b311363732d4922ad9af5b`；三个 Frozen Manifest 均绑定该 SHA。
 3. 在源码根目录执行以下环境记录和依赖安装：
 
 ```powershell
@@ -172,7 +172,7 @@ Get-FileHash -Algorithm SHA256 research/runtime-e2e-benchmarks/results/process-c
 - 协议 GATE-100：`31EC316155B4B06599A7E1712F35D1CD17C894C1F8DD8850E78243A43358DC72`；
 - Runtime-E2E GATE-30：`152BB16FDF3CB27EDE9B4E542933C9A770198BDE29016DE3C95379BDAC5F14F4`。
 
-但是旧运行对应的原始 JSON/CSV/repro 当前不在工作区，相关 `results/` 目录只有 `.gitignore`。因此这些字符串只能证明“摘要曾记录该哈希”，不能独立核验旧原始文件的内容与来源。新复跑即使得到相同哈希，也只是重建结果匹配，不能恢复旧文件的保管链。最终 Artifact 应保存新原始文件、环境记录和 Manifest，并明确区分旧摘要与新复跑。
+旧运行对应的原始 JSON/CSV/repro 仍不在工作区，因此旧摘要字符串不能独立核验旧文件来源。v0.1 已把新复跑作为新的 Frozen Artifact 保存并绑定新的 Manifest；这不恢复旧保管链，旧摘要与新复跑必须继续区分。
 
 ## 8. Artifact Manifest 创建与验证
 
@@ -202,7 +202,7 @@ Manifest Schema 只记录一个运行命令，因此推荐为 Model、Implementa
 
 ### 8.1 Process 报告相对路径验收
 
-RRA-02 已将 Process 报告中的 `statePath` 固定为 `runtime-state.json`、`rawReportPath` 固定为 `process-chaos-report.json`；两者都相对于 Harness 自动创建的 case 目录解析。运行时校验器和 JSON Schema 同时约束这两个安全相对路径，拒绝绝对路径、反斜杠和点路径段。但报告字段安全不等于 raw state 内容安全：当前 `runtime-state.json` 仍含本机绝对计划路径。因此 v0.1 公共 Manifest **不得**递归纳入整个 seed 子目录，只纳入 `process-chaos-report.json`、`runtime-leases.json`、环境、命令和限制记录。raw state 可由相同 Runner 在复核机重建；因其未公开冻结，依赖 raw state 独立复查的 Claim 必须降级。本轮独立验收曾出现首次 1/2、立即复跑 2/2 的 fault point 等待超时；根因修复后员工连续四轮 2/2，总控独立复验又以 2/2 通过且无残留。首失败与全部复跑仍须归档，当前待 baseline/Artifact/同机干净副本最终冻结，不得写成跨环境普适稳定。
+RRA-02 已将 Process 报告路径固定为安全相对路径，但 raw `runtime-state.json` 仍含复核机计划路径。因此 Frozen Process Manifest 只纳入 report、leases 和 SCOPE 三个文件；raw state 可由 Runner 重建，相关 Claim 已降级。Frozen 与 Clean 语义投影相同，仍只支持 1/40，不得写成跨环境稳定。
 
 ## 9. 干净环境复现记录模板
 
@@ -307,4 +307,18 @@ stdout/stderr 文件：
 - RRA-04 执行 `npm run test:runtime-e2e`，10/10 通过；`npm run benchmark:runtime-e2e:gate30` 通过；`npm run check` 通过。
 - 总控随后独立连续两次执行 `npm run benchmark:runtime-e2e:gate30`，均退出 0，且 `deterministicOutcomesVerified=true`。
 
-因此该反例当前应表述为“曾发生、根因已定位并修复、当前参考环境连续复跑通过”；对应的 Runtime-E2E 路径问题已关闭。首次失败日志仍须与修复证据一同归档；最终冻结前 Artifact 可用性仍为 B，更广 Windows/Node 环境仍需按本 SOP 复核。外部第三方无指导复现仍未完成，属于 R4/E4 后续目标，不是本次 v0.1 PR 前置，也不得被同机干净源码副本复现替代声称。
+因此该反例当前应表述为“曾发生、根因已定位并修复、当前参考环境连续复跑通过”；对应的 Runtime-E2E 路径问题已关闭。Frozen Runtime Artifact 与同机干净副本投影已经对齐，更广 Windows/Node 环境仍需复核。外部第三方无指导复现仍未完成，属于 R4/E4 后续目标，不得被同机干净源码副本复现替代声称。
+
+## 12. Frozen Artifact 与同机干净副本结果
+
+baseline：`05680a4ecf0f13f7b1b311363732d4922ad9af5b`。
+
+| 层级 | Manifest SHA-256 | Report SHA-256 | 文件数 | Clean 结果 |
+|---|---|---|---:|---|
+| Model | `E9C427546A222E7C56D4A912A86E7ACB8876051E6BB26DD6ECCEE0024A4B2EA3` | `A120F84C3454F57B08DEFCD466BD88BA23D9DCB671DF6E67D0141E0EC475DE59` | 34 | Report SHA 相同 |
+| Runtime | `F793FF5A9FEE01B3C46AABC3F3FC97865D15DAAACB49CDF205EF71F1B60BB7F2` | `8F16DA17F8571458127FD346BB43E743EE610724EFE6C103CC43DDDC711F2563` | 46 | deterministic projection 相同 |
+| Process | `6837D69593983D01C20D145B4B75204EAE3F4353EA67D7742DC0B7AB3A18384C` | `F11862C8CFA06581658B71922234E2ABAF29083D56535A426205F6E16296CA9C` | 3 | 语义投影相同；不含 raw state |
+
+完整同机记录见 `research/artifacts/v0.1/CLEAN-REPRODUCTION.md`。副本从 baseline 的 `git archive` 开始，不含 `.git/` 和旧 results；`npm ci` 安装 101 packages，check、Manifest 9/9、三层 Runner 与 verify 通过。
+
+Clean Process Manifest 首次因 PowerShell `ConvertFrom-Json` 将 UTC 字符串转换成 `DateTime` 而被 canonical ISO 校验拒绝；显式 `ToUniversalTime()` 并格式化 canonical UTC ISO 后 create/verify 通过。这是复现操作脚本负结果，不是 Runtime 缺陷。本提交即 artifact Commit；Push 和 PR 更新属于外部状态。

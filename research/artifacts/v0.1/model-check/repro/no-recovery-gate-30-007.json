@@ -1,0 +1,45 @@
+{
+  "schemaVersion": "gate-repro-v1",
+  "benchmark": "GATE-30",
+  "fixtureSeed": 20260818,
+  "shard": {
+    "index": 1,
+    "total": 1
+  },
+  "variant": "no-recovery",
+  "caseId": "gate-30-007",
+  "caseIndex": 6,
+  "result": {
+    "caseId": "gate-30-007",
+    "caseIndex": 6,
+    "scenarioSeed": 1112285306,
+    "category": "parent-child",
+    "variant": "no-recovery",
+    "taskSuccess": false,
+    "recoveryAttempted": true,
+    "recoverySuccess": false,
+    "modelCalls": 6,
+    "duplicateModelCalls": 0,
+    "toolEffects": 0,
+    "duplicateToolEffects": 0,
+    "unknownOutcome": false,
+    "evidenceRequired": 2,
+    "evidenceProduced": 1,
+    "evidenceCompleteness": 0.5,
+    "latencyMs": 170,
+    "inputTokens": 2010,
+    "outputTokens": 810,
+    "costEstimateUsd": 0.0105,
+    "failureCodes": [
+      "recovery-disabled",
+      "incomplete-evidence"
+    ],
+    "trace": [
+      "policy:wal=true,recovery=false,lease=true",
+      "scenario:parent-child,crash=parent-waiting",
+      "fault-injected:parent-waiting",
+      "recovery-disabled:terminal-incomplete"
+    ]
+  },
+  "rerun": "npm run benchmark:gate30 -- --variant no-recovery"
+}

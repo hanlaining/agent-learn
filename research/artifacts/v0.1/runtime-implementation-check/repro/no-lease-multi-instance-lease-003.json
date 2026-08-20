@@ -1,0 +1,41 @@
+{
+  "schemaVersion": "runtime-e2e-repro-v1",
+  "benchmark": "Runtime-E2E-GATE-30",
+  "fixtureSeed": 20260819,
+  "variant": "no-lease",
+  "caseId": "multi-instance-lease-003",
+  "checkpoint": "model-invocation",
+  "observed": {
+    "caseId": "multi-instance-lease-003",
+    "caseIndex": 27,
+    "scenarioSeed": 3697566061,
+    "family": "multi-instance-lease",
+    "checkpoint": "model-invocation",
+    "variant": "no-lease",
+    "taskSuccess": false,
+    "recoveryAttempted": false,
+    "recoverySuccess": null,
+    "snapshotReloaded": true,
+    "stateFileWrites": 1,
+    "stateFileLoads": 2,
+    "modelCalls": 0,
+    "duplicateModelCalls": 0,
+    "toolEffects": 2,
+    "duplicateToolEffects": 1,
+    "unknownOutcome": false,
+    "evidenceRequired": 3,
+    "evidenceProduced": 2,
+    "evidenceCompleteness": 0.666667,
+    "wallClockDurationMs": 35.01,
+    "recoveryResult": "two-unleased-effects-committed",
+    "productionClasses": [
+      "JsonFileRuntimePersistence",
+      "PersistentRuntimeLeaseStore"
+    ],
+    "invariants": [
+      "lease-ablation-used-real-effect-path"
+    ],
+    "failureCodes": []
+  },
+  "rerun": "npm run benchmark:runtime-e2e:gate30 -- --variant no-lease --case multi-instance-lease-003"
+}

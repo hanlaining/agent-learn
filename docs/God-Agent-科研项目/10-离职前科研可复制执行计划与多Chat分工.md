@@ -4,10 +4,10 @@
 
 > 文档编号：D10
 > 制定日期：2026-08-20
-> 当前状态：RRA-01～RRA-06 已交付，处于总控验收整改；baseline Commit、Artifact、干净副本复现和 PR 均未完成
+> 当前状态：baseline、三层 Frozen Artifact 与同机干净副本复现已完成；本提交即 artifact Commit，Push 与 PR 更新以外部页面为准
 > 唯一工作区：`<integration-worktree>`
 > 当前分支：`god-runtime-phase1-integration_hln`
-> 当前本地 HEAD：`e65767f960967a21ab2191503363e53280d4ba62`
+> Research Artifact baseline：`05680a4ecf0f13f7b1b311363732d4922ad9af5b`
 > Git 原则：员工 Chat 不执行 Git；总控 Chat 在全部门禁通过后统一处理提交和 PR
 
 ---
@@ -28,7 +28,7 @@
 
 - 工作区：`<integration-worktree>`；
 - 分支：`god-runtime-phase1-integration_hln`；
-- HEAD：`e65767f960967a21ab2191503363e53280d4ba62`；
+- Research Artifact baseline：`05680a4ecf0f13f7b1b311363732d4922ad9af5b`；
 - 已有协议级 GATE-30/GATE-100 Runner；
 - 已有生产实现 Runtime-E2E GATE-30/GATE-100 Runner；
 - 已有真实 App Server 强杀与恢复的 Process Chaos Harness；
@@ -353,10 +353,22 @@ Git/Artifact 采用两阶段门禁：
 | RRA-04 下发 | 已创建 `01a01d1a-3c92-7bf2-b7fb-c267c8880d52`，已完成 |
 | RRA-05 下发 | 已创建 `01a01d23-347c-7811-9733-8e644e148bf5`，已完成 D01/D02 同步 |
 | RRA-06 下发 | 已创建 `01a01d23-3892-7f90-93bd-d87d8aba229d`，已完成 D03/D04 同步 |
-| 员工交付 | RRA-01–RRA-06 已完成；总控验收发现文档闭环问题，当前整改中，尚未最终签字 |
-| 集成测试 | Manifest 9/9、Runtime-E2E 10/10；Process NEG-010 修复后员工四轮及总控单轮均 2/2。全量主测试总控首次 482 tests / 481 pass / 1 fail，失败详情因截断丢失；立即复跑和员工随后三轮均 482/482，三轮完整 TAP 无失败标记、Process #387 均 `ok`、无残留。NEG-011 未定位、未修复，允许披露风险后进入 baseline；仍待 Artifact/同机干净副本最终冻结 |
+| 员工交付 | RRA-01–RRA-06 已完成并通过总控收口审查 |
+| 集成测试 | Manifest 9/9、Runtime-E2E 10/10；Process 修复后员工四轮及总控单轮 2/2。全量 NEG-011 仍未定位、未修复；随后四次 482/482。三层 Frozen/Clean 已完成，本提交即 artifact Commit |
 | Process 原始状态 | 报告字段已安全；v0.1 公开包已选择排除仍含本机绝对计划路径的 raw `runtime-state.json`，只纳入报告、Lease、环境、命令与限制；raw state 可由 Runner 重建，Claim 同步降级 |
-| 同机干净源码副本复现 | 未开始；完成后也不得称外部第三方复现 |
-| Git/PR | 未开始 |
+| baseline Commit | 已完成：`05680a4ecf0f13f7b1b311363732d4922ad9af5b` |
+| Frozen Artifact | 已完成：Model 34 files、Runtime 46 files、Process 3 files；三层 Manifest 均 verify |
+| 同机干净源码副本复现 | 已完成：git archive、无 `.git/` 与旧 results、`npm ci` 101 packages、三层 Runner/verify 和比较通过；不得称外部第三方复现 |
+| Git/PR | baseline Commit 已完成；本提交即 artifact Commit，Push 和 PR 更新状态以 PR 页面为准 |
 
-下一步：以 NEG-011 未解释 flake 作为显式风险完成 baseline 冻结，在 PR 与 Artifact 中保留首次 481/482、日志缺失和后续四次成功；再以 baseline SHA 生成三层 Artifact、Manifest，并进入同机干净源码副本复现。
+### 12.1 Frozen Artifact 哈希账本
+
+| 层级 | Manifest SHA-256 | Report SHA-256 | 文件数 | Clean 比较 |
+|---|---|---|---:|---|
+| Model | `E9C427546A222E7C56D4A912A86E7ACB8876051E6BB26DD6ECCEE0024A4B2EA3` | `A120F84C3454F57B08DEFCD466BD88BA23D9DCB671DF6E67D0141E0EC475DE59` | 34 | Report SHA 完全相同 |
+| Runtime | `F793FF5A9FEE01B3C46AABC3F3FC97865D15DAAACB49CDF205EF71F1B60BB7F2` | `8F16DA17F8571458127FD346BB43E743EE610724EFE6C103CC43DDDC711F2563` | 46 | deterministic projection 相同 |
+| Process | `6837D69593983D01C20D145B4B75204EAE3F4353EA67D7742DC0B7AB3A18384C` | `F11862C8CFA06581658B71922234E2ABAF29083D56535A426205F6E16296CA9C` | 3 | 语义投影相同；不含 raw state |
+
+Clean Process Manifest 首次因 PowerShell `ConvertFrom-Json` 把 UTC 字符串转成 `DateTime` 而未通过 canonical ISO 校验；显式转换并格式化为 UTC canonical ISO 后 create/verify 通过。该项必须作为操作脚本负结果进入 PR，不得包装成从未失败，也不得归因于 Runtime。
+
+本提交完成 artifact Commit；提交后 Push 并更新 PR。PR 必须保留 1/40、NEG-011、UTC 日期转换负结果、raw state 排除和外部第三方未完成等限制。

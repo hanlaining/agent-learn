@@ -1,0 +1,109 @@
+{
+  "schemaVersion": "process-chaos-report-v1",
+  "experiment": {
+    "id": "team-workflow-return-narrow-e3-v1",
+    "scope": "Team Workflow Return",
+    "evidenceLevel": "narrow-E3",
+    "formalFaultWindowCount": 1,
+    "gate40CompletedWindows": 1,
+    "gate40TotalWindows": 40,
+    "completeE3Matrix": false,
+    "completeGate40": false,
+    "exactlyOnceClaimed": false,
+    "productionReadyClaimed": false
+  },
+  "runStartedAt": "2026-08-20T04:02:27.683Z",
+  "runCompletedAt": "2026-08-20T04:02:31.127Z",
+  "environment": {
+    "platform": "win32",
+    "arch": "x64",
+    "node": "v20.19.0",
+    "osRelease": "10.0.26200",
+    "local": true,
+    "appServerProcess": "real-child-process",
+    "provider": {
+      "kind": "deterministic-loopback-fake",
+      "realApiCalls": false,
+      "credentialsRead": false
+    }
+  },
+  "seed": "artifact-v0-1-05680a4",
+  "productionEntry": "node --import tsx src/app-server/main.ts",
+  "reproCommand": "npm exec -- tsx research/runtime-e2e-benchmarks/src/process-chaos-cli.ts --seed artifact-v0-1-05680a4 --output <directory>",
+  "statePath": "runtime-state.json",
+  "rawReportPath": "process-chaos-report.json",
+  "ownerPid": 1420,
+  "reloadPid": 26460,
+  "recoveryPid": 34300,
+  "pidChangedAfterReload": true,
+  "pidChangedAfterOwnerKill": true,
+  "pidTransitions": [
+    {
+      "event": "reload-after-pre-provider-kill",
+      "previousPid": 1420,
+      "successorPid": 26460,
+      "changed": true
+    },
+    {
+      "event": "recovery-after-return-window-kill",
+      "previousPid": 26460,
+      "successorPid": 34300,
+      "changed": true
+    }
+  ],
+  "windows": [
+    {
+      "name": "no-side-effect-after-turn-start",
+      "evidenceRole": "persistence-reload-precondition",
+      "countsTowardGate40": false,
+      "faultPoint": "turn-persisted-before-provider-request",
+      "recoveryResult": "state-reloaded-without-provider-request",
+      "faultPointConfirmed": true,
+      "ownerKilled": true,
+      "publicRpcReloaded": true,
+      "rawJsonReloaded": true,
+      "leaseWaitObserved": false,
+      "recovered": true
+    },
+    {
+      "name": "return-delivery-with-held-lease",
+      "evidenceRole": "team-workflow-return-fault-window",
+      "countsTowardGate40": true,
+      "faultPoint": "return-response-received-with-job-lease-held",
+      "recoveryResult": "lease-wait-then-return-consumed",
+      "faultPointConfirmed": true,
+      "ownerKilled": true,
+      "publicRpcReloaded": true,
+      "rawJsonReloaded": true,
+      "leaseWaitObserved": true,
+      "recovered": true
+    }
+  ],
+  "evidence": {
+    "threadId": "thread-1",
+    "jobId": "job-requirement-1-v1",
+    "returnId": "return-14",
+    "ownerLeaseId": "app-26460-90d16ae4-5d64-4b10-9a8e-6d83159c7243",
+    "ownerLeaseDeadline": "2026-08-20T04:04:29.502Z",
+    "providerRequests": 7,
+    "providerRequestsByStage": {
+      "prepare_requirement_plan": 1,
+      "plan_confirmation": 1,
+      "team_workflow": 4,
+      "return_god": 1
+    },
+    "fakeProvider": {
+      "totalRequests": 7,
+      "requestsByStage": {
+        "prepare_requirement_plan": 1,
+        "plan_confirmation": 1,
+        "team_workflow": 4,
+        "return_god": 1
+      },
+      "finalDeliveryRequestsBeforeKill": 1,
+      "finalDeliveryRequestsAfterRecovery": 1
+    },
+    "finalJobStatus": "completed",
+    "finalReturnStatus": "consumed"
+  }
+}
