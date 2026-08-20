@@ -1,0 +1,43 @@
+{
+  "schemaVersion": "runtime-e2e-repro-v1",
+  "benchmark": "Runtime-E2E-GATE-30",
+  "fixtureSeed": 20260819,
+  "variant": "no-recovery",
+  "caseId": "workflow-stage-001",
+  "checkpoint": "product",
+  "observed": {
+    "caseId": "workflow-stage-001",
+    "caseIndex": 15,
+    "scenarioSeed": 3049251897,
+    "family": "workflow-stage",
+    "checkpoint": "product",
+    "variant": "no-recovery",
+    "taskSuccess": false,
+    "recoveryAttempted": true,
+    "recoverySuccess": false,
+    "snapshotReloaded": true,
+    "stateFileWrites": 3,
+    "stateFileLoads": 2,
+    "modelCalls": 1,
+    "duplicateModelCalls": 0,
+    "toolEffects": 0,
+    "duplicateToolEffects": 0,
+    "unknownOutcome": false,
+    "evidenceRequired": 3,
+    "evidenceProduced": 1,
+    "evidenceCompleteness": 0.333333,
+    "wallClockDurationMs": 44.581,
+    "recoveryResult": "workflow-resume-disabled",
+    "productionClasses": [
+      "AgentRunStore",
+      "AgentRuntimeStore",
+      "JsonFileRuntimePersistence",
+      "WorkflowTeamCoordinator"
+    ],
+    "invariants": [],
+    "failureCodes": [
+      "recovery_disabled"
+    ]
+  },
+  "rerun": "npm run benchmark:runtime-e2e:gate30 -- --variant no-recovery --case workflow-stage-001"
+}

@@ -65,11 +65,18 @@ interface ActiveExecutionLease {
   context: ExecutionLeaseContext;
   lease: RuntimeLease;
   stopped: boolean;
+  acceptingJoins: boolean;
   renewals: number;
   timer?: ReturnType<typeof setTimeout>;
   renewalFailure?: unknown;
   queue: Promise<void>;
+  joinedOperations: Set<Promise<unknown>>;
 }
+
+type PendingJobAcquisitionResult =
+  | { status: "acquired"; session: ActiveExecutionLease }
+  | { status: "waiting"; currentLease?: RuntimeLease }
+  | { status: "failed"; error: unknown };
 
 const DEFAULT_TTL_MS = 120_000;
 
@@ -91,6 +98,8 @@ export class ExecutionLeaseCoordinator {
   private readonly maxReleaseAttempts: number;
   private readonly releaseRetryDelayMs: (attempt: number) => number;
   private readonly active = new AsyncLocalStorage<ActiveExecutionLease>();
+  private readonly localJobSessions = new Map<string, ActiveExecutionLease>();
+  private readonly pendingJobAcquisitions = new Map<string, Promise<PendingJobAcquisitionResult>>();
 
   constructor(
     private readonly store: ExecutionLeaseStore,
@@ -122,6 +131,12 @@ export class ExecutionLeaseCoordinator {
     return this.active.getStore()?.context;
   }
 
+  async withJob<T>(jobId: string, operation: () => Promise<T>): Promise<T> {
+    const result = await this.runWithJobLease(jobId, () => operation());
+    if (result.status === "waiting") throw new ExecutionLeaseUnavailableError(jobId);
+    return result.value;
+  }
+
   async runWithJobLease<T>(
     jobId: string,
     operation: (context: ExecutionLeaseContext) => Promise<T>,
@@ -141,17 +156,58 @@ export class ExecutionLeaseCoordinator {
       };
     }
 
-    const acquired = await this.acquireBounded(resource);
-    if (acquired.status === "waiting") return acquired;
-    const session: ActiveExecutionLease = {
-      lease: acquired.lease,
-      context: toContext(acquired.lease, this.ttlMs),
-      stopped: false,
-      renewals: 0,
-      queue: Promise.resolve(),
-    };
-    this.scheduleRenewal(session);
+    const localSession = this.localJobSessions.get(jobId);
+    if (localSession !== undefined && !localSession.stopped && localSession.acceptingJoins) {
+      return this.joinLocalSession(localSession, operation);
+    }
 
+    const pending = this.pendingJobAcquisitions.get(jobId);
+    if (pending !== undefined) return this.joinPendingAcquisition(pending, operation);
+
+    let resolvePending: (result: PendingJobAcquisitionResult) => void = () => undefined;
+    const pendingAcquisition = new Promise<PendingJobAcquisitionResult>((resolve) => {
+      resolvePending = resolve;
+    });
+    this.pendingJobAcquisitions.set(jobId, pendingAcquisition);
+    let acquisition: PendingJobAcquisitionResult;
+    try {
+      const acquired = await this.acquireBounded(resource);
+      if (acquired.status === "waiting") {
+        acquisition = acquired;
+      } else {
+        const session: ActiveExecutionLease = {
+          lease: acquired.lease,
+          context: toContext(acquired.lease, this.ttlMs),
+          stopped: false,
+          acceptingJoins: true,
+          renewals: 0,
+          queue: Promise.resolve(),
+          joinedOperations: new Set(),
+        };
+        this.localJobSessions.set(jobId, session);
+        this.scheduleRenewal(session);
+        acquisition = { status: "acquired", session };
+      }
+    } catch (error) {
+      acquisition = { status: "failed", error };
+    }
+    resolvePending(acquisition);
+    if (this.pendingJobAcquisitions.get(jobId) === pendingAcquisition) {
+      this.pendingJobAcquisitions.delete(jobId);
+    }
+    // Let every caller that observed the pending acquisition join before the
+    // owning operation can close an immediately-resolved local session.
+    await Promise.resolve();
+    if (acquisition.status === "waiting") return acquisition;
+    if (acquisition.status === "failed") throw acquisition.error;
+    return this.runSessionOwner(jobId, acquisition.session, operation);
+  }
+
+  private async runSessionOwner<T>(
+    jobId: string,
+    session: ActiveExecutionLease,
+    operation: (context: ExecutionLeaseContext) => Promise<T>,
+  ): Promise<ExecutionLeaseRunResult<T>> {
     let value: T | undefined;
     let operationFailed = false;
     let operationError: unknown;
@@ -161,11 +217,40 @@ export class ExecutionLeaseCoordinator {
       operationFailed = true;
       operationError = error;
     }
+    session.acceptingJoins = false;
+    if (this.localJobSessions.get(jobId) === session) this.localJobSessions.delete(jobId);
+    await Promise.allSettled([...session.joinedOperations]);
     const cleanupError = await this.stopAndRelease(session);
     if (operationFailed) throw operationError;
     if (session.renewalFailure !== undefined) throw session.renewalFailure;
     if (cleanupError !== undefined) throw cleanupError;
     return { status: "acquired", context: session.context, value: value! };
+  }
+
+  private async joinPendingAcquisition<T>(
+    pending: Promise<PendingJobAcquisitionResult>,
+    operation: (context: ExecutionLeaseContext) => Promise<T>,
+  ): Promise<ExecutionLeaseRunResult<T>> {
+    const acquisition = await pending;
+    if (acquisition.status === "waiting") return acquisition;
+    if (acquisition.status === "failed") throw acquisition.error;
+    return this.joinLocalSession(acquisition.session, operation);
+  }
+
+  private async joinLocalSession<T>(
+    session: ActiveExecutionLease,
+    operation: (context: ExecutionLeaseContext) => Promise<T>,
+  ): Promise<ExecutionLeaseRunResult<T>> {
+    if (session.stopped || !session.acceptingJoins) {
+      throw new Error("Execution lease is no longer accepting local operations");
+    }
+    const joined = this.active.run(session, () => operation(session.context));
+    session.joinedOperations.add(joined);
+    try {
+      return { status: "acquired", context: session.context, value: await joined };
+    } finally {
+      session.joinedOperations.delete(joined);
+    }
   }
 
   async withActiveFencedCommit<T>(
@@ -174,14 +259,16 @@ export class ExecutionLeaseCoordinator {
   ): Promise<T> {
     const session = this.active.getStore();
     if (session === undefined) return commit();
-    if (session.stopped) throw new Error("Execution lease is no longer active");
-    return this.serialize(session, async () => {
-      if (session.renewalFailure !== undefined) throw session.renewalFailure;
-      return this.store.withFencedCommit(
-        session.lease,
-        (fencingToken) => commit(fencingToken),
-      );
-    });
+    return this.commitWithSession(session, commit);
+  }
+
+  async withRequiredActiveFencedCommit<T>(
+    _boundary: ExecutionLeaseCommitBoundary,
+    commit: (fencingToken: number) => T | Promise<T>,
+  ): Promise<T> {
+    const session = this.active.getStore();
+    if (session === undefined) throw new Error("No active execution lease");
+    return this.commitWithSession(session, commit);
   }
 
   async renewActiveLease(): Promise<ExecutionLeaseContext> {
@@ -277,6 +364,17 @@ export class ExecutionLeaseCoordinator {
     const result = session.queue.then(operation);
     session.queue = result.then(() => undefined, () => undefined);
     return result;
+  }
+
+  private commitWithSession<T>(
+    session: ActiveExecutionLease,
+    commit: (fencingToken: number) => T | Promise<T>,
+  ): Promise<T> {
+    if (session.stopped) return Promise.reject(new Error("Execution lease is no longer active"));
+    return this.serialize(session, async () => {
+      if (session.renewalFailure !== undefined) throw session.renewalFailure;
+      return this.store.withFencedCommit(session.lease, commit);
+    });
   }
 }
 

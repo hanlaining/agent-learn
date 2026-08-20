@@ -113,7 +113,8 @@ export class ToolRegistry {
       argumentsJson,
       { signal, ...(turnId === undefined ? {} : { turnId }) },
     );
-    signal.throwIfAborted();
+    // Once a Tool has returned, surface its result so AgentLoop can persist
+    // result_received before deciding whether cancellation permits publishing.
     const output = JSON.stringify(execution.modelOutput);
 
     if (output === undefined) {

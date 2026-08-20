@@ -1,10 +1,14 @@
 import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
+import { pathToFileURL } from "node:url";
 
 import { generateRuntimeE2eScenarios, loadRuntimeE2eFixture } from "../research/runtime-e2e-benchmarks/src/fixtures.js";
+import { normalizeRuntimeE2eErrorMessage } from "../research/runtime-e2e-benchmarks/src/harness.js";
+import { runProcessChaosHarness } from "../research/runtime-e2e-benchmarks/src/process-chaos-harness.js";
 import {
   buildRuntimeE2eReport,
   deterministicProjection,
@@ -59,13 +63,36 @@ test("消融连接真实机制：no-wal/no-recovery/no-lease 产生预期退化"
   assert.ok(noLease.taskSuccess.rate < baseline.taskSuccess.rate);
 });
 
-test("固定 seed 的确定性结果复跑一致，同时保留真实墙钟字段", async () => {
-  const options = { gate: 30 as const, variants: ["baseline" as const], caseId: "model-response-window-001" };
-  const first = await buildRuntimeE2eReport(options);
-  const second = await buildRuntimeE2eReport(options);
-  assert.equal(deterministicProjection(first), deterministicProjection(second));
-  assert.equal(first.cases[0]?.wallClockDurationMs !== undefined, true);
-  assert.equal(first.summaries[0]?.wallClockMs.kind, "measured-local-wall-clock");
+test("异常诊断只规范化 case 临时目录，并保留冲突语义与相对文件名", () => {
+  const caseDirectory = path.join(tmpdir(), "god-agent-runtime-e2e-AbCd12", "no-lease-return-parent-feedback-001");
+  const prefix = "SnapshotConflict: expected generation 1, found 2; reload before retrying ";
+  const nativeMessage = `${prefix}${path.join(caseDirectory, "runtime-state.json")}`;
+  const forwardSlashMessage = nativeMessage.replaceAll("\\", "/");
+
+  assert.equal(
+    normalizeRuntimeE2eErrorMessage(nativeMessage, caseDirectory),
+    `${prefix}${path.join("<case-directory>", "runtime-state.json")}`,
+  );
+  assert.equal(
+    normalizeRuntimeE2eErrorMessage(forwardSlashMessage, caseDirectory),
+    `${prefix}<case-directory>/runtime-state.json`,
+  );
+});
+
+test("固定 seed 的失败反例连续三次确定性投影一致，同时保留安全与墙钟字段", async () => {
+  const options = { gate: 30 as const, variants: ["no-lease" as const], caseId: "return-parent-feedback-001" };
+  const reports = [];
+  for (let repeat = 0; repeat < 3; repeat += 1) {
+    reports.push(await buildRuntimeE2eReport(options));
+  }
+  assert.equal(new Set(reports.map(deterministicProjection)).size, 1);
+  const result = reports[0]!.cases[0]!;
+  assert.equal(result.taskSuccess, false);
+  assert.deepEqual(result.failureCodes, ["snapshot_conflict"]);
+  assert.match(result.recoveryResult, /^exception:snapshot_conflict:SnapshotConflict: expected generation 1, found 2; reload before retrying /u);
+  assert.match(result.recoveryResult, /<case-directory>[\\/]runtime-state\.json$/u);
+  assert.equal(result.wallClockDurationMs !== undefined, true);
+  assert.equal(reports[0]!.summaries[0]?.wallClockMs.kind, "measured-local-wall-clock");
 });
 
 test("GATE-100 fixture 四分片不重不漏", async () => {
@@ -105,4 +132,64 @@ test("失败用例写出 report/CSV 和可单条运行的最小 repro", async ()
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
+});
+
+test("真实 App Server 子进程在无副作用与 Return 窗口强杀后可重启恢复", async (t) => {
+  const directory = await mkdtemp(path.join(tmpdir(), "god-agent-process-chaos-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+
+  const seed = "gate40-seed-1";
+  const caseDirectory = path.join(directory, `process-chaos-${seed}`);
+  const report = await runProcessChaosHarness(directory, seed);
+
+  assert.equal(report.pidChangedAfterReload, true);
+  assert.equal(report.pidChangedAfterOwnerKill, true);
+  assert.equal(report.windows.length, 2);
+  assert.ok(report.windows.every((window) => window.faultPointConfirmed && window.ownerKilled &&
+    window.publicRpcReloaded && window.rawJsonReloaded && window.recovered));
+  assert.equal(report.windows[1]?.leaseWaitObserved, true);
+  assert.equal(report.evidence.finalJobStatus, "completed");
+  assert.equal(report.evidence.finalReturnStatus, "consumed");
+  assert.equal(report.evidence.providerRequestsByStage.return_god, 1);
+  assert.deepEqual(JSON.parse(await readFile(path.join(caseDirectory, report.rawReportPath), "utf8")), report);
+});
+
+test("Process Chaos timeout 在 resolve/reject/timeout 后均不遗留活动 timer", async () => {
+  const harnessUrl = pathToFileURL(path.resolve(
+    "research/runtime-e2e-benchmarks/src/process-chaos-harness.ts",
+  )).href;
+  const probe = [
+    `import { withProcessChaosTimeout } from ${JSON.stringify(harnessUrl)};`,
+    "await withProcessChaosTimeout(Promise.resolve('ok'), 30_000, 'resolve');",
+    "const rejected = await withProcessChaosTimeout(Promise.reject(new Error('expected')), 30_000, 'reject').then(() => false, (error) => error.message === 'expected');",
+    "if (!rejected) throw new Error('reject path was not preserved');",
+    "const timedOut = await withProcessChaosTimeout(new Promise(() => undefined), 10, 'timeout').then(() => false, (error) => error.message === 'Timed out waiting for timeout');",
+    "if (!timedOut) throw new Error('timeout path was not preserved');",
+  ].join("\n");
+  const startedAt = performance.now();
+  const child = spawn(process.execPath, ["--import", "tsx", "--input-type=module", "--eval", probe], {
+    cwd: process.cwd(),
+    env: process.env,
+    stdio: ["ignore", "ignore", "pipe"],
+    windowsHide: true,
+  });
+  let stderr = "";
+  child.stderr.setEncoding("utf8");
+  child.stderr.on("data", (chunk: string) => { stderr += chunk; });
+  await new Promise<void>((resolve, reject) => {
+    let settled = false;
+    const finish = (error?: Error) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      if (error === undefined) resolve(); else reject(error);
+    };
+    const timer = setTimeout(() => {
+      child.kill("SIGKILL");
+      finish(new Error("timeout probe retained a 30 second timer"));
+    }, 5_000);
+    child.once("error", (error) => finish(error));
+    child.once("exit", (code) => finish(code === 0 ? undefined : new Error(`timeout probe failed (${String(code)}): ${stderr}`)));
+  });
+  assert.ok(performance.now() - startedAt < 5_000);
 });

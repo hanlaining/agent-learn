@@ -1,0 +1,45 @@
+{
+  "schemaVersion": "gate-repro-v1",
+  "benchmark": "GATE-30",
+  "fixtureSeed": 20260818,
+  "shard": {
+    "index": 1,
+    "total": 1
+  },
+  "variant": "no-lease",
+  "caseId": "gate-30-022",
+  "caseIndex": 21,
+  "result": {
+    "caseId": "gate-30-022",
+    "caseIndex": 21,
+    "scenarioSeed": 2625768191,
+    "category": "side-effect-safety",
+    "variant": "no-lease",
+    "taskSuccess": false,
+    "recoveryAttempted": true,
+    "recoverySuccess": false,
+    "modelCalls": 2,
+    "duplicateModelCalls": 1,
+    "toolEffects": 2,
+    "duplicateToolEffects": 1,
+    "unknownOutcome": false,
+    "evidenceRequired": 2,
+    "evidenceProduced": 2,
+    "evidenceCompleteness": 1,
+    "latencyMs": 140,
+    "inputTokens": 470,
+    "outputTokens": 300,
+    "costEstimateUsd": 0.00334,
+    "failureCodes": [
+      "duplicate-tool-effect"
+    ],
+    "trace": [
+      "policy:wal=true,recovery=true,lease=false",
+      "scenario:side-effect-safety,crash=after-tool",
+      "lease-disabled:concurrent-worker-copy-executed",
+      "fault-injected:after-tool",
+      "wal:checkpoint-resumed-without-replay"
+    ]
+  },
+  "rerun": "npm run benchmark:gate30 -- --variant no-lease"
+}

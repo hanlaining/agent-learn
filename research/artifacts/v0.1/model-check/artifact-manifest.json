@@ -1,0 +1,228 @@
+{
+  "baselineCommit": "05680a4ecf0f13f7b1b311363732d4922ad9af5b",
+  "environment": {
+    "node": "v20.19.0",
+    "os": {
+      "arch": "x64",
+      "platform": "win32",
+      "release": "10.0.26200"
+    }
+  },
+  "files": [
+    {
+      "bytes": 226,
+      "contentType": "text/markdown",
+      "path": "SCOPE.md",
+      "sha256": "c1c6d606ea55b290dcd3317b08ee5503023bd74300151930fea4deb5b1a355dc"
+    },
+    {
+      "bytes": 15877,
+      "contentType": "text/csv",
+      "path": "cases.csv",
+      "sha256": "210d5ba5dd0cb82c14278d1608ab4ac4a943ba18d9782976c1f5731844597692"
+    },
+    {
+      "bytes": 106900,
+      "contentType": "application/json",
+      "path": "report.json",
+      "sha256": "a120f84c3454f57b08defcd466bd88ba23d9dcb671df6e67d0141e0ec475de59"
+    },
+    {
+      "bytes": 1170,
+      "contentType": "application/json",
+      "path": "repro/no-lease-gate-30-020.json",
+      "sha256": "a09a87166902546597616ba8be9f19da0e01b2e13660b834b4c66542cb55cd9b"
+    },
+    {
+      "bytes": 1169,
+      "contentType": "application/json",
+      "path": "repro/no-lease-gate-30-022.json",
+      "sha256": "9690f478ae4afe7563a2c020dc83cbcea2f656e4ed5663ad22ce9dffa7ac06c2"
+    },
+    {
+      "bytes": 1170,
+      "contentType": "application/json",
+      "path": "repro/no-lease-gate-30-024.json",
+      "sha256": "d523d73fb03134ea5fde715f3fcae8c03e98755d14e63fef0a47a3669ab52b06"
+    },
+    {
+      "bytes": 1139,
+      "contentType": "application/json",
+      "path": "repro/no-recovery-gate-30-001.json",
+      "sha256": "c94bf2c04c03b530c3681d1d47637af39911044bb0e03a8cf7e76a365ed53cb7"
+    },
+    {
+      "bytes": 1138,
+      "contentType": "application/json",
+      "path": "repro/no-recovery-gate-30-002.json",
+      "sha256": "8211df876218c9dab6f66d125e9c688ab229c6b13ab6efe80b29f6b4c3175c00"
+    },
+    {
+      "bytes": 1138,
+      "contentType": "application/json",
+      "path": "repro/no-recovery-gate-30-003.json",
+      "sha256": "aabdf5dbb40dd3f727c6557bc0edb595ebe905128d2854bdf2a5a59b9c4df24b"
+    },
+    {
+      "bytes": 1136,
+      "contentType": "application/json",
+      "path": "repro/no-recovery-gate-30-004.json",
+      "sha256": "971e956a17f2bef6e202c5569538638da06b5883bca5682406c629c8fe5dd32c"
+    },
+    {
+      "bytes": 1141,
+      "contentType": "application/json",
+      "path": "repro/no-recovery-gate-30-005.json",
+      "sha256": "bb73eb5e385666d5394b108bf450c969899b7d39cff5cbcaf2684d18e6040699"
+    },
+    {
+      "bytes": 1139,
+      "contentType": "application/json",
+      "path": "repro/no-recovery-gate-30-006.json",
+      "sha256": "d659bcb6777529494d5cc8bc4208c2c5c6ebdbaaf08fffc0a005d39d527a8465"
+    },
+    {
+      "bytes": 1143,
+      "contentType": "application/json",
+      "path": "repro/no-recovery-gate-30-007.json",
+      "sha256": "6d7608e6a1a5aec2ae76dbc098d9e557245cbe13d9bd4699e22cdd5985715f72"
+    },
+    {
+      "bytes": 1141,
+      "contentType": "application/json",
+      "path": "repro/no-recovery-gate-30-008.json",
+      "sha256": "8d54155ceaab12f11661a83fa850cc19aa8b0cddd645296d16722245695825fa"
+    },
+    {
+      "bytes": 1145,
+      "contentType": "application/json",
+      "path": "repro/no-recovery-gate-30-009.json",
+      "sha256": "696f7d8917bb409edad90d8ea8eb6e1fa3275265dcab9ecb1bdaeb5cea78e288"
+    },
+    {
+      "bytes": 1145,
+      "contentType": "application/json",
+      "path": "repro/no-recovery-gate-30-010.json",
+      "sha256": "b2f2984189629307e7edb8c5144ae08676427ff7a15ec63cf92f6c65013c6451"
+    },
+    {
+      "bytes": 1143,
+      "contentType": "application/json",
+      "path": "repro/no-recovery-gate-30-011.json",
+      "sha256": "fb0578a8990d704e70d3b761a91d048046f29a8cbaa2fb488b79ee4bbe8c5e81"
+    },
+    {
+      "bytes": 1146,
+      "contentType": "application/json",
+      "path": "repro/no-recovery-gate-30-012.json",
+      "sha256": "1626dbcbc0d728e820d19ea7fdc1416024c57b7f4b5cb294b874a4daec72de9f"
+    },
+    {
+      "bytes": 1220,
+      "contentType": "application/json",
+      "path": "repro/no-recovery-gate-30-019.json",
+      "sha256": "b11745d4e1afed5dbfb7f0d49603dee08044a12e96b71507af1072160099df2f"
+    },
+    {
+      "bytes": 1220,
+      "contentType": "application/json",
+      "path": "repro/no-recovery-gate-30-020.json",
+      "sha256": "094a45c558f1738f2b44ba7a4a783a1c7ba5bfc52c91c638e5ffed31337235f9"
+    },
+    {
+      "bytes": 1220,
+      "contentType": "application/json",
+      "path": "repro/no-recovery-gate-30-021.json",
+      "sha256": "759ab3a8a68f6aa4de18af87432fc9ad18b2a687f213fa5bdfd9059041d78133"
+    },
+    {
+      "bytes": 1219,
+      "contentType": "application/json",
+      "path": "repro/no-recovery-gate-30-022.json",
+      "sha256": "60bb433bcb14c6cf9a359a47caf658efc40f9feba86cc76c47a8eb01b8738d0d"
+    },
+    {
+      "bytes": 1220,
+      "contentType": "application/json",
+      "path": "repro/no-recovery-gate-30-023.json",
+      "sha256": "8495e9d2110398d5a5cf85bbe49b866fdb0715f101ff09ec7ce0df55a1a18b4a"
+    },
+    {
+      "bytes": 1219,
+      "contentType": "application/json",
+      "path": "repro/no-recovery-gate-30-024.json",
+      "sha256": "2b40f3442754eb4b9ae0646cd2a3244bc1dc2abae739ab8f0a56050aa408fdce"
+    },
+    {
+      "bytes": 1150,
+      "contentType": "application/json",
+      "path": "repro/no-recovery-gate-30-026.json",
+      "sha256": "799449eea36f6a2ce59e7159ef9fee9f2ef2897055a59d457e95700a97d62fde"
+    },
+    {
+      "bytes": 1155,
+      "contentType": "application/json",
+      "path": "repro/no-recovery-gate-30-028.json",
+      "sha256": "fb504e0a5f81c7b4343570049c5ec1f18f0ff877df8e310c6e7c292be054d089"
+    },
+    {
+      "bytes": 1156,
+      "contentType": "application/json",
+      "path": "repro/no-recovery-gate-30-030.json",
+      "sha256": "da6c16f31f2cb4f8d74b202addf735bbcb04d218c94925e4051c3854520e4ff2"
+    },
+    {
+      "bytes": 1256,
+      "contentType": "application/json",
+      "path": "repro/no-wal-gate-30-019.json",
+      "sha256": "d6a8dbaf2c3420d5cafc65bd18bbd4e692ae4b8adfc0c5baa8341af4aeef50f9"
+    },
+    {
+      "bytes": 1256,
+      "contentType": "application/json",
+      "path": "repro/no-wal-gate-30-020.json",
+      "sha256": "94996b9858e2fcae4642b53e09d03470aa023a963042ec5b5dd340f4494ba7d3"
+    },
+    {
+      "bytes": 1256,
+      "contentType": "application/json",
+      "path": "repro/no-wal-gate-30-021.json",
+      "sha256": "1471e087220f47d25e1b570a8cab8b8ccf43bcf80b2d801af32443cab77888ed"
+    },
+    {
+      "bytes": 1255,
+      "contentType": "application/json",
+      "path": "repro/no-wal-gate-30-022.json",
+      "sha256": "42a06dd36106538208ec2abd3ef75231320feb87ee8b8b778a49b1d0016c40ab"
+    },
+    {
+      "bytes": 1257,
+      "contentType": "application/json",
+      "path": "repro/no-wal-gate-30-023.json",
+      "sha256": "9e3c1e529721d4cdbadd995f47f6ceaa7e4f25ab8630fbca55aeab3db995c514"
+    },
+    {
+      "bytes": 1256,
+      "contentType": "application/json",
+      "path": "repro/no-wal-gate-30-024.json",
+      "sha256": "010b13913a78785c31d0a5364a61361256ca55ec6fa8461cdb5cea3700927704"
+    },
+    {
+      "bytes": 574,
+      "contentType": "text/csv",
+      "path": "summary.csv",
+      "sha256": "163f384fc2dc06288dd491e978d06507dbd5a9a7e938773cbd2f180b33b01a00"
+    }
+  ],
+  "provider": {
+    "credentialsRead": false,
+    "kind": "deterministic-fake",
+    "realApiCalls": false
+  },
+  "run": {
+    "command": "npm exec -- tsx research/benchmarks/src/cli.ts --gate 30 --verify-determinism --out research/artifacts/v0.1/model-check",
+    "finishedAt": "2026-08-20T04:01:13.423Z",
+    "startedAt": "2026-08-20T04:01:10.921Z"
+  },
+  "schemaVersion": "research-artifact-manifest-v1"
+}

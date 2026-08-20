@@ -1,0 +1,180 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/hanlaining/god-agent/research/runtime-e2e-benchmarks/schema/process-chaos-report.schema.json",
+  "title": "God Agent Team Workflow Return narrow Process Chaos report",
+  "description": "Machine-readable narrow E3 evidence for one Team Workflow Return fault window. This is not complete E3, GATE-40, exactly-once, or production-readiness evidence.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion", "experiment", "runStartedAt", "runCompletedAt", "environment", "seed",
+    "productionEntry", "reproCommand", "statePath", "rawReportPath", "ownerPid", "reloadPid",
+    "recoveryPid", "pidChangedAfterReload", "pidChangedAfterOwnerKill", "pidTransitions", "windows", "evidence"
+  ],
+  "properties": {
+    "schemaVersion": { "const": "process-chaos-report-v1" },
+    "experiment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id", "scope", "evidenceLevel", "formalFaultWindowCount", "gate40CompletedWindows",
+        "gate40TotalWindows", "completeE3Matrix", "completeGate40", "exactlyOnceClaimed", "productionReadyClaimed"
+      ],
+      "properties": {
+        "id": { "const": "team-workflow-return-narrow-e3-v1" },
+        "scope": { "const": "Team Workflow Return" },
+        "evidenceLevel": { "const": "narrow-E3" },
+        "formalFaultWindowCount": { "const": 1 },
+        "gate40CompletedWindows": { "const": 1 },
+        "gate40TotalWindows": { "const": 40 },
+        "completeE3Matrix": { "const": false },
+        "completeGate40": { "const": false },
+        "exactlyOnceClaimed": { "const": false },
+        "productionReadyClaimed": { "const": false }
+      }
+    },
+    "runStartedAt": { "type": "string", "format": "date-time" },
+    "runCompletedAt": { "type": "string", "format": "date-time" },
+    "environment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["platform", "arch", "node", "osRelease", "local", "appServerProcess", "provider"],
+      "properties": {
+        "platform": { "type": "string", "minLength": 1 },
+        "arch": { "type": "string", "minLength": 1 },
+        "node": { "type": "string", "minLength": 1 },
+        "osRelease": { "type": "string", "minLength": 1 },
+        "local": { "const": true },
+        "appServerProcess": { "const": "real-child-process" },
+        "provider": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "realApiCalls", "credentialsRead"],
+          "properties": {
+            "kind": { "const": "deterministic-loopback-fake" },
+            "realApiCalls": { "const": false },
+            "credentialsRead": { "const": false }
+          }
+        }
+      }
+    },
+    "seed": { "type": "string", "pattern": "^[a-zA-Z0-9._-]+$" },
+    "productionEntry": { "const": "node --import tsx src/app-server/main.ts" },
+    "reproCommand": {
+      "type": "string",
+      "pattern": "^npm exec -- tsx research/runtime-e2e-benchmarks/src/process-chaos-cli\\.ts --seed [a-zA-Z0-9._-]+ --output <directory>$"
+    },
+    "statePath": {
+      "type": "string",
+      "const": "runtime-state.json",
+      "description": "Canonical POSIX path relative to the case directory; absolute paths, dot segments, and backslashes are forbidden."
+    },
+    "rawReportPath": {
+      "type": "string",
+      "const": "process-chaos-report.json",
+      "description": "Canonical POSIX path relative to the case directory; absolute paths, dot segments, and backslashes are forbidden."
+    },
+    "ownerPid": { "type": "integer", "minimum": 1 },
+    "reloadPid": { "type": "integer", "minimum": 1 },
+    "recoveryPid": { "type": "integer", "minimum": 1 },
+    "pidChangedAfterReload": { "const": true },
+    "pidChangedAfterOwnerKill": { "const": true },
+    "pidTransitions": {
+      "type": "array",
+      "minItems": 2,
+      "maxItems": 2,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["event", "previousPid", "successorPid", "changed"],
+        "properties": {
+          "event": { "enum": ["reload-after-pre-provider-kill", "recovery-after-return-window-kill"] },
+          "previousPid": { "type": "integer", "minimum": 1 },
+          "successorPid": { "type": "integer", "minimum": 1 },
+          "changed": { "const": true }
+        }
+      }
+    },
+    "windows": {
+      "type": "array",
+      "minItems": 2,
+      "maxItems": 2,
+      "items": { "$ref": "#/$defs/window" },
+      "contains": {
+        "type": "object",
+        "required": ["evidenceRole", "countsTowardGate40"],
+        "properties": {
+          "evidenceRole": { "const": "team-workflow-return-fault-window" },
+          "countsTowardGate40": { "const": true }
+        }
+      },
+      "minContains": 1,
+      "maxContains": 1
+    },
+    "evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "threadId", "jobId", "returnId", "ownerLeaseId", "ownerLeaseDeadline", "providerRequests",
+        "providerRequestsByStage", "fakeProvider", "finalJobStatus", "finalReturnStatus"
+      ],
+      "properties": {
+        "threadId": { "type": "string", "minLength": 1 },
+        "jobId": { "type": "string", "minLength": 1 },
+        "returnId": { "type": "string", "minLength": 1 },
+        "ownerLeaseId": { "type": "string", "minLength": 1 },
+        "ownerLeaseDeadline": { "type": "string", "format": "date-time" },
+        "providerRequests": { "type": "integer", "minimum": 0 },
+        "providerRequestsByStage": { "$ref": "#/$defs/requestCounts" },
+        "fakeProvider": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "totalRequests", "requestsByStage", "finalDeliveryRequestsBeforeKill", "finalDeliveryRequestsAfterRecovery"
+          ],
+          "properties": {
+            "totalRequests": { "type": "integer", "minimum": 0 },
+            "requestsByStage": { "$ref": "#/$defs/requestCounts" },
+            "finalDeliveryRequestsBeforeKill": { "const": 1 },
+            "finalDeliveryRequestsAfterRecovery": { "const": 1 }
+          }
+        },
+        "finalJobStatus": { "const": "completed" },
+        "finalReturnStatus": { "const": "consumed" }
+      }
+    }
+  },
+  "$defs": {
+    "requestCounts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["prepare_requirement_plan", "plan_confirmation", "team_workflow", "return_god"],
+      "properties": {
+        "prepare_requirement_plan": { "type": "integer", "minimum": 0 },
+        "plan_confirmation": { "type": "integer", "minimum": 0 },
+        "team_workflow": { "type": "integer", "minimum": 0 },
+        "return_god": { "const": 1 }
+      }
+    },
+    "window": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name", "evidenceRole", "countsTowardGate40", "faultPoint", "recoveryResult",
+        "faultPointConfirmed", "ownerKilled", "publicRpcReloaded", "rawJsonReloaded", "leaseWaitObserved", "recovered"
+      ],
+      "properties": {
+        "name": { "enum": ["no-side-effect-after-turn-start", "return-delivery-with-held-lease"] },
+        "evidenceRole": { "enum": ["persistence-reload-precondition", "team-workflow-return-fault-window"] },
+        "countsTowardGate40": { "type": "boolean" },
+        "faultPoint": { "enum": ["turn-persisted-before-provider-request", "return-response-received-with-job-lease-held"] },
+        "recoveryResult": { "enum": ["state-reloaded-without-provider-request", "lease-wait-then-return-consumed"] },
+        "faultPointConfirmed": { "const": true },
+        "ownerKilled": { "const": true },
+        "publicRpcReloaded": { "const": true },
+        "rawJsonReloaded": { "const": true },
+        "leaseWaitObserved": { "type": "boolean" },
+        "recovered": { "const": true }
+      }
+    }
+  }
+}

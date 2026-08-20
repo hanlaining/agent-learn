@@ -1,0 +1,48 @@
+{
+  "schemaVersion": "gate-repro-v1",
+  "benchmark": "GATE-30",
+  "fixtureSeed": 20260818,
+  "shard": {
+    "index": 1,
+    "total": 1
+  },
+  "variant": "no-wal",
+  "caseId": "gate-30-024",
+  "caseIndex": 23,
+  "result": {
+    "caseId": "gate-30-024",
+    "caseIndex": 23,
+    "scenarioSeed": 3156500184,
+    "category": "side-effect-safety",
+    "variant": "no-wal",
+    "taskSuccess": false,
+    "recoveryAttempted": true,
+    "recoverySuccess": false,
+    "modelCalls": 2,
+    "duplicateModelCalls": 1,
+    "toolEffects": 2,
+    "duplicateToolEffects": 1,
+    "unknownOutcome": true,
+    "evidenceRequired": 2,
+    "evidenceProduced": 1,
+    "evidenceCompleteness": 0.5,
+    "latencyMs": 130,
+    "inputTokens": 956,
+    "outputTokens": 172,
+    "costEstimateUsd": 0.003288,
+    "failureCodes": [
+      "duplicate-tool-effect",
+      "unknown-side-effect-outcome",
+      "incomplete-evidence"
+    ],
+    "trace": [
+      "policy:wal=false,recovery=true,lease=true",
+      "scenario:side-effect-safety,crash=after-tool",
+      "fault-injected:after-tool",
+      "wal-disabled:model-invocation-replayed",
+      "wal-disabled:side-effect-replayed",
+      "side-effect:outcome-unknown"
+    ]
+  },
+  "rerun": "npm run benchmark:gate30 -- --variant no-wal"
+}

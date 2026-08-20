@@ -63,6 +63,17 @@ class DeterministicFakeProvider implements LlmProvider {
   }
 }
 
+export function normalizeRuntimeE2eErrorMessage(message: string, caseDirectory: string): string {
+  const directoryForms = new Set([caseDirectory, path.normalize(caseDirectory)]);
+  for (const directory of [...directoryForms]) {
+    directoryForms.add(directory.replaceAll("\\", "/"));
+  }
+  return [...directoryForms]
+    .filter((directory) => directory.length > 0)
+    .sort((left, right) => right.length - left.length)
+    .reduce((normalized, directory) => normalized.replaceAll(directory, "<case-directory>"), message);
+}
+
 export async function executeRuntimeE2eScenario(
   scenario: RuntimeE2eScenario,
   variant: RuntimeE2eVariant,
@@ -101,7 +112,10 @@ export async function executeRuntimeE2eScenario(
     } as const)[scenario.family](scenario, variant, caseDirectory, metrics);
   } catch (error) {
     metrics.failureCodes.push(errorCode(error));
-    metrics.recoveryResult = `exception:${errorCode(error)}:${error instanceof Error ? error.message : "unknown"}`;
+    const message = error instanceof Error
+      ? normalizeRuntimeE2eErrorMessage(error.message, caseDirectory)
+      : "unknown";
+    metrics.recoveryResult = `exception:${errorCode(error)}:${message}`;
     taskSuccess = false;
   }
 
@@ -633,18 +647,7 @@ async function reloadBundle(bundle: RuntimeBundle, metrics: IoMetrics): Promise<
 }
 
 async function saveBundle(bundle: RuntimeBundle, metrics: IoMetrics): Promise<void> {
-  await bundle.persistence.save(
-    bundle.state.lifecycleStore,
-    bundle.state.contextCheckpointStore,
-    bundle.state.agentRunStore,
-    bundle.state.threadConfigs,
-    bundle.state.agentProfiles,
-    bundle.state.runtimeSessions,
-    bundle.state.agentRuntimeStore,
-    bundle.state.requirementStore,
-    bundle.state.modelInvocationStore,
-    bundle.state.toolInvocationStore,
-  );
+  await bundle.persistence.save(bundle.state);
   metrics.writes += 1;
 }
 
