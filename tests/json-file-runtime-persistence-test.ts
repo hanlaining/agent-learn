@@ -74,6 +74,40 @@ function waitForSuccessfulExit(child: ChildProcess): Promise<void> {
   });
 }
 
+function holdWindowsFileWithoutDeleteSharing(
+  targetPath: string,
+  readyPath: string,
+  holdMilliseconds: number,
+): ChildProcess {
+  const systemRoot = process.env.SystemRoot ?? process.env.SYSTEMROOT ?? "C:\\Windows";
+  const powershell = join(
+    systemRoot,
+    "System32",
+    "WindowsPowerShell",
+    "v1.0",
+    "powershell.exe",
+  );
+  const program = [
+    "$ErrorActionPreference = 'Stop'",
+    "$stream = [System.IO.File]::Open($env:GOD_AGENT_LOCK_TARGET, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::Read)",
+    "try { [System.IO.File]::WriteAllText($env:GOD_AGENT_LOCK_READY, 'ready'); Start-Sleep -Milliseconds ([int]$env:GOD_AGENT_LOCK_HOLD_MS) } finally { $stream.Dispose() }",
+  ].join("; ");
+  return spawn(
+    powershell,
+    ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", program],
+    {
+      env: {
+        ...process.env,
+        GOD_AGENT_LOCK_TARGET: targetPath,
+        GOD_AGENT_LOCK_READY: readyPath,
+        GOD_AGENT_LOCK_HOLD_MS: String(holdMilliseconds),
+      },
+      stdio: "ignore",
+      windowsHide: true,
+    },
+  );
+}
+
 test("状态文件不存在时返回新的空 Store", async (t) => {
   const fixture = await createFixture(t);
   const persistence = new JsonFileRuntimePersistence(
@@ -540,6 +574,68 @@ test("快照 writer 崩溃后不会留下永久锁", async (t) => {
   };
   assert.equal(durable.version, 7);
   assert.equal(durable.generation, 1);
+});
+
+test("Windows 目标文件短暂拒绝 delete sharing 时同一次原子保存可完成", {
+  skip: process.platform !== "win32",
+}, async (t) => {
+  const fixture = await createFixture(t);
+  const persistence = new JsonFileRuntimePersistence(fixture.statePath);
+  const state = await persistence.load();
+  state.lifecycleStore.createThread();
+  await saveLoadedState(persistence, state);
+
+  const readyPath = join(fixture.directory, "windows-sharing-lock-ready");
+  const holder = holdWindowsFileWithoutDeleteSharing(fixture.statePath, readyPath, 250);
+  const holderExit = waitForSuccessfulExit(holder);
+  t.after(() => holder.kill());
+  await waitForFile(readyPath);
+
+  state.lifecycleStore.createThread();
+  await saveLoadedState(persistence, state);
+  await holderExit;
+
+  const durable = JSON.parse(await readFile(fixture.statePath, "utf8")) as {
+    generation: number;
+    lifecycle: { threads: unknown[] };
+  };
+  assert.equal(durable.generation, 2);
+  assert.equal(durable.lifecycle.threads.length, 2);
+  assert.equal(state.generation, 2);
+});
+
+test("Windows 目标文件持续拒绝 delete sharing 时有界重试后仍上抛 EPERM", {
+  skip: process.platform !== "win32",
+}, async (t) => {
+  const fixture = await createFixture(t);
+  const persistence = new JsonFileRuntimePersistence(fixture.statePath);
+  const state = await persistence.load();
+  state.lifecycleStore.createThread();
+  await saveLoadedState(persistence, state);
+
+  const readyPath = join(fixture.directory, "windows-sharing-lock-permanent-ready");
+  const holder = holdWindowsFileWithoutDeleteSharing(fixture.statePath, readyPath, 1_500);
+  const holderExit = waitForSuccessfulExit(holder);
+  t.after(() => holder.kill());
+  await waitForFile(readyPath);
+
+  state.lifecycleStore.createThread();
+  await assert.rejects(
+    () => saveLoadedState(persistence, state),
+    (error: NodeJS.ErrnoException) => {
+      assert.equal(error.code, "EPERM");
+      return true;
+    },
+  );
+  await holderExit;
+
+  const durable = JSON.parse(await readFile(fixture.statePath, "utf8")) as {
+    generation: number;
+    lifecycle: { threads: unknown[] };
+  };
+  assert.equal(durable.generation, 1);
+  assert.equal(durable.lifecycle.threads.length, 1);
+  assert.equal(state.generation, 1);
 });
 
 test("Lease fenced commit 与普通保存共用 Snapshot CAS", async (t) => {

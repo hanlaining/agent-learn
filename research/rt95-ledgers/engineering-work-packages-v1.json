@@ -1,0 +1,1663 @@
+{
+  "schemaVersion": "rt95-engineering-work-packages-v1",
+  "ledgerId": "RT95-ENGINEERING-WORK-PACKAGES-V1",
+  "source": {
+    "document": "docs/God-Agent-科研项目/11-God-Agent双链科研版Runtime-95%完整度实施与验收计划.md",
+    "section": "附录 A：100 个原子 Work Package 评分账本",
+    "scoringDenominator": 100,
+    "domainCounts": {
+      "A": 16,
+      "B": 28,
+      "C": 18,
+      "D": 10,
+      "E": 12,
+      "F": 10,
+      "G": 6
+    }
+  },
+  "statusPolicy": {
+    "scoringStatus": "Verified",
+    "defaultStatus": "NotVerified",
+    "verifiedRule": "每个 WP 只能由总控在生产接线、对应 TC、原始证据和文档全部通过后改为 Verified。"
+  },
+  "workPackages": [
+    {
+      "id": "A01",
+      "epicId": "RT95-101",
+      "domain": "single-agent-multi-chat",
+      "title": "冻结同 Thread 第二 Turn 策略",
+      "p0": false,
+      "dependencies": [
+        "RT95-001",
+        "RT95-002"
+      ],
+      "definitionOfDone": "ADR 明确 reject/queue/replace，非法组合 fail-closed",
+      "risk": "旧交互变化",
+      "rollback": "回滚为显式 reject",
+      "status": "NotVerified",
+      "evidenceRefs": []
+    },
+    {
+      "id": "A02",
+      "epicId": "RT95-101",
+      "domain": "single-agent-multi-chat",
+      "title": "Turn 原子占用",
+      "p0": true,
+      "dependencies": [
+        "A01",
+        "C03"
+      ],
+      "definitionOfDone": "owner/generation；1000 次竞态零双活",
+      "risk": "锁死",
+      "rollback": "退回显式 reject",
+      "status": "NotVerified",
+      "evidenceRefs": []
+    },
+    {
+      "id": "A03",
+      "epicId": "RT95-101",
+      "domain": "single-agent-multi-chat",
+      "title": "持久顺序队列",
+      "p0": false,
+      "dependencies": [
+        "A02",
+        "C05"
+      ],
+      "definitionOfDone": "重启后次序不变，无内存丢队列",
+      "risk": "饥饿",
+      "rollback": "降级为 reject",
+      "status": "NotVerified",
+      "evidenceRefs": []
+    },
+    {
+      "id": "A04",
+      "epicId": "RT95-101",
+      "domain": "single-agent-multi-chat",
+      "title": "保持跨 Thread 真并行",
+      "p0": true,
+      "dependencies": [
+        "A02",
+        "C09"
+      ],
+      "definitionOfDone": "三 Chat 并行，单 Chat 取消不影响其他",
+      "risk": "全局锁退化",
+      "rollback": "撤销全局锁",
+      "status": "NotVerified",
+      "evidenceRefs": []
+    },
+    {
+      "id": "A05",
+      "epicId": "RT95-102",
+      "domain": "single-agent-multi-chat",
+      "title": "CancelSpec 地址合同",
+      "p0": true,
+      "dependencies": [
+        "C01",
+        "C02"
+      ],
+      "definitionOfDone": "`{thread,turn,job,generation}` 缺失/过期均拒绝",
+      "risk": "旧客户端",
+      "rollback": "只读适配器",
+      "status": "NotVerified",
+      "evidenceRefs": []
+    },
+    {
+      "id": "A06",
+      "epicId": "RT95-102",
+      "domain": "single-agent-multi-chat",
+      "title": "Model 迟到结果栅栏",
+      "p0": true,
+      "dependencies": [
+        "A05",
+        "C08"
+      ],
+      "definitionOfDone": "取消后不产生 Assistant/完成事实，只留审计",
+      "risk": "审计丢失",
+      "rollback": "保留 received 事实",
+      "status": "NotVerified",
+      "evidenceRefs": []
+    },
+    {
+      "id": "A07",
+      "epicId": "RT95-102",
+      "domain": "single-agent-multi-chat",
+      "title": "Tool 迟到结果栅栏",
+      "p0": true,
+      "dependencies": [
+        "A05",
+        "C08",
+        "D02"
+      ],
+      "definitionOfDone": "不推进业务；未知副作用进入 unknown",
+      "risk": "误重放",
+      "rollback": "人工裁决",
+      "status": "NotVerified",
+      "evidenceRefs": []
+    },
+    {
+      "id": "A08",
+      "epicId": "RT95-104",
+      "domain": "single-agent-multi-chat",
+      "title": "Context Compiler 隔离",
+      "p0": false,
+      "dependencies": [
+        "C01"
+      ],
+      "definitionOfDone": "Chat 消息、Skill、Summary 零串线",
+      "risk": "上下文缺失",
+      "rollback": "回滚旧 Builder",
+      "status": "NotVerified",
+      "evidenceRefs": []
+    },
+    {
+      "id": "A09",
+      "epicId": "RT95-104",
+      "domain": "single-agent-multi-chat",
+      "title": "Compaction/Checkpoint 隔离",
+      "p0": false,
+      "dependencies": [
+        "A08",
+        "C06"
+      ],
+      "definitionOfDone": "一个 Chat 压缩不改变其他 Chat",
+      "risk": "旧 checkpoint",
+      "rollback": "保留兼容读",
+      "status": "NotVerified",
+      "evidenceRefs": []
+    },
+    {
+      "id": "A10",
+      "epicId": "RT95-104",
+      "domain": "single-agent-multi-chat",
+      "title": "Chat/Turn/Job 投影合同",
+      "p0": false,
+      "dependencies": [
+        "C01",
+        "G04"
+      ],
+      "definitionOfDone": "UI 投影不能反向决定完成",
+      "risk": "投影漂移",
+      "rollback": "只读重建",
+      "status": "NotVerified",
+      "evidenceRefs": []
+    },
+    {
+      "id": "A11",
+      "epicId": "RT95-502",
+      "domain": "single-agent-multi-chat",
+      "title": "Chat/Job 绑定 Workspace/Worktree",
+      "p0": true,
+      "dependencies": [
+        "D03",
+        "D04"
+      ],
+      "definitionOfDone": "运行中 Job 根路径不可随 UI 切换",
+      "risk": "误写目录",
+      "rollback": "未绑定禁写",
+      "status": "NotVerified",
+      "evidenceRefs": []
+    },
+    {
+      "id": "A12",
+      "epicId": "RT95-502",
+      "domain": "single-agent-multi-chat",
+      "title": "Tool/Skill/MCP 归属",
+      "p0": true,
+      "dependencies": [
+        "C02",
+        "D02",
+        "D06"
+      ],
+      "definitionOfDone": "Invocation 只能投递原 Job/Turn",
+      "risk": "旧数据",
+      "rollback": "标 legacy-unattributed",
+      "status": "NotVerified",
+      "evidenceRefs": []
+    },
+    {
+      "id": "A13",
+      "epicId": "RT95-104",
+      "domain": "single-agent-multi-chat",
+      "title": "恢复投影等待/unknown",
+      "p0": false,
+      "dependencies": [
+        "A10",
+        "C16",
+        "G04"
+      ],
+      "definitionOfDone": "waiting/recovering/unknown 明确区分",
+      "risk": "UI 误导",
+      "rollback": "统一安全状态",
+      "status": "NotVerified",
+      "evidenceRefs": []
+    },
+    {
+      "id": "A14",
+      "epicId": "RT95-102",
+      "domain": "single-agent-multi-chat",
+      "title": "多 Chat 崩溃恢复隔离",
+      "p0": true,
+      "dependencies": [
+        "C06",
+        "C16"
+      ],
+      "definitionOfDone": "一个 Job 恢复失败不阻断其他 Job",
+      "risk": "启动失败",
+      "rollback": "单 Job 隔离降级",
+      "status": "NotVerified",
+      "evidenceRefs": []
+    },
+    {
+      "id": "A15",
+      "epicId": "RT95-101",
+      "domain": "single-agent-multi-chat",
+      "title": "多 Chat E2 攻击矩阵",
+      "p0": false,
+      "dependencies": [
+        "A02",
+        "A03",
+        "A04",
+        "A05",
+        "A06",
+        "A07",
+        "A08",
+        "A09",
+        "A10",
+        "A11",
+        "A12",
+        "A13",
+        "A14"
+      ],
+      "definitionOfDone": "生产组装下并发、取消、错投全过",
+      "risk": "Test Double 假绿",
+      "rollback": "强制公共入口",
+      "status": "NotVerified",
+      "evidenceRefs": []
+    },
+    {
+      "id": "A16",
+      "epicId": "RT95-101",
+      "domain": "single-agent-multi-chat",
+      "title": "Electron 多 Chat E3",
+      "p0": false,
+      "dependencies": [
+        "A15",
+        "G04",
+        "G05"
+      ],
+      "definitionOfDone": "真窗口创建、切换、并行、取消、重启",
+      "risk": "UI flake",
+      "rollback": "视频不可代替断言",
+      "status": "NotVerified",
+      "evidenceRefs": []
+    },
+    {
+      "id": "B01",
+      "epicId": "RT95-201",
+      "domain": "parent-child-supervisor",
+      "title": "Requirement revision 引用",
+      "p0": false,
+      "dependencies": [
+        "RT95-001",
+        "RT95-002"
+      ],
+      "definitionOfDone": "Task 指向确定 revision/hash",
+      "risk": "旧 Job",
+      "rollback": "标 legacy",
+      "status": "NotVerified",
+      "evidenceRefs": []
+    },
+    {
+      "id": "B02",
+      "epicId": "RT95-202",
+      "domain": "parent-child-supervisor",
+      "title": "Plan Draft Schema",
+      "p0": false,
+      "dependencies": [
+        "B01"
+      ],
+      "definitionOfDone": "Draft 可序列化但绝不可执行",
+      "risk": "Schema 过宽",
+      "rollback": "默认拒绝",
+      "status": "NotVerified",
+      "evidenceRefs": []
+    },
+    {
+      "id": "B03",
+      "epicId": "RT95-203",
+      "domain": "parent-child-supervisor",
+      "title": "稳定 Task ID",
+      "p0": false,
+      "dependencies": [
+        "B02"
+      ],
+      "definitionOfDone": "重放同 Plan 得相同逻辑 ID",
+      "risk": "碰撞",
+      "rollback": "加入 planVersion/namespace",
+      "status": "NotVerified",
+      "evidenceRefs": []
+    },
+    {
+      "id": "B04",
+      "epicId": "RT95-201",
+      "domain": "parent-child-supervisor",
+      "title": "完整 Task Contract",
+      "p0": true,
+      "dependencies": [
+        "B01",
+        "D01"
+      ],
+      "definitionOfDone": "生产入口不再使用泛化默认验收",
+      "risk": "模型缺字段",
+      "rollback": "请求修复而非补默认",
+      "status": "NotVerified",
+      "evidenceRefs": []
+    },
+    {
+      "id": "B05",
+      "epicId": "RT95-205",
+      "domain": "parent-child-supervisor",
+      "title": "criterion→Task 映射",
+      "p0": true,
+      "dependencies": [
+        "B04",
+        "E01"
+      ],
+      "definitionOfDone": "每 criterion 有责任 Task/Oracle",
+      "risk": "假覆盖",
+      "rollback": "必须声明 verifier",
+      "status": "NotVerified",
+      "evidenceRefs": []
+    },
+    {
+      "id": "B06",
+      "epicId": "RT95-201",
+      "domain": "parent-child-supervisor",
+      "title": "Task 绑定 Grant/Quota",
+      "p0": false,
+      "dependencies": [
+        "B04",
+        "D01",
+        "D08"
+      ],
+      "definitionOfDone": "运行中授权不可扩大",
+      "risk": "旧任务",
+      "rollback": "安全默认值",
+      "status": "NotVerified",
+      "evidenceRefs": []
+    },
+    {
+      "id": "B07",
+      "epicId": "RT95-201",
+      "domain": "parent-child-supervisor",
+      "title": "Task 绑定 Wait/Review/Side-effect",
+      "p0": false,
+      "dependencies": [
+        "B04"
+      ],
+      "definitionOfDone": "deadline、oracle、副作用不可省略",
+      "risk": "合同过重",
+      "rollback": "受控模板",
+      "status": "NotVerified",
+      "evidenceRefs": []
+    },
+    {
+      "id": "B08",
+      "epicId": "RT95-203",
+      "domain": "parent-child-supervisor",
+      "title": "Graph 结构校验",
+      "p0": true,
+      "dependencies": [
+        "B02",
+        "B03",
+        "B04"
+      ],
+      "definitionOfDone": "重复 ID、缺节点、环全部拒绝",
+      "risk": "大图开销",
+      "rollback": "规模上限",
+      "status": "NotVerified",
+      "evidenceRefs": []
+    },
+    {
+      "id": "B09",
+      "epicId": "RT95-205",
+      "domain": "parent-child-supervisor",
+      "title": "Requirement Coverage 校验",
+      "p0": true,
+      "dependencies": [
+        "B05",
+        "E02"
+      ],
+      "definitionOfDone": "零 Task、漏 criterion、循环证明拒绝",
+      "risk": "语义难验",
+      "rollback": "人工门禁",
+      "status": "NotVerified",
+      "evidenceRefs": []
+    },
+    {
+      "id": "B10",
+      "epicId": "RT95-203",
+      "domain": "parent-child-supervisor",
+      "title": "权限/文件/预算冲突校验",
+      "p0": false,
+      "dependencies": [
+        "B06",
+        "D02",
+        "D03",
+        "D04"
+      ],
+      "definitionOfDone": "越权、冲突、超预算执行前拒绝",
+      "risk": "误报",
+      "rollback": "显式 Amendment",
+      "status": "NotVerified",
+      "evidenceRefs": []
+    },
+    {
+      "id": "B11",
+      "epicId": "RT95-202",
+      "domain": "parent-child-supervisor",
+      "title": "Plan 原子 Commit",
+      "p0": true,
+      "dependencies": [
+        "B08",
+        "B09",
+        "B10",
+        "C07"
+      ],
+      "definitionOfDone": "整图 Commit 前零 Child",
+      "risk": "部分写",
+      "rollback": "CAS/Journal 回滚",
+      "status": "NotVerified",
+      "evidenceRefs": []
+    },
+    {
+      "id": "B12",
+      "epicId": "RT95-202",
+      "domain": "parent-child-supervisor",
+      "title": "Dispatch Fence",
+      "p0": true,
+      "dependencies": [
+        "B11",
+        "C08"
+      ],
+      "definitionOfDone": "仅已 Commit planVersion 可派发",
+      "risk": "旧事件",
+      "rollback": "generation 拒绝",
+      "status": "NotVerified",
+      "evidenceRefs": []
+    },
+    {
+      "id": "B13",
+      "epicId": "RT95-204",
+      "domain": "parent-child-supervisor",
+      "title": "Amendment 生命周期",
+      "p0": false,
+      "dependencies": [
+        "B11"
+      ],
+      "definitionOfDone": "新增/删除/重拆生成新版本和原因",
+      "risk": "频繁改图",
+      "rollback": "次数上限",
+      "status": "NotVerified",
+      "evidenceRefs": []
+    },
+    {
+      "id": "B14",
+      "epicId": "RT95-204",
+      "domain": "parent-child-supervisor",
+      "title": "Amendment 事件迁移",
+      "p0": false,
+      "dependencies": [
+        "B13",
+        "C05"
+      ],
+      "definitionOfDone": "旧版本事件不能推进新图",
+      "risk": "孤儿 Task",
+      "rollback": "archived/unknown",
+      "status": "NotVerified",
+      "evidenceRefs": []
+    },
+    {
+      "id": "B15",
+      "epicId": "RT95-301",
+      "domain": "parent-child-supervisor",
+      "title": "Supervisor 状态机合同",
+      "p0": true,
+      "dependencies": [
+        "B11",
+        "C03"
+      ],
+      "definitionOfDone": "所有合法/非法迁移定义完备",
+      "risk": "状态爆炸",
+      "rollback": "最小集冻结",
+      "status": "NotVerified",
+      "evidenceRefs": []
+    },
+    {
+      "id": "B16",
+      "epicId": "RT95-301",
+      "domain": "parent-child-supervisor",
+      "title": "确定性 Supervisor Reducer",
+      "p0": true,
+      "dependencies": [
+        "B15",
+        "C04"
+      ],
+      "definitionOfDone": "相同事件重放得相同状态",
+      "risk": "模型混入 reducer",
+      "rollback": "禁止概率转移",
+      "status": "NotVerified",
+      "evidenceRefs": []
+    },
+    {
+      "id": "B17",
+      "epicId": "RT95-301",
+      "domain": "parent-child-supervisor",
+      "title": "模型决策点唤醒",
+      "p0": false,
+      "dependencies": [
+        "B16"
+      ],
+      "definitionOfDone": "只在拆解、冲突、重规划时调用模型",
+      "risk": "调用过频",
+      "rollback": "预算/退避",
+      "status": "NotVerified",
+      "evidenceRefs": []
+    },
+    {
+      "id": "B18",
+      "epicId": "RT95-303",
+      "domain": "parent-child-supervisor",
+      "title": "Child 增量事件协议",
+      "p0": true,
+      "dependencies": [
+        "B16",
+        "C03"
+      ],
+      "definitionOfDone": "started/progress/blocked/evidence/terminal 持久化",
+      "risk": "事件洪水",
+      "rollback": "合并非关键 progress",
+      "status": "NotVerified",
+      "evidenceRefs": []
+    },
+    {
+      "id": "B19",
+      "epicId": "RT95-303",
+      "domain": "parent-child-supervisor",
+      "title": "消除批次屏障",
+      "p0": true,
+      "dependencies": [
+        "B18",
+        "C05"
+      ],
+      "definitionOfDone": "任一 Child 完成即验证/解锁",
+      "risk": "Tool 轮语义变化",
+      "rollback": "兼容入口",
+      "status": "NotVerified",
+      "evidenceRefs": []
+    },
+    {
+      "id": "B20",
+      "epicId": "RT95-302",
+      "domain": "parent-child-supervisor",
+      "title": "WaitSpec/Wake Registry",
+      "p0": true,
+      "dependencies": [
+        "B15",
+        "C16"
+      ],
+      "definitionOfDone": "对象、事件、deadline、动作齐全",
+      "risk": "永不唤醒",
+      "rollback": "deadline fail-safe",
+      "status": "NotVerified",
+      "evidenceRefs": []
+    },
+    {
+      "id": "B21",
+      "epicId": "RT95-302",
+      "domain": "parent-child-supervisor",
+      "title": "Wake Adapter",
+      "p0": false,
+      "dependencies": [
+        "B20"
+      ],
+      "definitionOfDone": "dependency/human/tool/quota，重复 wake 幂等",
+      "risk": "漏事件",
+      "rollback": "启动扫描兜底",
+      "status": "NotVerified",
+      "evidenceRefs": []
+    },
+    {
+      "id": "B22",
+      "epicId": "RT95-304",
+      "domain": "parent-child-supervisor",
+      "title": "Guidance Mailbox 持久化",
+      "p0": true,
+      "dependencies": [
+        "B18",
+        "C06"
+      ],
+      "definitionOfDone": "绑定 Task/Run/version/expiry",
+      "risk": "错投",
+      "rollback": "归属校验",
+      "status": "NotVerified",
+      "evidenceRefs": []
+    },
+    {
+      "id": "B23",
+      "epicId": "RT95-304",
+      "domain": "parent-child-supervisor",
+      "title": "Guidance 安全消费",
+      "p0": true,
+      "dependencies": [
+        "B22"
+      ],
+      "definitionOfDone": "Model/Tool 调用间只消费一次",
+      "risk": "中断上下文",
+      "rollback": "迟到作废",
+      "status": "NotVerified",
+      "evidenceRefs": []
+    },
+    {
+      "id": "B24",
+      "epicId": "RT95-305",
+      "domain": "parent-child-supervisor",
+      "title": "Worker Heartbeat 协议",
+      "p0": true,
+      "dependencies": [
+        "B18",
+        "C03"
+      ],
+      "definitionOfDone": "周期续租且可观测",
+      "risk": "时钟漂移",
+      "rollback": "容差/单调计时",
+      "status": "NotVerified",
+      "evidenceRefs": []
+    },
+    {
+      "id": "B25",
+      "epicId": "RT95-305",
+      "domain": "parent-child-supervisor",
+      "title": "slow/blocked/lost 分类",
+      "p0": true,
+      "dependencies": [
+        "B24"
+      ],
+      "definitionOfDone": "强杀后有界生成持久决策",
+      "risk": "误杀慢任务",
+      "rollback": "多阶段阈值",
+      "status": "NotVerified",
+      "evidenceRefs": []
+    },
+    {
+      "id": "B26",
+      "epicId": "RT95-306",
+      "domain": "parent-child-supervisor",
+      "title": "副作用感知 Recovery",
+      "p0": true,
+      "dependencies": [
+        "B07",
+        "B25",
+        "E06"
+      ],
+      "definitionOfDone": "pure/queryable/idempotent/non-replayable 分流",
+      "risk": "分类错误",
+      "rollback": "默认最保守",
+      "status": "NotVerified",
+      "evidenceRefs": []
+    },
+    {
+      "id": "B27",
+      "epicId": "RT95-307",
+      "domain": "parent-child-supervisor",
+      "title": "Scheduler 持久重建",
+      "p0": true,
+      "dependencies": [
+        "B20",
+        "B24",
+        "C16"
+      ],
+      "definitionOfDone": "不再以丢弃 queue 恢复",
+      "risk": "重复派发",
+      "rollback": "Dispatch Fence",
+      "status": "NotVerified",
+      "evidenceRefs": []
+    },
+    {
+      "id": "B28",
+      "epicId": "RT95-307",
+      "domain": "parent-child-supervisor",
+      "title": "Job 间公平调度",
+      "p0": false,
+      "dependencies": [
+        "B27",
+        "D08",
+        "D09"
+      ],
+      "definitionOfDone": "大 Job 不饿死小 Job，原因可查询",
+      "risk": "吞吐下降",
+      "rollback": "可配置权重",
+      "status": "NotVerified",
+      "evidenceRefs": []
+    },
+    {
+      "id": "C01",
+      "epicId": "RT95-104",
+      "domain": "authoritative-state-concurrency-recovery-migration",
+      "title": "Authority Registry",
+      "p0": true,
+      "dependencies": [
+        "RT95-001",
+        "RT95-002"
+      ],
+      "definitionOfDone": "Lifecycle/Requirement/Job/Run/Proof 各有唯一 Owner",
+      "risk": "双权威",
+      "rollback": "投影禁写回",
+      "status": "NotVerified",
+      "evidenceRefs": []
+    },
+    {
+      "id": "C02",
+      "epicId": "RT95-105",
+      "domain": "authoritative-state-concurrency-recovery-migration",
+      "title": "统一关联 ID",
+      "p0": false,
+      "dependencies": [
+        "C01"
+      ],
+      "definitionOfDone": "Thread→Invocation 全链 correlation/causation",
+      "risk": "旧数据",
+      "rollback": "legacy correlation",
+      "status": "NotVerified",
+      "evidenceRefs": []
+    },
+    {
+      "id": "C03",
+      "epicId": "RT95-105",
+      "domain": "authoritative-state-concurrency-recovery-migration",
+      "title": "Event Envelope v1",
+      "p0": true,
+      "dependencies": [
+        "C01",
+        "C02"
+      ],
+      "definitionOfDone": "event/aggregate/generation/causation 齐全",
+      "risk": "字段漂移",
+      "rollback": "schemaVersion",
+      "status": "NotVerified",
+      "evidenceRefs": []
+    },
+    {
+      "id": "C04",
+      "epicId": "RT95-105",
+      "domain": "authoritative-state-concurrency-recovery-migration",
+      "title": "事件幂等应用",
+      "p0": true,
+      "dependencies": [
+        "C03"
+      ],
+      "definitionOfDone": "eventId 重放不二次推进",
+      "risk": "索引膨胀",
+      "rollback": "分区保留策略",
+      "status": "NotVerified",
+      "evidenceRefs": []
+    },
+    {
+      "id": "C05",
+      "epicId": "RT95-105",
+      "domain": "authoritative-state-concurrency-recovery-migration",
+      "title": "乱序/迟到规则",
+      "p0": false,
+      "dependencies": [
+        "C03",
+        "C04"
+      ],
+      "definitionOfDone": "旧 generation 拒绝，事实留审计",
+      "risk": "合法迟到丢失",
+      "rollback": "审计隔离",
+      "status": "NotVerified",
+      "evidenceRefs": []
+    },
+    {
+      "id": "C06",
+      "epicId": "RT95-103",
+      "domain": "authoritative-state-concurrency-recovery-migration",
+      "title": "Job 分区目录",
+      "p0": true,
+      "dependencies": [
+        "C01"
+      ],
+      "definitionOfDone": "state/journal/proof 与 Lease 粒度一致",
+      "risk": "迁移风险",
+      "rollback": "影子目录",
+      "status": "NotVerified",
+      "evidenceRefs": []
+    },
+    {
+      "id": "C07",
+      "epicId": "RT95-103",
+      "domain": "authoritative-state-concurrency-recovery-migration",
+      "title": "每 Job CAS/原子写",
+      "p0": true,
+      "dependencies": [
+        "C06"
+      ],
+      "definitionOfDone": "不同 Job 不争全局 generation",
+      "risk": "部分写",
+      "rollback": "temp+rename+checksum",
+      "status": "NotVerified",
+      "evidenceRefs": []
+    },
+    {
+      "id": "C08",
+      "epicId": "RT95-103",
+      "domain": "authoritative-state-concurrency-recovery-migration",
+      "title": "Fencing 接入所有分区写",
+      "p0": true,
+      "dependencies": [
+        "C07"
+      ],
+      "definitionOfDone": "无 active token 不能提交",
+      "risk": "兼容入口绕过",
+      "rollback": "启动检查",
+      "status": "NotVerified",
+      "evidenceRefs": []
+    },
+    {
+      "id": "C09",
+      "epicId": "RT95-103",
+      "domain": "authoritative-state-concurrency-recovery-migration",
+      "title": "跨 Job 并行写",
+      "p0": true,
+      "dependencies": [
+        "C07",
+        "C08"
+      ],
+      "definitionOfDone": "两 Job 并行、同 Job 无双写",
+      "risk": "全局元数据锁",
+      "rollback": "拆分索引",
+      "status": "NotVerified",
+      "evidenceRefs": []
+    },
+    {
+      "id": "C10",
+      "epicId": "RT95-103",
+      "domain": "authoritative-state-concurrency-recovery-migration",
+      "title": "Snapshot v7 只读兼容",
+      "p0": true,
+      "dependencies": [
+        "C06"
+      ],
+      "definitionOfDone": "原快照加载但不隐式迁移",
+      "risk": "隐式升级",
+      "rollback": "只读",
+      "status": "NotVerified",
+      "evidenceRefs": []
+    },
+    {
+      "id": "C11",
+      "epicId": "RT95-103",
+      "domain": "authoritative-state-concurrency-recovery-migration",
+      "title": "迁移计划/版本合同",
+      "p0": true,
+      "dependencies": [
+        "C10"
+      ],
+      "definitionOfDone": "dry-run 输出对象数、哈希、风险",
+      "risk": "未知版本",
+      "rollback": "拒绝",
+      "status": "NotVerified",
+      "evidenceRefs": []
+    },
+    {
+      "id": "C12",
+      "epicId": "RT95-103",
+      "domain": "authoritative-state-concurrency-recovery-migration",
+      "title": "单向迁移执行器",
+      "p0": false,
+      "dependencies": [
+        "C11",
+        "C07"
+      ],
+      "definitionOfDone": "中断可重跑，语义投影一致",
+      "risk": "中断",
+      "rollback": "幂等 marker",
+      "status": "NotVerified",
+      "evidenceRefs": []
+    },
+    {
+      "id": "C13",
+      "epicId": "RT95-103",
+      "domain": "authoritative-state-concurrency-recovery-migration",
+      "title": "双读影子比对",
+      "p0": false,
+      "dependencies": [
+        "C12"
+      ],
+      "definitionOfDone": "冻结窗口旧/新状态一致",
+      "risk": "性能",
+      "rollback": "仅迁移期开",
+      "status": "NotVerified",
+      "evidenceRefs": []
+    },
+    {
+      "id": "C14",
+      "epicId": "RT95-103",
+      "domain": "authoritative-state-concurrency-recovery-migration",
+      "title": "迁移备份/回滚点",
+      "p0": true,
+      "dependencies": [
+        "C11"
+      ],
+      "definitionOfDone": "backup 哈希可验，不覆盖原证据",
+      "risk": "备份失效",
+      "rollback": "verify 后迁移",
+      "status": "NotVerified",
+      "evidenceRefs": []
+    },
+    {
+      "id": "C15",
+      "epicId": "RT95-103",
+      "domain": "authoritative-state-concurrency-recovery-migration",
+      "title": "损坏检测/只读恢复",
+      "p0": true,
+      "dependencies": [
+        "C07",
+        "C14"
+      ],
+      "definitionOfDone": "截断、篡改、缺分区不自动覆盖",
+      "risk": "不可用",
+      "rollback": "安全导出",
+      "status": "NotVerified",
+      "evidenceRefs": []
+    },
+    {
+      "id": "C16",
+      "epicId": "RT95-104",
+      "domain": "authoritative-state-concurrency-recovery-migration",
+      "title": "Supervisor/Proof 重建入口",
+      "p0": true,
+      "dependencies": [
+        "C06",
+        "B15",
+        "E10"
+      ],
+      "definitionOfDone": "fact-only 重建，不调用外部副作用",
+      "risk": "恢复误调用",
+      "rollback": "强制 fact-only",
+      "status": "NotVerified",
+      "evidenceRefs": []
+    },
+    {
+      "id": "C17",
+      "epicId": "RT95-103",
+      "domain": "authoritative-state-concurrency-recovery-migration",
+      "title": "临时文件/锁/进程清理",
+      "p0": false,
+      "dependencies": [
+        "C07"
+      ],
+      "definitionOfDone": "kill/restart 无残留；owner/epoch 校验",
+      "risk": "误删活跃资源",
+      "rollback": "拒绝不明 owner",
+      "status": "NotVerified",
+      "evidenceRefs": []
+    },
+    {
+      "id": "C18",
+      "epicId": "RT95-103",
+      "domain": "authoritative-state-concurrency-recovery-migration",
+      "title": "分区容量基线",
+      "p0": false,
+      "dependencies": [
+        "C06",
+        "C07",
+        "C08",
+        "C09",
+        "C10",
+        "C11",
+        "C12",
+        "C13",
+        "C14",
+        "C15",
+        "C16",
+        "C17"
+      ],
+      "definitionOfDone": "1k/10k/100k 报告，不全表扫描超限",
+      "risk": "过早优化",
+      "rollback": "profile 后调整",
+      "status": "NotVerified",
+      "evidenceRefs": []
+    },
+    {
+      "id": "D01",
+      "epicId": "RT95-501",
+      "domain": "capability-namespace-quota",
+      "title": "CapabilityGrant Schema",
+      "p0": true,
+      "dependencies": [
+        "B04",
+        "C01"
+      ],
+      "definitionOfDone": "来源、scope、risk、budget、expiry 齐全",
+      "risk": "语义不清",
+      "rollback": "默认拒绝",
+      "status": "NotVerified",
+      "evidenceRefs": []
+    },
+    {
+      "id": "D02",
+      "epicId": "RT95-501",
+      "domain": "capability-namespace-quota",
+      "title": "五层权限交集接线",
+      "p0": true,
+      "dependencies": [
+        "D01"
+      ],
+      "definitionOfDone": "Profile∩Job∩Task∩Workspace∩Confirm",
+      "risk": "误授权",
+      "rollback": "空交集停止",
+      "status": "NotVerified",
+      "evidenceRefs": []
+    },
+    {
+      "id": "D03",
+      "epicId": "RT95-502",
+      "domain": "capability-namespace-quota",
+      "title": "Workspace 路径 Namespace",
+      "p0": true,
+      "dependencies": [
+        "D02"
+      ],
+      "definitionOfDone": "`..`、链接、大小写逃逸拒绝",
+      "risk": "Windows 差异",
+      "rollback": "平台矩阵",
+      "status": "NotVerified",
+      "evidenceRefs": []
+    },
+    {
+      "id": "D04",
+      "epicId": "RT95-502",
+      "domain": "capability-namespace-quota",
+      "title": "Worktree/File Claim Namespace",
+      "p0": false,
+      "dependencies": [
+        "D03",
+        "B10"
+      ],
+      "definitionOfDone": "重叠写执行前拒绝，只读可共享",
+      "risk": "阻塞过粗",
+      "rollback": "显式只读",
+      "status": "NotVerified",
+      "evidenceRefs": []
+    },
+    {
+      "id": "D05",
+      "epicId": "RT95-502",
+      "domain": "capability-namespace-quota",
+      "title": "Credential Namespace",
+      "p0": true,
+      "dependencies": [
+        "D02"
+      ],
+      "definitionOfDone": "Child 只拿 Handle，日志不含 Secret",
+      "risk": "泄漏",
+      "rollback": "统一脱敏",
+      "status": "NotVerified",
+      "evidenceRefs": []
+    },
+    {
+      "id": "D06",
+      "epicId": "RT95-502",
+      "domain": "capability-namespace-quota",
+      "title": "MCP Namespace",
+      "p0": true,
+      "dependencies": [
+        "D02",
+        "C02"
+      ],
+      "definitionOfDone": "结果/取消/退出只影响归属调用",
+      "risk": "Server 串态",
+      "rollback": "先每 Job 隔离",
+      "status": "NotVerified",
+      "evidenceRefs": []
+    },
+    {
+      "id": "D07",
+      "epicId": "RT95-502",
+      "domain": "capability-namespace-quota",
+      "title": "Terminal/Process Namespace",
+      "p0": true,
+      "dependencies": [
+        "D02",
+        "D03"
+      ],
+      "definitionOfDone": "只能控制所属进程树",
+      "risk": "误杀",
+      "rollback": "PID+owner 校验",
+      "status": "NotVerified",
+      "evidenceRefs": []
+    },
+    {
+      "id": "D08",
+      "epicId": "RT95-503",
+      "domain": "capability-namespace-quota",
+      "title": "多维 Quota Ledger",
+      "p0": true,
+      "dependencies": [
+        "D01",
+        "C06"
+      ],
+      "definitionOfDone": "Token/time/tool/process/output/disk 原子扣减",
+      "risk": "重复扣减",
+      "rollback": "Invocation 幂等键",
+      "status": "NotVerified",
+      "evidenceRefs": []
+    },
+    {
+      "id": "D09",
+      "epicId": "RT95-503",
+      "domain": "capability-namespace-quota",
+      "title": "背压和 Quota Wait",
+      "p0": false,
+      "dependencies": [
+        "D08",
+        "B20"
+      ],
+      "definitionOfDone": "超限进入明确 waiting/failed",
+      "risk": "永久等待",
+      "rollback": "deadline",
+      "status": "NotVerified",
+      "evidenceRefs": []
+    },
+    {
+      "id": "D10",
+      "epicId": "RT95-504",
+      "domain": "capability-namespace-quota",
+      "title": "Noisy-neighbor 攻击",
+      "p0": false,
+      "dependencies": [
+        "D03",
+        "D04",
+        "D05",
+        "D06",
+        "D07",
+        "D08",
+        "D09",
+        "B28"
+      ],
+      "definitionOfDone": "A 压满时 B 正常推进",
+      "risk": "Fake 负载失真",
+      "rollback": "绑定环境",
+      "status": "NotVerified",
+      "evidenceRefs": []
+    },
+    {
+      "id": "E01",
+      "epicId": "RT95-401",
+      "domain": "verification-completion-proof",
+      "title": "Evidence Contract v1",
+      "p0": true,
+      "dependencies": [
+        "B04",
+        "C02"
+      ],
+      "definitionOfDone": "criterion/producer/digest/command/time 齐全",
+      "risk": "旧 Evidence",
+      "rollback": "legacy-unverified",
+      "status": "NotVerified",
+      "evidenceRefs": []
+    },
+    {
+      "id": "E02",
+      "epicId": "RT95-401",
+      "domain": "verification-completion-proof",
+      "title": "新鲜度/revision 绑定",
+      "p0": true,
+      "dependencies": [
+        "E01",
+        "B13"
+      ],
+      "definitionOfDone": "旧 Plan/Artifact 不证明新 criterion",
+      "risk": "过度失效",
+      "rollback": "显式复验",
+      "status": "NotVerified",
+      "evidenceRefs": []
+    },
+    {
+      "id": "E03",
+      "epicId": "RT95-402",
+      "domain": "verification-completion-proof",
+      "title": "Artifact digest 验证",
+      "p0": true,
+      "dependencies": [
+        "E01",
+        "D03"
+      ],
+      "definitionOfDone": "缺失、篡改、旧文件拒绝",
+      "risk": "大文件",
+      "rollback": "流式哈希",
+      "status": "NotVerified",
+      "evidenceRefs": []
+    },
+    {
+      "id": "E04",
+      "epicId": "RT95-402",
+      "domain": "verification-completion-proof",
+      "title": "Diff/路径/禁止文件验证",
+      "p0": false,
+      "dependencies": [
+        "E03",
+        "D04"
+      ],
+      "definitionOfDone": "越界、敏感、未声明文件拒绝",
+      "risk": "生成物误报",
+      "rollback": "allowlist",
+      "status": "NotVerified",
+      "evidenceRefs": []
+    },
+    {
+      "id": "E05",
+      "epicId": "RT95-403",
+      "domain": "verification-completion-proof",
+      "title": "Test Report Verifier",
+      "p0": true,
+      "dependencies": [
+        "E01",
+        "D07"
+      ],
+      "definitionOfDone": "Runtime 采集命令、exit、report digest",
+      "risk": "伪造结果",
+      "rollback": "禁止 Worker 自报",
+      "status": "NotVerified",
+      "evidenceRefs": []
+    },
+    {
+      "id": "E06",
+      "epicId": "RT95-403",
+      "domain": "verification-completion-proof",
+      "title": "Oracle Adapter",
+      "p0": true,
+      "dependencies": [
+        "E01",
+        "B26"
+      ],
+      "definitionOfDone": "queryable/unqueryable 有确定返回",
+      "risk": "外部不稳",
+      "rollback": "unknown 不转成功",
+      "status": "NotVerified",
+      "evidenceRefs": []
+    },
+    {
+      "id": "E07",
+      "epicId": "RT95-404",
+      "domain": "verification-completion-proof",
+      "title": "Reviewer 权限隔离",
+      "p0": true,
+      "dependencies": [
+        "D02",
+        "E01"
+      ],
+      "definitionOfDone": "Reviewer 只读且不能修改产物",
+      "risk": "证据不可读",
+      "rollback": "最小只读 Grant",
+      "status": "NotVerified",
+      "evidenceRefs": []
+    },
+    {
+      "id": "E08",
+      "epicId": "RT95-404",
+      "domain": "verification-completion-proof",
+      "title": "Reviewer 使用 Proof Fragment",
+      "p0": true,
+      "dependencies": [
+        "E03",
+        "E05",
+        "E06",
+        "E07"
+      ],
+      "definitionOfDone": "Summary 单独不能 pass",
+      "risk": "上下文过大",
+      "rollback": "索引按需读",
+      "status": "NotVerified",
+      "evidenceRefs": []
+    },
+    {
+      "id": "E09",
+      "epicId": "RT95-405",
+      "domain": "verification-completion-proof",
+      "title": "Arbiter 合同",
+      "p0": true,
+      "dependencies": [
+        "E08"
+      ],
+      "definitionOfDone": "冲突/P0/返工耗尽触发且引用证据",
+      "risk": "角色堆叠",
+      "rollback": "条件触发",
+      "status": "NotVerified",
+      "evidenceRefs": []
+    },
+    {
+      "id": "E10",
+      "epicId": "RT95-406",
+      "domain": "verification-completion-proof",
+      "title": "Completion Proof Builder",
+      "p0": true,
+      "dependencies": [
+        "B05",
+        "E01",
+        "E02",
+        "E03",
+        "E04",
+        "E05",
+        "E06",
+        "E07",
+        "E08",
+        "E09"
+      ],
+      "definitionOfDone": "criterion→有效 Evidence 完整映射",
+      "risk": "自证循环",
+      "rollback": "Proof 禁作 Evidence",
+      "status": "NotVerified",
+      "evidenceRefs": []
+    },
+    {
+      "id": "E11",
+      "epicId": "RT95-406",
+      "domain": "verification-completion-proof",
+      "title": "Blocking contradiction/unknown",
+      "p0": true,
+      "dependencies": [
+        "E10",
+        "B26"
+      ],
+      "definitionOfDone": "存在阻断即不得 completed",
+      "risk": "难收口",
+      "rollback": "人工升级",
+      "status": "NotVerified",
+      "evidenceRefs": []
+    },
+    {
+      "id": "E12",
+      "epicId": "RT95-407",
+      "domain": "verification-completion-proof",
+      "title": "唯一本地 Final Receipt",
+      "p0": true,
+      "dependencies": [
+        "E10",
+        "E11",
+        "C08"
+      ],
+      "definitionOfDone": "crash/replay 下一份接受记录",
+      "risk": "exactly-once 误称",
+      "rollback": "窄语义命名",
+      "status": "NotVerified",
+      "evidenceRefs": []
+    },
+    {
+      "id": "F01",
+      "epicId": "RT95-601",
+      "domain": "research-reproducibility",
+      "title": "拆分科研构念/指标",
+      "p0": false,
+      "dependencies": [
+        "RT95-001",
+        "RT95-002",
+        "RT95-003"
+      ],
+      "definitionOfDone": "safety/business/known/duplicate 分开",
+      "risk": "历史不可比",
+      "rollback": "保留旧字段",
+      "status": "NotVerified",
+      "evidenceRefs": []
+    },
+    {
+      "id": "F02",
+      "epicId": "RT95-601",
+      "domain": "research-reproducibility",
+      "title": "实验 Schema v2",
+      "p0": false,
+      "dependencies": [
+        "F01"
+      ],
+      "definitionOfDone": "字段、单位、分母机器校验",
+      "risk": "旧报告",
+      "rollback": "v1 reader",
+      "status": "NotVerified",
+      "evidenceRefs": []
+    },
+    {
+      "id": "F03",
+      "epicId": "RT95-602",
+      "domain": "research-reproducibility",
+      "title": "八组单变量消融",
+      "p0": false,
+      "dependencies": [
+        "F02",
+        "E12"
+      ],
+      "definitionOfDone": "同入口/fixture/seed/budget，配置 Diff",
+      "risk": "多机制误关",
+      "rollback": "审计配置",
+      "status": "NotVerified",
+      "evidenceRefs": []
+    },
+    {
+      "id": "F04",
+      "epicId": "RT95-603",
+      "domain": "research-reproducibility",
+      "title": "Dynamic 双 App Server E3",
+      "p0": true,
+      "dependencies": [
+        "B27",
+        "C16",
+        "E12"
+      ],
+      "definitionOfDone": "预注册边界真 kill/restart",
+      "risk": "Harness 冒充",
+      "rollback": "公共 RPC",
+      "status": "NotVerified",
+      "evidenceRefs": []
+    },
+    {
+      "id": "F05",
+      "epicId": "RT95-604",
+      "domain": "research-reproducibility",
+      "title": "八窗口×五 seed GATE-40",
+      "p0": true,
+      "dependencies": [
+        "F04"
+      ],
+      "definitionOfDone": "40 条正负 raw 全保存",
+      "risk": "只存成功",
+      "rollback": "Manifest 强制",
+      "status": "NotVerified",
+      "evidenceRefs": []
+    },
+    {
+      "id": "F06",
+      "epicId": "RT95-605",
+      "domain": "research-reproducibility",
+      "title": "重复实验/统计",
+      "p0": false,
+      "dependencies": [
+        "F03",
+        "F05"
+      ],
+      "definitionOfDone": "CI、效应量、P50/P95，排除规则预注册",
+      "risk": "事后改指标",
+      "rollback": "D04 留痕",
+      "status": "NotVerified",
+      "evidenceRefs": []
+    },
+    {
+      "id": "F07",
+      "epicId": "RT95-607",
+      "domain": "research-reproducibility",
+      "title": "原始证据保管链",
+      "p0": true,
+      "dependencies": [
+        "F02",
+        "F03",
+        "F04",
+        "F05",
+        "F06"
+      ],
+      "definitionOfDone": "每个汇总数字回到 raw",
+      "risk": "历史缺失",
+      "rollback": "标不可核验",
+      "status": "NotVerified",
+      "evidenceRefs": []
+    },
+    {
+      "id": "F08",
+      "epicId": "RT95-607",
+      "domain": "research-reproducibility",
+      "title": "顶层 Manifest",
+      "p0": true,
+      "dependencies": [
+        "F07"
+      ],
+      "definitionOfDone": "Claim 关键文件全部登记",
+      "risk": "自包含",
+      "rollback": "排除自身哈希",
+      "status": "NotVerified",
+      "evidenceRefs": []
+    },
+    {
+      "id": "F09",
+      "epicId": "RT95-606",
+      "domain": "research-reproducibility",
+      "title": "外部无指导复现",
+      "p0": true,
+      "dependencies": [
+        "F08",
+        "G03"
+      ],
+      "definitionOfDone": "至少两人/两环境完成主要步骤",
+      "risk": "隐含环境",
+      "rollback": "失败反哺 SOP",
+      "status": "NotVerified",
+      "evidenceRefs": []
+    },
+    {
+      "id": "F10",
+      "epicId": "RT95-608",
+      "domain": "research-reproducibility",
+      "title": "Claim–Evidence 最终审计",
+      "p0": true,
+      "dependencies": [
+        "F09",
+        "G01",
+        "G02"
+      ],
+      "definitionOfDone": "无越级 Claim，负结果不删除",
+      "risk": "为得分降门",
+      "rollback": "独立总控审查",
+      "status": "NotVerified",
+      "evidenceRefs": []
+    },
+    {
+      "id": "G01",
+      "epicId": "RT95-608",
+      "domain": "ui-documentation-handoff-sop",
+      "title": "修复 README 当前事实",
+      "p0": true,
+      "dependencies": [
+        "RT95-001",
+        "RT95-002",
+        "RT95-003"
+      ],
+      "definitionOfDone": "Electron/Multi-Agent/命令/测试口径准确",
+      "risk": "再漂移",
+      "rollback": "CI 比对事实源",
+      "status": "NotVerified",
+      "evidenceRefs": []
+    },
+    {
+      "id": "G02",
+      "epicId": "RT95-608",
+      "domain": "ui-documentation-handoff-sop",
+      "title": "D00～D11 基线治理",
+      "p0": true,
+      "dependencies": [
+        "RT95-003"
+      ],
+      "definitionOfDone": "当前单一事实；历史带 date/version",
+      "risk": "覆盖历史",
+      "rollback": "只追加迁移说明",
+      "status": "NotVerified",
+      "evidenceRefs": []
+    },
+    {
+      "id": "G03",
+      "epicId": "RT95-606",
+      "domain": "ui-documentation-handoff-sop",
+      "title": "Task Contract/交接 SOP",
+      "p0": true,
+      "dependencies": [
+        "B04",
+        "F02"
+      ],
+      "definitionOfDone": "新 Chat 可独立执行一个 WP",
+      "risk": "口头依赖",
+      "rollback": "外部 Pilot",
+      "status": "NotVerified",
+      "evidenceRefs": []
+    },
+    {
+      "id": "G04",
+      "epicId": "RT95-505",
+      "domain": "ui-documentation-handoff-sop",
+      "title": "Supervisor/Graph UI 投影",
+      "p0": false,
+      "dependencies": [
+        "B18",
+        "B27",
+        "C01"
+      ],
+      "definitionOfDone": "只展示权威状态，不推测",
+      "risk": "UI 抢跑",
+      "rollback": "最小只读视图",
+      "status": "NotVerified",
+      "evidenceRefs": []
+    },
+    {
+      "id": "G05",
+      "epicId": "RT95-505",
+      "domain": "ui-documentation-handoff-sop",
+      "title": "Wait/Guidance/Proof/Unknown UI",
+      "p0": false,
+      "dependencies": [
+        "B20",
+        "B22",
+        "E10",
+        "E11"
+      ],
+      "definitionOfDone": "用户能区分等待、指导、失败、未知",
+      "risk": "误操作",
+      "rollback": "generation/权限确认",
+      "status": "NotVerified",
+      "evidenceRefs": []
+    },
+    {
+      "id": "G06",
+      "epicId": "RT95-606",
+      "domain": "ui-documentation-handoff-sop",
+      "title": "SOP 演示/证据导出",
+      "p0": false,
+      "dependencies": [
+        "A16",
+        "F09",
+        "G03",
+        "G04",
+        "G05"
+      ],
+      "definitionOfDone": "双 Chat、父子图、恢复、Proof、限制可演示",
+      "risk": "演示代替测试",
+      "rollback": "必须引用自动证据",
+      "status": "NotVerified",
+      "evidenceRefs": []
+    }
+  ]
+}

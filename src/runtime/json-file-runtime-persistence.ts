@@ -133,6 +133,12 @@ interface SnapshotStateIdentity {
   runtimeSessions: PersistedRuntimeSession[];
 }
 
+// Windows can transiently deny replacement while a reader or system scanner
+// still holds the destination without delete sharing. Retrying this one
+// syscall while the cross-process snapshot lock remains held preserves the
+// same CAS attempt and the same atomic-rename linearization point.
+const WINDOWS_RENAME_RETRY_DELAYS_MS = [10, 20, 40, 80, 100, 150, 200, 200, 200] as const;
+
 /**
  * 把 Runtime 状态保存为单个版本化 JSON 文件。
  * 写入先落到同目录临时文件，再 rename，避免进程中断留下半份 JSON。
@@ -399,12 +405,37 @@ export class JsonFileRuntimePersistence {
       await writeFile(temporaryPath, text, { encoding: "utf8", flag: "wx" });
       // Linearization point: generation comparison and this atomic replacement
       // are in one cross-process critical section.
-      await rename(temporaryPath, this.statePath);
+      await renameSnapshotWithWindowsSharingRetry(temporaryPath, this.statePath);
     } catch (error) {
       await rm(temporaryPath, { force: true });
       throw error;
     }
   }
+}
+
+async function renameSnapshotWithWindowsSharingRetry(
+  temporaryPath: string,
+  statePath: string,
+): Promise<void> {
+  for (let retry = 0; ; retry += 1) {
+    try {
+      await rename(temporaryPath, statePath);
+      return;
+    } catch (error) {
+      if (
+        process.platform !== "win32" ||
+        !hasErrorCode(error, "EPERM") ||
+        retry >= WINDOWS_RENAME_RETRY_DELAYS_MS.length
+      ) {
+        throw error;
+      }
+      await sleep(WINDOWS_RENAME_RETRY_DELAYS_MS[retry]!);
+    }
+  }
+}
+
+function sleep(milliseconds: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
 
 function snapshotGeneration(value: Record<string, unknown>): number {
