@@ -1,0 +1,4015 @@
+{
+  "schemaVersion": "rt95-test-cases-v1",
+  "ledgerId": "RT95-TEST-CASES-V1",
+  "source": {
+    "document": "docs/God-Agent-科研项目/03-测试用例与验收标准.md",
+    "section": "第 19 节：TC-RT95 预注册测试账本（150 条，v0.1）",
+    "scoringDenominator": 150,
+    "transcriptionRule": "逐行转录 D03 TC-RT95-001..150；不增删顶层分母。",
+    "categoryCounts": {
+      "normal-mainline": 10,
+      "fail-closed": 10,
+      "duplicate-out-of-order-late": 10,
+      "concurrency-race": 10,
+      "cancellation-timeout-late-results": 10,
+      "crash-recovery": 10,
+      "multi-process": 10,
+      "lease-fencing": 10,
+      "partition-migration": 10,
+      "task-contract-graph": 10,
+      "supervisor-wait-guidance-heartbeat": 10,
+      "evidence-proof-arbiter": 10,
+      "capability-namespace": 10,
+      "quota-backpressure-fairness": 10,
+      "performance-durability-reproduction": 10
+    }
+  },
+  "statusPolicy": {
+    "allowedStatuses": [
+      "Designed",
+      "BlockedByDecision",
+      "Implemented",
+      "PartiallyVerified",
+      "Failed",
+      "Unknown"
+    ],
+    "scoringStatus": "Verified",
+    "defaultStatus": "Designed",
+    "verifiedRule": "W0 阶段禁止任何顶层 TC 标记为 Verified；普通 evidenceFiles 路径不构成 Completion Proof。只有未来升级 schema、引入结构化 Completion Proof，并同时满足生产入口、规定重复次数、独立 Oracle、原始证据和文档门禁后，才可启用 Verified；组件 variant 通过不自动升级。"
+  },
+  "testCases": [
+    {
+      "id": "TC-RT95-001",
+      "category": "normal-mainline",
+      "p0": true,
+      "evidenceLevel": "E2/E3",
+      "preconditions": [
+        "Requirement、Turn 策略、基本 Grant 已冻结；Fake Provider 明示"
+      ],
+      "steps": [
+        "单 Chat 正常 Turn"
+      ],
+      "faultBoundary": "none",
+      "oracle": "唯一 completed Turn、唯一 Assistant",
+      "invariants": [
+        "INV-RT95-01",
+        "INV-RT95-05",
+        "INV-RT95-10",
+        "INV-RT95-12"
+      ],
+      "status": "Designed",
+      "caseVariants": [],
+      "evidenceFiles": [],
+      "limitations": [
+        "测试合同，不代表已实现或通过；组件 variant 仅为候选证据，不能自动升级顶层 TC。"
+      ]
+    },
+    {
+      "id": "TC-RT95-002",
+      "category": "normal-mainline",
+      "p0": true,
+      "evidenceLevel": "E3",
+      "preconditions": [
+        "Requirement、Turn 策略、基本 Grant 已冻结；Fake Provider 明示"
+      ],
+      "steps": [
+        "三 Chat 同时执行"
+      ],
+      "faultBoundary": "none",
+      "oracle": "三套 Context、状态、结果零交叉",
+      "invariants": [
+        "INV-RT95-01",
+        "INV-RT95-05",
+        "INV-RT95-10",
+        "INV-RT95-12"
+      ],
+      "status": "Designed",
+      "caseVariants": [],
+      "evidenceFiles": [],
+      "limitations": [
+        "测试合同，不代表已实现或通过；组件 variant 仅为候选证据，不能自动升级顶层 TC。"
+      ]
+    },
+    {
+      "id": "TC-RT95-003",
+      "category": "normal-mainline",
+      "p0": false,
+      "evidenceLevel": "E2/E3",
+      "preconditions": [
+        "Requirement、Turn 策略、基本 Grant 已冻结；Fake Provider 明示"
+      ],
+      "steps": [
+        "Model→Tool→Model"
+      ],
+      "faultBoundary": "none",
+      "oracle": "WAL 顺序正确，最终结果一次",
+      "invariants": [
+        "INV-RT95-01",
+        "INV-RT95-05",
+        "INV-RT95-10",
+        "INV-RT95-12"
+      ],
+      "status": "Designed",
+      "caseVariants": [],
+      "evidenceFiles": [],
+      "limitations": [
+        "测试合同，不代表已实现或通过；组件 variant 仅为候选证据，不能自动升级顶层 TC。"
+      ]
+    },
+    {
+      "id": "TC-RT95-004",
+      "category": "normal-mainline",
+      "p0": true,
+      "evidenceLevel": "E3",
+      "preconditions": [
+        "Requirement、Turn 策略、基本 Grant 已冻结；Fake Provider 明示"
+      ],
+      "steps": [
+        "父提交三个独立 Task"
+      ],
+      "faultBoundary": "none",
+      "oracle": "三 Child 并行并分别产生 Return",
+      "invariants": [
+        "INV-RT95-01",
+        "INV-RT95-05",
+        "INV-RT95-10",
+        "INV-RT95-12"
+      ],
+      "status": "Designed",
+      "caseVariants": [],
+      "evidenceFiles": [],
+      "limitations": [
+        "测试合同，不代表已实现或通过；组件 variant 仅为候选证据，不能自动升级顶层 TC。"
+      ]
+    },
+    {
+      "id": "TC-RT95-005",
+      "category": "normal-mainline",
+      "p0": true,
+      "evidenceLevel": "E2/E3",
+      "preconditions": [
+        "Requirement、Turn 策略、基本 Grant 已冻结；Fake Provider 明示"
+      ],
+      "steps": [
+        "fork/join DAG"
+      ],
+      "faultBoundary": "none",
+      "oracle": "Join 只在所有上游验证后启动",
+      "invariants": [
+        "INV-RT95-01",
+        "INV-RT95-05",
+        "INV-RT95-10",
+        "INV-RT95-12"
+      ],
+      "status": "Designed",
+      "caseVariants": [],
+      "evidenceFiles": [],
+      "limitations": [
+        "测试合同，不代表已实现或通过；组件 variant 仅为候选证据，不能自动升级顶层 TC。"
+      ]
+    },
+    {
+      "id": "TC-RT95-006",
+      "category": "normal-mainline",
+      "p0": true,
+      "evidenceLevel": "E3",
+      "preconditions": [
+        "Requirement、Turn 策略、基本 Grant 已冻结；Fake Provider 明示"
+      ],
+      "steps": [
+        "Child 先后完成"
+      ],
+      "faultBoundary": "none",
+      "oracle": "先完成者立即验证并解锁下游",
+      "invariants": [
+        "INV-RT95-01",
+        "INV-RT95-05",
+        "INV-RT95-10",
+        "INV-RT95-12"
+      ],
+      "status": "Designed",
+      "caseVariants": [],
+      "evidenceFiles": [],
+      "limitations": [
+        "测试合同，不代表已实现或通过；组件 variant 仅为候选证据，不能自动升级顶层 TC。"
+      ]
+    },
+    {
+      "id": "TC-RT95-007",
+      "category": "normal-mainline",
+      "p0": true,
+      "evidenceLevel": "E2/E3",
+      "preconditions": [
+        "Requirement、Turn 策略、基本 Grant 已冻结；Fake Provider 明示"
+      ],
+      "steps": [
+        "Reviewer 正常通过"
+      ],
+      "faultBoundary": "none",
+      "oracle": "Proof Fragment 被引用，Task completed",
+      "invariants": [
+        "INV-RT95-01",
+        "INV-RT95-05",
+        "INV-RT95-10",
+        "INV-RT95-12"
+      ],
+      "status": "Designed",
+      "caseVariants": [],
+      "evidenceFiles": [],
+      "limitations": [
+        "测试合同，不代表已实现或通过；组件 variant 仅为候选证据，不能自动升级顶层 TC。"
+      ]
+    },
+    {
+      "id": "TC-RT95-008",
+      "category": "normal-mainline",
+      "p0": true,
+      "evidenceLevel": "E3",
+      "preconditions": [
+        "Requirement、Turn 策略、基本 Grant 已冻结；Fake Provider 明示"
+      ],
+      "steps": [
+        "Supervisor 等待人工反馈"
+      ],
+      "faultBoundary": "none",
+      "oracle": "按原 Job/Plan revision 恢复",
+      "invariants": [
+        "INV-RT95-01",
+        "INV-RT95-05",
+        "INV-RT95-10",
+        "INV-RT95-12"
+      ],
+      "status": "Designed",
+      "caseVariants": [],
+      "evidenceFiles": [],
+      "limitations": [
+        "测试合同，不代表已实现或通过；组件 variant 仅为候选证据，不能自动升级顶层 TC。"
+      ]
+    },
+    {
+      "id": "TC-RT95-009",
+      "category": "normal-mainline",
+      "p0": true,
+      "evidenceLevel": "E3",
+      "preconditions": [
+        "Requirement、Turn 策略、基本 Grant 已冻结；Fake Provider 明示"
+      ],
+      "steps": [
+        "全部 criterion 有效覆盖"
+      ],
+      "faultBoundary": "none",
+      "oracle": "Completion Proof 唯一提交",
+      "invariants": [
+        "INV-RT95-01",
+        "INV-RT95-05",
+        "INV-RT95-10",
+        "INV-RT95-12"
+      ],
+      "status": "Designed",
+      "caseVariants": [],
+      "evidenceFiles": [],
+      "limitations": [
+        "测试合同，不代表已实现或通过；组件 variant 仅为候选证据，不能自动升级顶层 TC。"
+      ]
+    },
+    {
+      "id": "TC-RT95-010",
+      "category": "normal-mainline",
+      "p0": true,
+      "evidenceLevel": "E3",
+      "preconditions": [
+        "Requirement、Turn 策略、基本 Grant 已冻结；Fake Provider 明示"
+      ],
+      "steps": [
+        "Final Delivery"
+      ],
+      "faultBoundary": "none",
+      "oracle": "唯一可见结果和唯一 Receipt",
+      "invariants": [
+        "INV-RT95-01",
+        "INV-RT95-05",
+        "INV-RT95-10",
+        "INV-RT95-12"
+      ],
+      "status": "Designed",
+      "caseVariants": [],
+      "evidenceFiles": [],
+      "limitations": [
+        "测试合同，不代表已实现或通过；组件 variant 仅为候选证据，不能自动升级顶层 TC。"
+      ]
+    },
+    {
+      "id": "TC-RT95-011",
+      "category": "fail-closed",
+      "p0": false,
+      "evidenceLevel": "E2",
+      "preconditions": [
+        "Contract/Graph/Proof Schema 冻结"
+      ],
+      "steps": [
+        "缺 objective"
+      ],
+      "faultBoundary": "缺 objective",
+      "oracle": "Plan 拒绝，零 Child/副作用",
+      "invariants": [
+        "INV-RT95-04",
+        "INV-RT95-05",
+        "INV-RT95-06",
+        "INV-RT95-07",
+        "INV-RT95-08",
+        "INV-RT95-09",
+        "INV-RT95-10"
+      ],
+      "status": "Designed",
+      "caseVariants": [],
+      "evidenceFiles": [],
+      "limitations": [
+        "测试合同，不代表已实现或通过；组件 variant 仅为候选证据，不能自动升级顶层 TC。"
+      ]
+    },
+    {
+      "id": "TC-RT95-012",
+      "category": "fail-closed",
+      "p0": true,
+      "evidenceLevel": "E2",
+      "preconditions": [
+        "Contract/Graph/Proof Schema 冻结"
+      ],
+      "steps": [
+        "缺 acceptanceCriteria"
+      ],
+      "faultBoundary": "缺 acceptanceCriteria",
+      "oracle": "Plan 拒绝",
+      "invariants": [
+        "INV-RT95-04",
+        "INV-RT95-05",
+        "INV-RT95-06",
+        "INV-RT95-07",
+        "INV-RT95-08",
+        "INV-RT95-09",
+        "INV-RT95-10"
+      ],
+      "status": "Designed",
+      "caseVariants": [],
+      "evidenceFiles": [],
+      "limitations": [
+        "测试合同，不代表已实现或通过；组件 variant 仅为候选证据，不能自动升级顶层 TC。"
+      ]
+    },
+    {
+      "id": "TC-RT95-013",
+      "category": "fail-closed",
+      "p0": true,
+      "evidenceLevel": "E2",
+      "preconditions": [
+        "Contract/Graph/Proof Schema 冻结"
+      ],
+      "steps": [
+        "criterion 未映射 Task/Oracle"
+      ],
+      "faultBoundary": "criterion 未映射 Task/Oracle",
+      "oracle": "Coverage Gate 拒绝",
+      "invariants": [
+        "INV-RT95-04",
+        "INV-RT95-05",
+        "INV-RT95-06",
+        "INV-RT95-07",
+        "INV-RT95-08",
+        "INV-RT95-09",
+        "INV-RT95-10"
+      ],
+      "status": "Designed",
+      "caseVariants": [],
+      "evidenceFiles": [],
+      "limitations": [
+        "测试合同，不代表已实现或通过；组件 variant 仅为候选证据，不能自动升级顶层 TC。"
+      ]
+    },
+    {
+      "id": "TC-RT95-014",
+      "category": "fail-closed",
+      "p0": false,
+      "evidenceLevel": "E2",
+      "preconditions": [
+        "Contract/Graph/Proof Schema 冻结"
+      ],
+      "steps": [
+        "DAG 引用不存在 Task"
+      ],
+      "faultBoundary": "DAG 引用不存在 Task",
+      "oracle": "Graph Commit 拒绝",
+      "invariants": [
+        "INV-RT95-04",
+        "INV-RT95-05",
+        "INV-RT95-06",
+        "INV-RT95-07",
+        "INV-RT95-08",
+        "INV-RT95-09",
+        "INV-RT95-10"
+      ],
+      "status": "Designed",
+      "caseVariants": [],
+      "evidenceFiles": [],
+      "limitations": [
+        "测试合同，不代表已实现或通过；组件 variant 仅为候选证据，不能自动升级顶层 TC。"
+      ]
+    },
+    {
+      "id": "TC-RT95-015",
+      "category": "fail-closed",
+      "p0": true,
+      "evidenceLevel": "E2",
+      "preconditions": [
+        "Contract/Graph/Proof Schema 冻结"
+      ],
+      "steps": [
+        "DAG 有环"
+      ],
+      "faultBoundary": "DAG 有环",
+      "oracle": "Graph Commit 拒绝",
+      "invariants": [
+        "INV-RT95-04",
+        "INV-RT95-05",
+        "INV-RT95-06",
+        "INV-RT95-07",
+        "INV-RT95-08",
+        "INV-RT95-09",
+        "INV-RT95-10"
+      ],
+      "status": "Designed",
+      "caseVariants": [],
+      "evidenceFiles": [],
+      "limitations": [
+        "测试合同，不代表已实现或通过；组件 variant 仅为候选证据，不能自动升级顶层 TC。"
+      ]
+    },
+    {
+      "id": "TC-RT95-016",
+      "category": "fail-closed",
+      "p0": true,
+      "evidenceLevel": "E2/E3",
+      "preconditions": [
+        "Contract/Graph/Proof Schema 冻结"
+      ],
+      "steps": [
+        "Child 请求扩大权限"
+      ],
+      "faultBoundary": "Child 请求扩大权限",
+      "oracle": "fail-closed，Effective Grant 不变",
+      "invariants": [
+        "INV-RT95-04",
+        "INV-RT95-05",
+        "INV-RT95-06",
+        "INV-RT95-07",
+        "INV-RT95-08",
+        "INV-RT95-09",
+        "INV-RT95-10"
+      ],
+      "status": "Designed",
+      "caseVariants": [],
+      "evidenceFiles": [],
+      "limitations": [
+        "测试合同，不代表已实现或通过；组件 variant 仅为候选证据，不能自动升级顶层 TC。"
+      ]
+    },
+    {
+      "id": "TC-RT95-017",
+      "category": "fail-closed",
+      "p0": true,
+      "evidenceLevel": "E2/E3",
+      "preconditions": [
+        "Contract/Graph/Proof Schema 冻结"
+      ],
+      "steps": [
+        "Artifact 路径越界"
+      ],
+      "faultBoundary": "Artifact 路径越界",
+      "oracle": "验证前拒绝，不读取边界外文件",
+      "invariants": [
+        "INV-RT95-04",
+        "INV-RT95-05",
+        "INV-RT95-06",
+        "INV-RT95-07",
+        "INV-RT95-08",
+        "INV-RT95-09",
+        "INV-RT95-10"
+      ],
+      "status": "Designed",
+      "caseVariants": [],
+      "evidenceFiles": [],
+      "limitations": [
+        "测试合同，不代表已实现或通过；组件 variant 仅为候选证据，不能自动升级顶层 TC。"
+      ]
+    },
+    {
+      "id": "TC-RT95-018",
+      "category": "fail-closed",
+      "p0": true,
+      "evidenceLevel": "E2",
+      "preconditions": [
+        "Contract/Graph/Proof Schema 冻结"
+      ],
+      "steps": [
+        "只提交 Worker Summary"
+      ],
+      "faultBoundary": "只提交 Worker Summary",
+      "oracle": "criterion 保持未覆盖",
+      "invariants": [
+        "INV-RT95-04",
+        "INV-RT95-05",
+        "INV-RT95-06",
+        "INV-RT95-07",
+        "INV-RT95-08",
+        "INV-RT95-09",
+        "INV-RT95-10"
+      ],
+      "status": "Designed",
+      "caseVariants": [
+        "W0-E01-002",
+        "W0-ELEG-001",
+        "W0-EVAL-006"
+      ],
+      "evidenceFiles": [],
+      "limitations": [
+        "测试合同，不代表已实现或通过；组件 variant 仅为候选证据，不能自动升级顶层 TC。"
+      ]
+    },
+    {
+      "id": "TC-RT95-019",
+      "category": "fail-closed",
+      "p0": true,
+      "evidenceLevel": "E2/E3",
+      "preconditions": [
+        "Contract/Graph/Proof Schema 冻结"
+      ],
+      "steps": [
+        "Proof 含 blocking contradiction"
+      ],
+      "faultBoundary": "Proof 含 blocking contradiction",
+      "oracle": "Job 不得 completed",
+      "invariants": [
+        "INV-RT95-04",
+        "INV-RT95-05",
+        "INV-RT95-06",
+        "INV-RT95-07",
+        "INV-RT95-08",
+        "INV-RT95-09",
+        "INV-RT95-10"
+      ],
+      "status": "Designed",
+      "caseVariants": [],
+      "evidenceFiles": [],
+      "limitations": [
+        "测试合同，不代表已实现或通过；组件 variant 仅为候选证据，不能自动升级顶层 TC。"
+      ]
+    },
+    {
+      "id": "TC-RT95-020",
+      "category": "fail-closed",
+      "p0": true,
+      "evidenceLevel": "E3",
+      "preconditions": [
+        "Contract/Graph/Proof Schema 冻结"
+      ],
+      "steps": [
+        "不可查询副作用无结果"
+      ],
+      "faultBoundary": "不可查询副作用无结果",
+      "oracle": "outcome_unknown，禁止自动成功",
+      "invariants": [
+        "INV-RT95-04",
+        "INV-RT95-05",
+        "INV-RT95-06",
+        "INV-RT95-07",
+        "INV-RT95-08",
+        "INV-RT95-09",
+        "INV-RT95-10"
+      ],
+      "status": "Designed",
+      "caseVariants": [],
+      "evidenceFiles": [],
+      "limitations": [
+        "测试合同，不代表已实现或通过；组件 variant 仅为候选证据，不能自动升级顶层 TC。"
+      ]
+    },
+    {
+      "id": "TC-RT95-021",
+      "category": "duplicate-out-of-order-late",
+      "p0": true,
+      "evidenceLevel": "E2",
+      "preconditions": [
+        "Event Envelope、幂等键和 Reducer 冻结"
+      ],
+      "steps": [
+        "同 eventId 重放 100 次"
+      ],
+      "faultBoundary": "同 eventId 重放 100 次",
+      "oracle": "状态只推进一次",
+      "invariants": [
+        "INV-RT95-02",
+        "INV-RT95-03",
+        "INV-RT95-07",
+        "INV-RT95-11",
+        "INV-RT95-12",
+        "INV-RT95-13"
+      ],
+      "status": "Designed",
+      "caseVariants": [
+        "W0-C01-007",
+        "W0-C02-008",
+        "W0-C03-001",
+        "W0-C03-002",
+        "W0-C03-003",
+        "W0-C03-004",
+        "W0-C03-005",
+        "W0-C03-008"
+      ],
+      "evidenceFiles": [],
+      "limitations": [
+        "测试合同，不代表已实现或通过；组件 variant 仅为候选证据，不能自动升级顶层 TC。"
+      ]
+    },
+    {
+      "id": "TC-RT95-022",
+      "category": "duplicate-out-of-order-late",
+      "p0": true,
+      "evidenceLevel": "E2",
+      "preconditions": [
+        "Event Envelope、幂等键和 Reducer 冻结"
+      ],
+      "steps": [
+        "同业务事件不同 eventId"
+      ],
+      "faultBoundary": "同业务事件不同 eventId",
+      "oracle": "业务幂等键阻止重复副作用",
+      "invariants": [
+        "INV-RT95-02",
+        "INV-RT95-03",
+        "INV-RT95-07",
+        "INV-RT95-11",
+        "INV-RT95-12",
+        "INV-RT95-13"
+      ],
+      "status": "Designed",
+      "caseVariants": [],
+      "evidenceFiles": [],
+      "limitations": [
+        "测试合同，不代表已实现或通过；组件 variant 仅为候选证据，不能自动升级顶层 TC。"
+      ]
+    },
+    {
+      "id": "TC-RT95-023",
+      "category": "duplicate-out-of-order-late",
+      "p0": false,
+      "evidenceLevel": "E2",
+      "preconditions": [
+        "Event Envelope、幂等键和 Reducer 冻结"
+      ],
+      "steps": [
+        "completed 先于 started"
+      ],
+      "faultBoundary": "completed 先于 started",
+      "oracle": "按冻结策略缓冲或拒绝",
+      "invariants": [
+        "INV-RT95-02",
+        "INV-RT95-03",
+        "INV-RT95-07",
+        "INV-RT95-11",
+        "INV-RT95-12",
+        "INV-RT95-13"
+      ],
+      "status": "Designed",
+      "caseVariants": [
+        "W0-C03-006",
+        "W0-C03-010",
+        "W0-C03-011"
+      ],
+      "evidenceFiles": [],
+      "limitations": [
+        "测试合同，不代表已实现或通过；组件 variant 仅为候选证据，不能自动升级顶层 TC。"
+      ]
+    },
+    {
+      "id": "TC-RT95-024",
+      "category": "duplicate-out-of-order-late",
+      "p0": false,
+      "evidenceLevel": "E2",
+      "preconditions": [
+        "Event Envelope、幂等键和 Reducer 冻结"
+      ],
+      "steps": [
+        "Evidence 先于 Task claim"
+      ],
+      "faultBoundary": "Evidence 先于 Task claim",
+      "oracle": "不误完成，事件可解释",
+      "invariants": [
+        "INV-RT95-02",
+        "INV-RT95-03",
+        "INV-RT95-07",
+        "INV-RT95-11",
+        "INV-RT95-12",
+        "INV-RT95-13"
+      ],
+      "status": "Designed",
+      "caseVariants": [],
+      "evidenceFiles": [],
+      "limitations": [
+        "测试合同，不代表已实现或通过；组件 variant 仅为候选证据，不能自动升级顶层 TC。"
+      ]
+    },
+    {
+      "id": "TC-RT95-025",
+      "category": "duplicate-out-of-order-late",
+      "p0": true,
+      "evidenceLevel": "E2/E3",
+      "preconditions": [
+        "Event Envelope、幂等键和 Reducer 冻结"
+      ],
+      "steps": [
+        "Return 重复 ready/delivering"
+      ],
+      "faultBoundary": "Return 重复 ready/delivering",
+      "oracle": "Receipt 唯一",
+      "invariants": [
+        "INV-RT95-02",
+        "INV-RT95-03",
+        "INV-RT95-07",
+        "INV-RT95-11",
+        "INV-RT95-12",
+        "INV-RT95-13"
+      ],
+      "status": "Designed",
+      "caseVariants": [],
+      "evidenceFiles": [],
+      "limitations": [
+        "测试合同，不代表已实现或通过；组件 variant 仅为候选证据，不能自动升级顶层 TC。"
+      ]
+    },
+    {
+      "id": "TC-RT95-026",
+      "category": "duplicate-out-of-order-late",
+      "p0": true,
+      "evidenceLevel": "E2",
+      "preconditions": [
+        "Event Envelope、幂等键和 Reducer 冻结"
+      ],
+      "steps": [
+        "consumed 后迟到 ready"
+      ],
+      "faultBoundary": "consumed 后迟到 ready",
+      "oracle": "终态不倒退",
+      "invariants": [
+        "INV-RT95-02",
+        "INV-RT95-03",
+        "INV-RT95-07",
+        "INV-RT95-11",
+        "INV-RT95-12",
+        "INV-RT95-13"
+      ],
+      "status": "Designed",
+      "caseVariants": [],
+      "evidenceFiles": [],
+      "limitations": [
+        "测试合同，不代表已实现或通过；组件 variant 仅为候选证据，不能自动升级顶层 TC。"
+      ]
+    },
+    {
+      "id": "TC-RT95-027",
+      "category": "duplicate-out-of-order-late",
+      "p0": true,
+      "evidenceLevel": "E2/E3",
+      "preconditions": [
+        "Event Envelope、幂等键和 Reducer 冻结"
+      ],
+      "steps": [
+        "旧 Plan revision 事件迟到"
+      ],
+      "faultBoundary": "旧 Plan revision 事件迟到",
+      "oracle": "不推进新 Graph",
+      "invariants": [
+        "INV-RT95-02",
+        "INV-RT95-03",
+        "INV-RT95-07",
+        "INV-RT95-11",
+        "INV-RT95-12",
+        "INV-RT95-13"
+      ],
+      "status": "Designed",
+      "caseVariants": [
+        "W0-C02-007",
+        "W0-C03-009"
+      ],
+      "evidenceFiles": [],
+      "limitations": [
+        "测试合同，不代表已实现或通过；组件 variant 仅为候选证据，不能自动升级顶层 TC。"
+      ]
+    },
+    {
+      "id": "TC-RT95-028",
+      "category": "duplicate-out-of-order-late",
+      "p0": true,
+      "evidenceLevel": "E2",
+      "preconditions": [
+        "Event Envelope、幂等键和 Reducer 冻结"
+      ],
+      "steps": [
+        "旧 Run heartbeat 迟到"
+      ],
+      "faultBoundary": "旧 Run heartbeat 迟到",
+      "oracle": "不续租新 Run",
+      "invariants": [
+        "INV-RT95-02",
+        "INV-RT95-03",
+        "INV-RT95-07",
+        "INV-RT95-11",
+        "INV-RT95-12",
+        "INV-RT95-13"
+      ],
+      "status": "Designed",
+      "caseVariants": [],
+      "evidenceFiles": [],
+      "limitations": [
+        "测试合同，不代表已实现或通过；组件 variant 仅为候选证据，不能自动升级顶层 TC。"
+      ]
+    },
+    {
+      "id": "TC-RT95-029",
+      "category": "duplicate-out-of-order-late",
+      "p0": true,
+      "evidenceLevel": "E2/E3",
+      "preconditions": [
+        "Event Envelope、幂等键和 Reducer 冻结"
+      ],
+      "steps": [
+        "Job A 事件携带 Job B Task"
+      ],
+      "faultBoundary": "Job A 事件携带 Job B Task",
+      "oracle": "拒绝并审计错投",
+      "invariants": [
+        "INV-RT95-02",
+        "INV-RT95-03",
+        "INV-RT95-07",
+        "INV-RT95-11",
+        "INV-RT95-12",
+        "INV-RT95-13"
+      ],
+      "status": "Designed",
+      "caseVariants": [
+        "W0-C01-001",
+        "W0-C01-002",
+        "W0-C01-003",
+        "W0-C01-004",
+        "W0-C01-006",
+        "W0-C02-001",
+        "W0-C02-002",
+        "W0-C02-003",
+        "W0-C02-004",
+        "W0-C02-005",
+        "W0-C03-007",
+        "W0-C03-012",
+        "W0-EVAL-004"
+      ],
+      "evidenceFiles": [],
+      "limitations": [
+        "测试合同，不代表已实现或通过；组件 variant 仅为候选证据，不能自动升级顶层 TC。"
+      ]
+    },
+    {
+      "id": "TC-RT95-030",
+      "category": "duplicate-out-of-order-late",
+      "p0": false,
+      "evidenceLevel": "E2",
+      "preconditions": [
+        "Event Envelope、幂等键和 Reducer 冻结"
+      ],
+      "steps": [
+        "Proof 后迟到失败摘要"
+      ],
+      "faultBoundary": "Proof 后迟到失败摘要",
+      "oracle": "Proof 不倒退，矛盾进入审计",
+      "invariants": [
+        "INV-RT95-02",
+        "INV-RT95-03",
+        "INV-RT95-07",
+        "INV-RT95-11",
+        "INV-RT95-12",
+        "INV-RT95-13"
+      ],
+      "status": "Designed",
+      "caseVariants": [],
+      "evidenceFiles": [],
+      "limitations": [
+        "测试合同，不代表已实现或通过；组件 variant 仅为候选证据，不能自动升级顶层 TC。"
+      ]
+    },
+    {
+      "id": "TC-RT95-031",
+      "category": "concurrency-race",
+      "p0": true,
+      "evidenceLevel": "E2/E3",
+      "preconditions": [
+        "确定性 Barrier/Seed；除特别说明外重复 1000 轮"
+      ],
+      "steps": [
+        "同 Thread 两个 start"
+      ],
+      "faultBoundary": "同 Thread 两个 start",
+      "oracle": "1000 轮零双活",
+      "invariants": [
+        "INV-RT95-01",
+        "INV-RT95-02",
+        "INV-RT95-03",
+        "INV-RT95-11",
+        "INV-RT95-12"
+      ],
+      "status": "Designed",
+      "caseVariants": [],
+      "evidenceFiles": [],
+      "limitations": [
+        "测试合同，不代表已实现或通过；组件 variant 仅为候选证据，不能自动升级顶层 TC。"
+      ]
+    },
+    {
+      "id": "TC-RT95-032",
+      "category": "concurrency-race",
+      "p0": true,
+      "evidenceLevel": "E2/E3",
+      "preconditions": [
+        "确定性 Barrier/Seed；除特别说明外重复 1000 轮"
+      ],
+      "steps": [
+        "Turn complete 与 cancel"
+      ],
+      "faultBoundary": "Turn complete 与 cancel",
+      "oracle": "唯一合法终态",
+      "invariants": [
+        "INV-RT95-01",
+        "INV-RT95-02",
+        "INV-RT95-03",
+        "INV-RT95-11",
+        "INV-RT95-12"
+      ],
+      "status": "Designed",
+      "caseVariants": [],
+      "evidenceFiles": [],
+      "limitations": [
+        "测试合同，不代表已实现或通过；组件 variant 仅为候选证据，不能自动升级顶层 TC。"
+      ]
+    },
+    {
+      "id": "TC-RT95-033",
+      "category": "concurrency-race",
+      "p0": true,
+      "evidenceLevel": "E2/E3",
+      "preconditions": [
+        "确定性 Barrier/Seed；除特别说明外重复 1000 轮"
+      ],
+      "steps": [
+        "Turn timeout 与 Model 返回"
+      ],
+      "faultBoundary": "Turn timeout 与 Model 返回",
+      "oracle": "迟到结果不发布",
+      "invariants": [
+        "INV-RT95-01",
+        "INV-RT95-02",
+        "INV-RT95-03",
+        "INV-RT95-11",
+        "INV-RT95-12"
+      ],
+      "status": "Designed",
+      "caseVariants": [],
+      "evidenceFiles": [],
+      "limitations": [
+        "测试合同，不代表已实现或通过；组件 variant 仅为候选证据，不能自动升级顶层 TC。"
+      ]
+    },
+    {
+      "id": "TC-RT95-034",
+      "category": "concurrency-race",
+      "p0": true,
+      "evidenceLevel": "E2/E3",
+      "preconditions": [
+        "确定性 Barrier/Seed；除特别说明外重复 1000 轮"
+      ],
+      "steps": [
+        "Job cancel 与 Child complete"
+      ],
+      "faultBoundary": "Job cancel 与 Child complete",
+      "oracle": "Job 不复活",
+      "invariants": [
+        "INV-RT95-01",
+        "INV-RT95-02",
+        "INV-RT95-03",
+        "INV-RT95-11",
+        "INV-RT95-12"
+      ],
+      "status": "Designed",
+      "caseVariants": [],
+      "evidenceFiles": [],
+      "limitations": [
+        "测试合同，不代表已实现或通过；组件 variant 仅为候选证据，不能自动升级顶层 TC。"
+      ]
+    },
+    {
+      "id": "TC-RT95-035",
+      "category": "concurrency-race",
+      "p0": true,
+      "evidenceLevel": "E2/E3",
+      "preconditions": [
+        "确定性 Barrier/Seed；除特别说明外重复 1000 轮"
+      ],
+      "steps": [
+        "两 Child claim 同 Task"
+      ],
+      "faultBoundary": "两 Child claim 同 Task",
+      "oracle": "唯一 Owner",
+      "invariants": [
+        "INV-RT95-01",
+        "INV-RT95-02",
+        "INV-RT95-03",
+        "INV-RT95-11",
+        "INV-RT95-12"
+      ],
+      "status": "Designed",
+      "caseVariants": [],
+      "evidenceFiles": [],
+      "limitations": [
+        "测试合同，不代表已实现或通过；组件 variant 仅为候选证据，不能自动升级顶层 TC。"
+      ]
+    },
+    {
+      "id": "TC-RT95-036",
+      "category": "concurrency-race",
+      "p0": true,
+      "evidenceLevel": "E2",
+      "preconditions": [
+        "确定性 Barrier/Seed；除特别说明外重复 1000 轮"
+      ],
+      "steps": [
+        "两 Task claim 重叠路径"
+      ],
+      "faultBoundary": "两 Task claim 重叠路径",
+      "oracle": "至多一个 runnable/running",
+      "invariants": [
+        "INV-RT95-01",
+        "INV-RT95-02",
+        "INV-RT95-03",
+        "INV-RT95-11",
+        "INV-RT95-12"
+      ],
+      "status": "Designed",
+      "caseVariants": [],
+      "evidenceFiles": [],
+      "limitations": [
+        "测试合同，不代表已实现或通过；组件 variant 仅为候选证据，不能自动升级顶层 TC。"
+      ]
+    },
+    {
+      "id": "TC-RT95-037",
+      "category": "concurrency-race",
+      "p0": false,
+      "evidenceLevel": "E2",
+      "preconditions": [
+        "确定性 Barrier/Seed；除特别说明外重复 1000 轮"
+      ],
+      "steps": [
+        "两 Reviewer 同时裁决"
+      ],
+      "faultBoundary": "两 Reviewer 同时裁决",
+      "oracle": "一份有效 verdict 或显式冲突",
+      "invariants": [
+        "INV-RT95-01",
+        "INV-RT95-02",
+        "INV-RT95-03",
+        "INV-RT95-11",
+        "INV-RT95-12"
+      ],
+      "status": "Designed",
+      "caseVariants": [],
+      "evidenceFiles": [],
+      "limitations": [
+        "测试合同，不代表已实现或通过；组件 variant 仅为候选证据，不能自动升级顶层 TC。"
+      ]
+    },
+    {
+      "id": "TC-RT95-038",
+      "category": "concurrency-race",
+      "p0": true,
+      "evidenceLevel": "E2/E3",
+      "preconditions": [
+        "确定性 Barrier/Seed；除特别说明外重复 1000 轮"
+      ],
+      "steps": [
+        "Proof commit 与 Amendment"
+      ],
+      "faultBoundary": "Proof commit 与 Amendment",
+      "oracle": "revision 一致，不混合证据",
+      "invariants": [
+        "INV-RT95-01",
+        "INV-RT95-02",
+        "INV-RT95-03",
+        "INV-RT95-11",
+        "INV-RT95-12"
+      ],
+      "status": "Designed",
+      "caseVariants": [],
+      "evidenceFiles": [],
+      "limitations": [
+        "测试合同，不代表已实现或通过；组件 variant 仅为候选证据，不能自动升级顶层 TC。"
+      ]
+    },
+    {
+      "id": "TC-RT95-039",
+      "category": "concurrency-race",
+      "p0": true,
+      "evidenceLevel": "E2/E3",
+      "preconditions": [
+        "确定性 Barrier/Seed；除特别说明外重复 1000 轮"
+      ],
+      "steps": [
+        "两人工 resolve unknown"
+      ],
+      "faultBoundary": "两人工 resolve unknown",
+      "oracle": "单版本成功",
+      "invariants": [
+        "INV-RT95-01",
+        "INV-RT95-02",
+        "INV-RT95-03",
+        "INV-RT95-11",
+        "INV-RT95-12"
+      ],
+      "status": "Designed",
+      "caseVariants": [],
+      "evidenceFiles": [],
+      "limitations": [
+        "测试合同，不代表已实现或通过；组件 variant 仅为候选证据，不能自动升级顶层 TC。"
+      ]
+    },
+    {
+      "id": "TC-RT95-040",
+      "category": "concurrency-race",
+      "p0": true,
+      "evidenceLevel": "E3",
+      "preconditions": [
+        "确定性 Barrier/Seed；除特别说明外重复 1000 轮"
+      ],
+      "steps": [
+        "Job A/B 同时大量 Return"
+      ],
+      "faultBoundary": "Job A/B 同时大量 Return",
+      "oracle": "不错投、不饥饿、不丢失",
+      "invariants": [
+        "INV-RT95-01",
+        "INV-RT95-02",
+        "INV-RT95-03",
+        "INV-RT95-11",
+        "INV-RT95-12"
+      ],
+      "status": "Designed",
+      "caseVariants": [],
+      "evidenceFiles": [],
+      "limitations": [
+        "测试合同，不代表已实现或通过；组件 variant 仅为候选证据，不能自动升级顶层 TC。"
+      ]
+    },
+    {
+      "id": "TC-RT95-041",
+      "category": "cancellation-timeout-late-results",
+      "p0": true,
+      "evidenceLevel": "E2/E3",
+      "preconditions": [
+        "可控 Provider/Tool/Worker Barrier"
+      ],
+      "steps": [
+        "Model 请求中取消 Turn"
+      ],
+      "faultBoundary": "Model 请求中取消 Turn",
+      "oracle": "interrupted，响应只进入审计",
+      "invariants": [
+        "INV-RT95-03",
+        "INV-RT95-09",
+        "INV-RT95-11",
+        "INV-RT95-12"
+      ],
+      "status": "Designed",
+      "caseVariants": [],
+      "evidenceFiles": [],
+      "limitations": [
+        "测试合同，不代表已实现或通过；组件 variant 仅为候选证据，不能自动升级顶层 TC。"
+      ]
+    },
+    {
+      "id": "TC-RT95-042",
+      "category": "cancellation-timeout-late-results",
+      "p0": true,
+      "evidenceLevel": "E2/E3",
+      "preconditions": [
+        "可控 Provider/Tool/Worker Barrier"
+      ],
+      "steps": [
+        "Tool 执行中取消"
+      ],
+      "faultBoundary": "Tool 执行中取消",
+      "oracle": "只取消所属 Invocation",
+      "invariants": [
+        "INV-RT95-03",
+        "INV-RT95-09",
+        "INV-RT95-11",
+        "INV-RT95-12"
+      ],
+      "status": "Designed",
+      "caseVariants": [],
+      "evidenceFiles": [],
+      "limitations": [
+        "测试合同，不代表已实现或通过；组件 variant 仅为候选证据，不能自动升级顶层 TC。"
+      ]
+    },
+    {
+      "id": "TC-RT95-043",
+      "category": "cancellation-timeout-late-results",
+      "p0": true,
+      "evidenceLevel": "E2/E3",
+      "preconditions": [
+        "可控 Provider/Tool/Worker Barrier"
+      ],
+      "steps": [
+        "忽略 Abort 的 Model 迟到"
+      ],
+      "faultBoundary": "忽略 Abort 的 Model 迟到",
+      "oracle": "不生成 Assistant/Continuation",
+      "invariants": [
+        "INV-RT95-03",
+        "INV-RT95-09",
+        "INV-RT95-11",
+        "INV-RT95-12"
+      ],
+      "status": "Designed",
+      "caseVariants": [],
+      "evidenceFiles": [],
+      "limitations": [
+        "测试合同，不代表已实现或通过；组件 variant 仅为候选证据，不能自动升级顶层 TC。"
+      ]
+    },
+    {
+      "id": "TC-RT95-044",
+      "category": "cancellation-timeout-late-results",
+      "p0": true,
+      "evidenceLevel": "E2/E3",
+      "preconditions": [
+        "可控 Provider/Tool/Worker Barrier"
+      ],
+      "steps": [
+        "忽略 Abort 的 Tool 迟到"
+      ],
+      "faultBoundary": "忽略 Abort 的 Tool 迟到",
+      "oracle": "result_received/unknown，不提交业务",
+      "invariants": [
+        "INV-RT95-03",
+        "INV-RT95-09",
+        "INV-RT95-11",
+        "INV-RT95-12"
+      ],
+      "status": "Designed",
+      "caseVariants": [],
+      "evidenceFiles": [],
+      "limitations": [
+        "测试合同，不代表已实现或通过；组件 variant 仅为候选证据，不能自动升级顶层 TC。"
+      ]
+    },
+    {
+      "id": "TC-RT95-045",
+      "category": "cancellation-timeout-late-results",
+      "p0": false,
+      "evidenceLevel": "E2/E3",
+      "preconditions": [
+        "可控 Provider/Tool/Worker Barrier"
+      ],
+      "steps": [
+        "Child deadline"
+      ],
+      "faultBoundary": "Child deadline",
+      "oracle": "timed_out Return，父继续裁决",
+      "invariants": [
+        "INV-RT95-03",
+        "INV-RT95-09",
+        "INV-RT95-11",
+        "INV-RT95-12"
+      ],
+      "status": "Designed",
+      "caseVariants": [],
+      "evidenceFiles": [],
+      "limitations": [
+        "测试合同，不代表已实现或通过；组件 variant 仅为候选证据，不能自动升级顶层 TC。"
+      ]
+    },
+    {
+      "id": "TC-RT95-046",
+      "category": "cancellation-timeout-late-results",
+      "p0": true,
+      "evidenceLevel": "E2/E3",
+      "preconditions": [
+        "可控 Provider/Tool/Worker Barrier"
+      ],
+      "steps": [
+        "Supervisor wait deadline"
+      ],
+      "faultBoundary": "Supervisor wait deadline",
+      "oracle": "执行冻结的 timeoutAction",
+      "invariants": [
+        "INV-RT95-03",
+        "INV-RT95-09",
+        "INV-RT95-11",
+        "INV-RT95-12"
+      ],
+      "status": "Designed",
+      "caseVariants": [],
+      "evidenceFiles": [],
+      "limitations": [
+        "测试合同，不代表已实现或通过；组件 variant 仅为候选证据，不能自动升级顶层 TC。"
+      ]
+    },
+    {
+      "id": "TC-RT95-047",
+      "category": "cancellation-timeout-late-results",
+      "p0": true,
+      "evidenceLevel": "E2",
+      "preconditions": [
+        "可控 Provider/Tool/Worker Barrier"
+      ],
+      "steps": [
+        "Guidance 过期后到达"
+      ],
+      "faultBoundary": "Guidance 过期后到达",
+      "oracle": "不进入 Child Context",
+      "invariants": [
+        "INV-RT95-03",
+        "INV-RT95-09",
+        "INV-RT95-11",
+        "INV-RT95-12"
+      ],
+      "status": "Designed",
+      "caseVariants": [],
+      "evidenceFiles": [],
+      "limitations": [
+        "测试合同，不代表已实现或通过；组件 variant 仅为候选证据，不能自动升级顶层 TC。"
+      ]
+    },
+    {
+      "id": "TC-RT95-048",
+      "category": "cancellation-timeout-late-results",
+      "p0": true,
+      "evidenceLevel": "E2/E3",
+      "preconditions": [
+        "可控 Provider/Tool/Worker Barrier"
+      ],
+      "steps": [
+        "人工回复对应旧 Plan"
+      ],
+      "faultBoundary": "人工回复对应旧 Plan",
+      "oracle": "拒绝或要求 Amendment",
+      "invariants": [
+        "INV-RT95-03",
+        "INV-RT95-09",
+        "INV-RT95-11",
+        "INV-RT95-12"
+      ],
+      "status": "Designed",
+      "caseVariants": [],
+      "evidenceFiles": [],
+      "limitations": [
+        "测试合同，不代表已实现或通过；组件 variant 仅为候选证据，不能自动升级顶层 TC。"
+      ]
+    },
+    {
+      "id": "TC-RT95-049",
+      "category": "cancellation-timeout-late-results",
+      "p0": true,
+      "evidenceLevel": "E3",
+      "preconditions": [
+        "可控 Provider/Tool/Worker Barrier"
+      ],
+      "steps": [
+        "Job A cancel、Job B Tool 活动"
+      ],
+      "faultBoundary": "Job A cancel、Job B Tool 活动",
+      "oracle": "B 不收到 Abort",
+      "invariants": [
+        "INV-RT95-03",
+        "INV-RT95-09",
+        "INV-RT95-11",
+        "INV-RT95-12"
+      ],
+      "status": "Designed",
+      "caseVariants": [],
+      "evidenceFiles": [],
+      "limitations": [
+        "测试合同，不代表已实现或通过；组件 variant 仅为候选证据，不能自动升级顶层 TC。"
+      ]
+    },
+    {
+      "id": "TC-RT95-050",
+      "category": "cancellation-timeout-late-results",
+      "p0": true,
+      "evidenceLevel": "E3",
+      "preconditions": [
+        "可控 Provider/Tool/Worker Barrier"
+      ],
+      "steps": [
+        "Final Delivery 后 cancel"
+      ],
+      "faultBoundary": "Final Delivery 后 cancel",
+      "oracle": "可见结果与 Receipt 不倒退",
+      "invariants": [
+        "INV-RT95-03",
+        "INV-RT95-09",
+        "INV-RT95-11",
+        "INV-RT95-12"
+      ],
+      "status": "Designed",
+      "caseVariants": [],
+      "evidenceFiles": [],
+      "limitations": [
+        "测试合同，不代表已实现或通过；组件 variant 仅为候选证据，不能自动升级顶层 TC。"
+      ]
+    },
+    {
+      "id": "TC-RT95-051",
+      "category": "crash-recovery",
+      "p0": true,
+      "evidenceLevel": "E3",
+      "preconditions": [
+        "真实子进程、真实文件、公共 RPC；故障点落盘确认后强杀"
+      ],
+      "steps": [
+        "Plan Draft 写后"
+      ],
+      "faultBoundary": "Plan Draft 写后",
+      "oracle": "未 Commit Plan 不调 Child",
+      "invariants": [
+        "INV-RT95-02",
+        "INV-RT95-03",
+        "INV-RT95-09",
+        "INV-RT95-11",
+        "INV-RT95-13"
+      ],
+      "status": "Designed",
+      "caseVariants": [],
+      "evidenceFiles": [],
+      "limitations": [
+        "测试合同，不代表已实现或通过；组件 variant 仅为候选证据，不能自动升级顶层 TC。"
+      ]
+    },
+    {
+      "id": "TC-RT95-052",
+      "category": "crash-recovery",
+      "p0": true,
+      "evidenceLevel": "E3",
+      "preconditions": [
+        "真实子进程、真实文件、公共 RPC；故障点落盘确认后强杀"
+      ],
+      "steps": [
+        "Plan Commit 后 Dispatch 前"
+      ],
+      "faultBoundary": "Plan Commit 后 Dispatch 前",
+      "oracle": "从持久 Graph 恢复 Queue",
+      "invariants": [
+        "INV-RT95-02",
+        "INV-RT95-03",
+        "INV-RT95-09",
+        "INV-RT95-11",
+        "INV-RT95-13"
+      ],
+      "status": "Designed",
+      "caseVariants": [],
+      "evidenceFiles": [],
+      "limitations": [
+        "测试合同，不代表已实现或通过；组件 variant 仅为候选证据，不能自动升级顶层 TC。"
+      ]
+    },
+    {
+      "id": "TC-RT95-053",
+      "category": "crash-recovery",
+      "p0": true,
+      "evidenceLevel": "E3",
+      "preconditions": [
+        "真实子进程、真实文件、公共 RPC；故障点落盘确认后强杀"
+      ],
+      "steps": [
+        "Model submitted 后"
+      ],
+      "faultBoundary": "Model submitted 后",
+      "oracle": "unknown/查询，禁止盲重发",
+      "invariants": [
+        "INV-RT95-02",
+        "INV-RT95-03",
+        "INV-RT95-09",
+        "INV-RT95-11",
+        "INV-RT95-13"
+      ],
+      "status": "Designed",
+      "caseVariants": [],
+      "evidenceFiles": [],
+      "limitations": [
+        "测试合同，不代表已实现或通过；组件 variant 仅为候选证据，不能自动升级顶层 TC。"
+      ]
+    },
+    {
+      "id": "TC-RT95-054",
+      "category": "crash-recovery",
+      "p0": true,
+      "evidenceLevel": "E3",
+      "preconditions": [
+        "真实子进程、真实文件、公共 RPC；故障点落盘确认后强杀"
+      ],
+      "steps": [
+        "Model response_received 后"
+      ],
+      "faultBoundary": "Model response_received 后",
+      "oracle": "零 Provider 重放，只补提交",
+      "invariants": [
+        "INV-RT95-02",
+        "INV-RT95-03",
+        "INV-RT95-09",
+        "INV-RT95-11",
+        "INV-RT95-13"
+      ],
+      "status": "Designed",
+      "caseVariants": [],
+      "evidenceFiles": [],
+      "limitations": [
+        "测试合同，不代表已实现或通过；组件 variant 仅为候选证据，不能自动升级顶层 TC。"
+      ]
+    },
+    {
+      "id": "TC-RT95-055",
+      "category": "crash-recovery",
+      "p0": true,
+      "evidenceLevel": "E3",
+      "preconditions": [
+        "真实子进程、真实文件、公共 RPC；故障点落盘确认后强杀"
+      ],
+      "steps": [
+        "Tool executing 中"
+      ],
+      "faultBoundary": "Tool executing 中",
+      "oracle": "按 side-effect class 恢复",
+      "invariants": [
+        "INV-RT95-02",
+        "INV-RT95-03",
+        "INV-RT95-09",
+        "INV-RT95-11",
+        "INV-RT95-13"
+      ],
+      "status": "Designed",
+      "caseVariants": [],
+      "evidenceFiles": [],
+      "limitations": [
+        "测试合同，不代表已实现或通过；组件 variant 仅为候选证据，不能自动升级顶层 TC。"
+      ]
+    },
+    {
+      "id": "TC-RT95-056",
+      "category": "crash-recovery",
+      "p0": true,
+      "evidenceLevel": "E3",
+      "preconditions": [
+        "真实子进程、真实文件、公共 RPC；故障点落盘确认后强杀"
+      ],
+      "steps": [
+        "Tool result_received 后"
+      ],
+      "faultBoundary": "Tool result_received 后",
+      "oracle": "零 Tool 重放，只补提交",
+      "invariants": [
+        "INV-RT95-02",
+        "INV-RT95-03",
+        "INV-RT95-09",
+        "INV-RT95-11",
+        "INV-RT95-13"
+      ],
+      "status": "Designed",
+      "caseVariants": [],
+      "evidenceFiles": [],
+      "limitations": [
+        "测试合同，不代表已实现或通过；组件 variant 仅为候选证据，不能自动升级顶层 TC。"
+      ]
+    },
+    {
+      "id": "TC-RT95-057",
+      "category": "crash-recovery",
+      "p0": true,
+      "evidenceLevel": "E3",
+      "preconditions": [
+        "真实子进程、真实文件、公共 RPC；故障点落盘确认后强杀"
+      ],
+      "steps": [
+        "Return claim 后"
+      ],
+      "faultBoundary": "Return claim 后",
+      "oracle": "Receipt 唯一，不丢 Return",
+      "invariants": [
+        "INV-RT95-02",
+        "INV-RT95-03",
+        "INV-RT95-09",
+        "INV-RT95-11",
+        "INV-RT95-13"
+      ],
+      "status": "Designed",
+      "caseVariants": [],
+      "evidenceFiles": [],
+      "limitations": [
+        "测试合同，不代表已实现或通过；组件 variant 仅为候选证据，不能自动升级顶层 TC。"
+      ]
+    },
+    {
+      "id": "TC-RT95-058",
+      "category": "crash-recovery",
+      "p0": true,
+      "evidenceLevel": "E3",
+      "preconditions": [
+        "真实子进程、真实文件、公共 RPC；故障点落盘确认后强杀"
+      ],
+      "steps": [
+        "Parent continuation 后 consume 前"
+      ],
+      "faultBoundary": "Parent continuation 后 consume 前",
+      "oracle": "不重复父模型，只补 consume",
+      "invariants": [
+        "INV-RT95-02",
+        "INV-RT95-03",
+        "INV-RT95-09",
+        "INV-RT95-11",
+        "INV-RT95-13"
+      ],
+      "status": "Designed",
+      "caseVariants": [],
+      "evidenceFiles": [],
+      "limitations": [
+        "测试合同，不代表已实现或通过；组件 variant 仅为候选证据，不能自动升级顶层 TC。"
+      ]
+    },
+    {
+      "id": "TC-RT95-059",
+      "category": "crash-recovery",
+      "p0": true,
+      "evidenceLevel": "E3",
+      "preconditions": [
+        "真实子进程、真实文件、公共 RPC；故障点落盘确认后强杀"
+      ],
+      "steps": [
+        "Proof commit 后 Delivery 前"
+      ],
+      "faultBoundary": "Proof commit 后 Delivery 前",
+      "oracle": "从 Proof 恢复一次交付",
+      "invariants": [
+        "INV-RT95-02",
+        "INV-RT95-03",
+        "INV-RT95-09",
+        "INV-RT95-11",
+        "INV-RT95-13"
+      ],
+      "status": "Designed",
+      "caseVariants": [],
+      "evidenceFiles": [],
+      "limitations": [
+        "测试合同，不代表已实现或通过；组件 variant 仅为候选证据，不能自动升级顶层 TC。"
+      ]
+    },
+    {
+      "id": "TC-RT95-060",
+      "category": "crash-recovery",
+      "p0": true,
+      "evidenceLevel": "E3",
+      "preconditions": [
+        "真实子进程、真实文件、公共 RPC；故障点落盘确认后强杀"
+      ],
+      "steps": [
+        "Delivery 后 Receipt 前"
+      ],
+      "faultBoundary": "Delivery 后 Receipt 前",
+      "oracle": "本地可见交付保持唯一",
+      "invariants": [
+        "INV-RT95-02",
+        "INV-RT95-03",
+        "INV-RT95-09",
+        "INV-RT95-11",
+        "INV-RT95-13"
+      ],
+      "status": "Designed",
+      "caseVariants": [],
+      "evidenceFiles": [],
+      "limitations": [
+        "测试合同，不代表已实现或通过；组件 variant 仅为候选证据，不能自动升级顶层 TC。"
+      ]
+    },
+    {
+      "id": "TC-RT95-061",
+      "category": "multi-process",
+      "p0": true,
+      "evidenceLevel": "E3",
+      "preconditions": [
+        "两个真实 App Server/Worker，共享受控状态目录"
+      ],
+      "steps": [
+        "两 Server 同时恢复同 Job"
+      ],
+      "faultBoundary": "两 Server 同时恢复同 Job",
+      "oracle": "一个 Owner，一个 waiting",
+      "invariants": [
+        "INV-RT95-02",
+        "INV-RT95-03",
+        "INV-RT95-11",
+        "INV-RT95-12",
+        "INV-RT95-13"
+      ],
+      "status": "Designed",
+      "caseVariants": [],
+      "evidenceFiles": [],
+      "limitations": [
+        "测试合同，不代表已实现或通过；组件 variant 仅为候选证据，不能自动升级顶层 TC。"
+      ]
+    },
+    {
+      "id": "TC-RT95-062",
+      "category": "multi-process",
+      "p0": true,
+      "evidenceLevel": "E3",
+      "preconditions": [
+        "两个真实 App Server/Worker，共享受控状态目录"
+      ],
+      "steps": [
+        "两 Server 分别执行 Job A/B"
+      ],
+      "faultBoundary": "两 Server 分别执行 Job A/B",
+      "oracle": "并行提交，无全局冲突",
+      "invariants": [
+        "INV-RT95-02",
+        "INV-RT95-03",
+        "INV-RT95-11",
+        "INV-RT95-12",
+        "INV-RT95-13"
+      ],
+      "status": "Designed",
+      "caseVariants": [],
+      "evidenceFiles": [],
+      "limitations": [
+        "测试合同，不代表已实现或通过；组件 variant 仅为候选证据，不能自动升级顶层 TC。"
+      ]
+    },
+    {
+      "id": "TC-RT95-063",
+      "category": "multi-process",
+      "p0": true,
+      "evidenceLevel": "E3",
+      "preconditions": [
+        "两个真实 App Server/Worker，共享受控状态目录"
+      ],
+      "steps": [
+        "Owner 暂停超 TTL 后 takeover"
+      ],
+      "faultBoundary": "Owner 暂停超 TTL 后 takeover",
+      "oracle": "新 Token 唯一有效",
+      "invariants": [
+        "INV-RT95-02",
+        "INV-RT95-03",
+        "INV-RT95-11",
+        "INV-RT95-12",
+        "INV-RT95-13"
+      ],
+      "status": "Designed",
+      "caseVariants": [],
+      "evidenceFiles": [],
+      "limitations": [
+        "测试合同，不代表已实现或通过；组件 variant 仅为候选证据，不能自动升级顶层 TC。"
+      ]
+    },
+    {
+      "id": "TC-RT95-064",
+      "category": "multi-process",
+      "p0": true,
+      "evidenceLevel": "E3",
+      "preconditions": [
+        "两个真实 App Server/Worker，共享受控状态目录"
+      ],
+      "steps": [
+        "旧 Owner 恢复后提交"
+      ],
+      "faultBoundary": "旧 Owner 恢复后提交",
+      "oracle": "100% fenced",
+      "invariants": [
+        "INV-RT95-02",
+        "INV-RT95-03",
+        "INV-RT95-11",
+        "INV-RT95-12",
+        "INV-RT95-13"
+      ],
+      "status": "Designed",
+      "caseVariants": [],
+      "evidenceFiles": [],
+      "limitations": [
+        "测试合同，不代表已实现或通过；组件 variant 仅为候选证据，不能自动升级顶层 TC。"
+      ]
+    },
+    {
+      "id": "TC-RT95-065",
+      "category": "multi-process",
+      "p0": true,
+      "evidenceLevel": "E3",
+      "preconditions": [
+        "两个真实 App Server/Worker，共享受控状态目录"
+      ],
+      "steps": [
+        "Worker 强杀"
+      ],
+      "faultBoundary": "Worker 强杀",
+      "oracle": "Supervisor 有界发现失联",
+      "invariants": [
+        "INV-RT95-02",
+        "INV-RT95-03",
+        "INV-RT95-11",
+        "INV-RT95-12",
+        "INV-RT95-13"
+      ],
+      "status": "Designed",
+      "caseVariants": [],
+      "evidenceFiles": [],
+      "limitations": [
+        "测试合同，不代表已实现或通过；组件 variant 仅为候选证据，不能自动升级顶层 TC。"
+      ]
+    },
+    {
+      "id": "TC-RT95-066",
+      "category": "multi-process",
+      "p0": true,
+      "evidenceLevel": "E3",
+      "preconditions": [
+        "两个真实 App Server/Worker，共享受控状态目录"
+      ],
+      "steps": [
+        "Reviewer 强杀"
+      ],
+      "faultBoundary": "Reviewer 强杀",
+      "oracle": "Review 恢复，Worker 事实不改写",
+      "invariants": [
+        "INV-RT95-02",
+        "INV-RT95-03",
+        "INV-RT95-11",
+        "INV-RT95-12",
+        "INV-RT95-13"
+      ],
+      "status": "Designed",
+      "caseVariants": [],
+      "evidenceFiles": [],
+      "limitations": [
+        "测试合同，不代表已实现或通过；组件 variant 仅为候选证据，不能自动升级顶层 TC。"
+      ]
+    },
+    {
+      "id": "TC-RT95-067",
+      "category": "multi-process",
+      "p0": true,
+      "evidenceLevel": "E3",
+      "preconditions": [
+        "两个真实 App Server/Worker，共享受控状态目录"
+      ],
+      "steps": [
+        "Supervisor 强杀"
+      ],
+      "faultBoundary": "Supervisor 强杀",
+      "oracle": "从 Journal 继续，不猜内存",
+      "invariants": [
+        "INV-RT95-02",
+        "INV-RT95-03",
+        "INV-RT95-11",
+        "INV-RT95-12",
+        "INV-RT95-13"
+      ],
+      "status": "Designed",
+      "caseVariants": [],
+      "evidenceFiles": [],
+      "limitations": [
+        "测试合同，不代表已实现或通过；组件 variant 仅为候选证据，不能自动升级顶层 TC。"
+      ]
+    },
+    {
+      "id": "TC-RT95-068",
+      "category": "multi-process",
+      "p0": true,
+      "evidenceLevel": "E3",
+      "preconditions": [
+        "两个真实 App Server/Worker，共享受控状态目录"
+      ],
+      "steps": [
+        "两 Worker 竞争同 Task"
+      ],
+      "faultBoundary": "两 Worker 竞争同 Task",
+      "oracle": "单 Claim/Attempt",
+      "invariants": [
+        "INV-RT95-02",
+        "INV-RT95-03",
+        "INV-RT95-11",
+        "INV-RT95-12",
+        "INV-RT95-13"
+      ],
+      "status": "Designed",
+      "caseVariants": [],
+      "evidenceFiles": [],
+      "limitations": [
+        "测试合同，不代表已实现或通过；组件 variant 仅为候选证据，不能自动升级顶层 TC。"
+      ]
+    },
+    {
+      "id": "TC-RT95-069",
+      "category": "multi-process",
+      "p0": false,
+      "evidenceLevel": "E3",
+      "preconditions": [
+        "两个真实 App Server/Worker，共享受控状态目录"
+      ],
+      "steps": [
+        "MCP Worker/子进程崩溃"
+      ],
+      "faultBoundary": "MCP Worker/子进程崩溃",
+      "oracle": "只影响所属 Invocation",
+      "invariants": [
+        "INV-RT95-02",
+        "INV-RT95-03",
+        "INV-RT95-11",
+        "INV-RT95-12",
+        "INV-RT95-13"
+      ],
+      "status": "Designed",
+      "caseVariants": [],
+      "evidenceFiles": [],
+      "limitations": [
+        "测试合同，不代表已实现或通过；组件 variant 仅为候选证据，不能自动升级顶层 TC。"
+      ]
+    },
+    {
+      "id": "TC-RT95-070",
+      "category": "multi-process",
+      "p0": false,
+      "evidenceLevel": "E3",
+      "preconditions": [
+        "两个真实 App Server/Worker，共享受控状态目录"
+      ],
+      "steps": [
+        "重启后资源检查"
+      ],
+      "faultBoundary": "重启后资源检查",
+      "oracle": "无残留进程、端口、锁",
+      "invariants": [
+        "INV-RT95-02",
+        "INV-RT95-03",
+        "INV-RT95-11",
+        "INV-RT95-12",
+        "INV-RT95-13"
+      ],
+      "status": "Designed",
+      "caseVariants": [],
+      "evidenceFiles": [],
+      "limitations": [
+        "测试合同，不代表已实现或通过；组件 variant 仅为候选证据，不能自动升级顶层 TC。"
+      ]
+    },
+    {
+      "id": "TC-RT95-071",
+      "category": "lease-fencing",
+      "p0": true,
+      "evidenceLevel": "E2/E3",
+      "preconditions": [
+        "可控时钟；Lease TTL 与锁陈旧判定分离"
+      ],
+      "steps": [
+        "1000 次同 Job acquire race"
+      ],
+      "faultBoundary": "1000 次同 Job acquire race",
+      "oracle": "每轮唯一 Owner",
+      "invariants": [
+        "INV-RT95-02",
+        "INV-RT95-03"
+      ],
+      "status": "Designed",
+      "caseVariants": [],
+      "evidenceFiles": [],
+      "limitations": [
+        "测试合同，不代表已实现或通过；组件 variant 仅为候选证据，不能自动升级顶层 TC。"
+      ]
+    },
+    {
+      "id": "TC-RT95-072",
+      "category": "lease-fencing",
+      "p0": false,
+      "evidenceLevel": "E2",
+      "preconditions": [
+        "可控时钟；Lease TTL 与锁陈旧判定分离"
+      ],
+      "steps": [
+        "Renew"
+      ],
+      "faultBoundary": "Renew",
+      "oracle": "version 增加，Token 不变",
+      "invariants": [
+        "INV-RT95-02",
+        "INV-RT95-03"
+      ],
+      "status": "Designed",
+      "caseVariants": [],
+      "evidenceFiles": [],
+      "limitations": [
+        "测试合同，不代表已实现或通过；组件 variant 仅为候选证据，不能自动升级顶层 TC。"
+      ]
+    },
+    {
+      "id": "TC-RT95-073",
+      "category": "lease-fencing",
+      "p0": true,
+      "evidenceLevel": "E2/E3",
+      "preconditions": [
+        "可控时钟；Lease TTL 与锁陈旧判定分离"
+      ],
+      "steps": [
+        "Takeover"
+      ],
+      "faultBoundary": "Takeover",
+      "oracle": "fencing Token 单调增加",
+      "invariants": [
+        "INV-RT95-02",
+        "INV-RT95-03"
+      ],
+      "status": "Designed",
+      "caseVariants": [
+        "W0-C02-009"
+      ],
+      "evidenceFiles": [],
+      "limitations": [
+        "测试合同，不代表已实现或通过；组件 variant 仅为候选证据，不能自动升级顶层 TC。"
+      ]
+    },
+    {
+      "id": "TC-RT95-074",
+      "category": "lease-fencing",
+      "p0": true,
+      "evidenceLevel": "E2/E3",
+      "preconditions": [
+        "可控时钟；Lease TTL 与锁陈旧判定分离"
+      ],
+      "steps": [
+        "Expired Owner commit"
+      ],
+      "faultBoundary": "Expired Owner commit",
+      "oracle": "即使未 takeover 也拒绝",
+      "invariants": [
+        "INV-RT95-02",
+        "INV-RT95-03"
+      ],
+      "status": "Designed",
+      "caseVariants": [],
+      "evidenceFiles": [],
+      "limitations": [
+        "测试合同，不代表已实现或通过；组件 variant 仅为候选证据，不能自动升级顶层 TC。"
+      ]
+    },
+    {
+      "id": "TC-RT95-075",
+      "category": "lease-fencing",
+      "p0": true,
+      "evidenceLevel": "E3",
+      "preconditions": [
+        "可控时钟；Lease TTL 与锁陈旧判定分离"
+      ],
+      "steps": [
+        "Return 边界旧 Token"
+      ],
+      "faultBoundary": "Return 边界旧 Token",
+      "oracle": "拒绝",
+      "invariants": [
+        "INV-RT95-02",
+        "INV-RT95-03"
+      ],
+      "status": "Designed",
+      "caseVariants": [],
+      "evidenceFiles": [],
+      "limitations": [
+        "测试合同，不代表已实现或通过；组件 variant 仅为候选证据，不能自动升级顶层 TC。"
+      ]
+    },
+    {
+      "id": "TC-RT95-076",
+      "category": "lease-fencing",
+      "p0": true,
+      "evidenceLevel": "E3",
+      "preconditions": [
+        "可控时钟；Lease TTL 与锁陈旧判定分离"
+      ],
+      "steps": [
+        "Model/Tool 边界旧 Token"
+      ],
+      "faultBoundary": "Model/Tool 边界旧 Token",
+      "oracle": "拒绝并保留 unknown",
+      "invariants": [
+        "INV-RT95-02",
+        "INV-RT95-03"
+      ],
+      "status": "Designed",
+      "caseVariants": [],
+      "evidenceFiles": [],
+      "limitations": [
+        "测试合同，不代表已实现或通过；组件 variant 仅为候选证据，不能自动升级顶层 TC。"
+      ]
+    },
+    {
+      "id": "TC-RT95-077",
+      "category": "lease-fencing",
+      "p0": true,
+      "evidenceLevel": "E3",
+      "preconditions": [
+        "可控时钟；Lease TTL 与锁陈旧判定分离"
+      ],
+      "steps": [
+        "Proof 边界旧 Token"
+      ],
+      "faultBoundary": "Proof 边界旧 Token",
+      "oracle": "Job 不 completed",
+      "invariants": [
+        "INV-RT95-02",
+        "INV-RT95-03"
+      ],
+      "status": "Designed",
+      "caseVariants": [],
+      "evidenceFiles": [],
+      "limitations": [
+        "测试合同，不代表已实现或通过；组件 variant 仅为候选证据，不能自动升级顶层 TC。"
+      ]
+    },
+    {
+      "id": "TC-RT95-078",
+      "category": "lease-fencing",
+      "p0": true,
+      "evidenceLevel": "E3",
+      "preconditions": [
+        "可控时钟；Lease TTL 与锁陈旧判定分离"
+      ],
+      "steps": [
+        "Cancel 边界旧 Token"
+      ],
+      "faultBoundary": "Cancel 边界旧 Token",
+      "oracle": "不覆盖新 Owner 状态",
+      "invariants": [
+        "INV-RT95-02",
+        "INV-RT95-03"
+      ],
+      "status": "Designed",
+      "caseVariants": [],
+      "evidenceFiles": [],
+      "limitations": [
+        "测试合同，不代表已实现或通过；组件 variant 仅为候选证据，不能自动升级顶层 TC。"
+      ]
+    },
+    {
+      "id": "TC-RT95-079",
+      "category": "lease-fencing",
+      "p0": false,
+      "evidenceLevel": "E2/E3",
+      "preconditions": [
+        "可控时钟；Lease TTL 与锁陈旧判定分离"
+      ],
+      "steps": [
+        "同 Job 嵌套调用"
+      ],
+      "faultBoundary": "同 Job 嵌套调用",
+      "oracle": "复用本机 Session，不死锁",
+      "invariants": [
+        "INV-RT95-02",
+        "INV-RT95-03"
+      ],
+      "status": "Designed",
+      "caseVariants": [],
+      "evidenceFiles": [],
+      "limitations": [
+        "测试合同，不代表已实现或通过；组件 variant 仅为候选证据，不能自动升级顶层 TC。"
+      ]
+    },
+    {
+      "id": "TC-RT95-080",
+      "category": "lease-fencing",
+      "p0": false,
+      "evidenceLevel": "E2",
+      "preconditions": [
+        "可控时钟；Lease TTL 与锁陈旧判定分离"
+      ],
+      "steps": [
+        "Job A 内嵌套 Job B"
+      ],
+      "faultBoundary": "Job A 内嵌套 Job B",
+      "oracle": "fail-closed，A 不污染 B",
+      "invariants": [
+        "INV-RT95-02",
+        "INV-RT95-03"
+      ],
+      "status": "Designed",
+      "caseVariants": [],
+      "evidenceFiles": [],
+      "limitations": [
+        "测试合同，不代表已实现或通过；组件 variant 仅为候选证据，不能自动升级顶层 TC。"
+      ]
+    },
+    {
+      "id": "TC-RT95-081",
+      "category": "partition-migration",
+      "p0": true,
+      "evidenceLevel": "E2",
+      "preconditions": [
+        "目录布局、Manifest、Migration Marker 和回滚 ADR 冻结"
+      ],
+      "steps": [
+        "只读加载 v7"
+      ],
+      "faultBoundary": "只读加载 v7",
+      "oracle": "语义完整且不自动迁移",
+      "invariants": [
+        "INV-RT95-02",
+        "INV-RT95-12",
+        "INV-RT95-13",
+        "INV-RT95-14"
+      ],
+      "status": "Designed",
+      "caseVariants": [],
+      "evidenceFiles": [],
+      "limitations": [
+        "测试合同，不代表已实现或通过；组件 variant 仅为候选证据，不能自动升级顶层 TC。"
+      ]
+    },
+    {
+      "id": "TC-RT95-082",
+      "category": "partition-migration",
+      "p0": true,
+      "evidenceLevel": "E2/E3",
+      "preconditions": [
+        "目录布局、Manifest、Migration Marker 和回滚 ADR 冻结"
+      ],
+      "steps": [
+        "v7→分区迁移"
+      ],
+      "faultBoundary": "v7→分区迁移",
+      "oracle": "aggregate 数量/哈希匹配",
+      "invariants": [
+        "INV-RT95-02",
+        "INV-RT95-12",
+        "INV-RT95-13",
+        "INV-RT95-14"
+      ],
+      "status": "Designed",
+      "caseVariants": [],
+      "evidenceFiles": [],
+      "limitations": [
+        "测试合同，不代表已实现或通过；组件 variant 仅为候选证据，不能自动升级顶层 TC。"
+      ]
+    },
+    {
+      "id": "TC-RT95-083",
+      "category": "partition-migration",
+      "p0": true,
+      "evidenceLevel": "E3",
+      "preconditions": [
+        "目录布局、Manifest、Migration Marker 和回滚 ADR 冻结"
+      ],
+      "steps": [
+        "global 写后迁移中断"
+      ],
+      "faultBoundary": "global 写后迁移中断",
+      "oracle": "重启选择唯一一致版本",
+      "invariants": [
+        "INV-RT95-02",
+        "INV-RT95-12",
+        "INV-RT95-13",
+        "INV-RT95-14"
+      ],
+      "status": "Designed",
+      "caseVariants": [],
+      "evidenceFiles": [],
+      "limitations": [
+        "测试合同，不代表已实现或通过；组件 variant 仅为候选证据，不能自动升级顶层 TC。"
+      ]
+    },
+    {
+      "id": "TC-RT95-084",
+      "category": "partition-migration",
+      "p0": true,
+      "evidenceLevel": "E3",
+      "preconditions": [
+        "目录布局、Manifest、Migration Marker 和回滚 ADR 冻结"
+      ],
+      "steps": [
+        "部分 Job 迁移后中断"
+      ],
+      "faultBoundary": "部分 Job 迁移后中断",
+      "oracle": "不混合读取新旧权威",
+      "invariants": [
+        "INV-RT95-02",
+        "INV-RT95-12",
+        "INV-RT95-13",
+        "INV-RT95-14"
+      ],
+      "status": "Designed",
+      "caseVariants": [],
+      "evidenceFiles": [],
+      "limitations": [
+        "测试合同，不代表已实现或通过；组件 variant 仅为候选证据，不能自动升级顶层 TC。"
+      ]
+    },
+    {
+      "id": "TC-RT95-085",
+      "category": "partition-migration",
+      "p0": true,
+      "evidenceLevel": "E2/E3",
+      "preconditions": [
+        "目录布局、Manifest、Migration Marker 和回滚 ADR 冻结"
+      ],
+      "steps": [
+        "重复执行迁移"
+      ],
+      "faultBoundary": "重复执行迁移",
+      "oracle": "幂等，无重复 Job/Event",
+      "invariants": [
+        "INV-RT95-02",
+        "INV-RT95-12",
+        "INV-RT95-13",
+        "INV-RT95-14"
+      ],
+      "status": "Designed",
+      "caseVariants": [],
+      "evidenceFiles": [],
+      "limitations": [
+        "测试合同，不代表已实现或通过；组件 variant 仅为候选证据，不能自动升级顶层 TC。"
+      ]
+    },
+    {
+      "id": "TC-RT95-086",
+      "category": "partition-migration",
+      "p0": true,
+      "evidenceLevel": "E3",
+      "preconditions": [
+        "目录布局、Manifest、Migration Marker 和回滚 ADR 冻结"
+      ],
+      "steps": [
+        "Job A 分区损坏"
+      ],
+      "faultBoundary": "Job A 分区损坏",
+      "oracle": "B 可读，A 隔离恢复",
+      "invariants": [
+        "INV-RT95-02",
+        "INV-RT95-12",
+        "INV-RT95-13",
+        "INV-RT95-14"
+      ],
+      "status": "Designed",
+      "caseVariants": [],
+      "evidenceFiles": [],
+      "limitations": [
+        "测试合同，不代表已实现或通过；组件 variant 仅为候选证据，不能自动升级顶层 TC。"
+      ]
+    },
+    {
+      "id": "TC-RT95-087",
+      "category": "partition-migration",
+      "p0": true,
+      "evidenceLevel": "E2",
+      "preconditions": [
+        "目录布局、Manifest、Migration Marker 和回滚 ADR 冻结"
+      ],
+      "steps": [
+        "Job ID 路径逃逸"
+      ],
+      "faultBoundary": "Job ID 路径逃逸",
+      "oracle": "迁移/打开拒绝",
+      "invariants": [
+        "INV-RT95-02",
+        "INV-RT95-12",
+        "INV-RT95-13",
+        "INV-RT95-14"
+      ],
+      "status": "Designed",
+      "caseVariants": [],
+      "evidenceFiles": [],
+      "limitations": [
+        "测试合同，不代表已实现或通过；组件 variant 仅为候选证据，不能自动升级顶层 TC。"
+      ]
+    },
+    {
+      "id": "TC-RT95-088",
+      "category": "partition-migration",
+      "p0": true,
+      "evidenceLevel": "E3",
+      "preconditions": [
+        "目录布局、Manifest、Migration Marker 和回滚 ADR 冻结"
+      ],
+      "steps": [
+        "分区 generation 冲突"
+      ],
+      "faultBoundary": "分区 generation 冲突",
+      "oracle": "只影响所属 Job",
+      "invariants": [
+        "INV-RT95-02",
+        "INV-RT95-12",
+        "INV-RT95-13",
+        "INV-RT95-14"
+      ],
+      "status": "Designed",
+      "caseVariants": [],
+      "evidenceFiles": [],
+      "limitations": [
+        "测试合同，不代表已实现或通过；组件 variant 仅为候选证据，不能自动升级顶层 TC。"
+      ]
+    },
+    {
+      "id": "TC-RT95-089",
+      "category": "partition-migration",
+      "p0": false,
+      "evidenceLevel": "E2/E3",
+      "preconditions": [
+        "目录布局、Manifest、Migration Marker 和回滚 ADR 冻结"
+      ],
+      "steps": [
+        "回滚兼容读取"
+      ],
+      "faultBoundary": "回滚兼容读取",
+      "oracle": "不静默丢失新语义",
+      "invariants": [
+        "INV-RT95-02",
+        "INV-RT95-12",
+        "INV-RT95-13",
+        "INV-RT95-14"
+      ],
+      "status": "Designed",
+      "caseVariants": [],
+      "evidenceFiles": [],
+      "limitations": [
+        "测试合同，不代表已实现或通过；组件 variant 仅为候选证据，不能自动升级顶层 TC。"
+      ]
+    },
+    {
+      "id": "TC-RT95-090",
+      "category": "partition-migration",
+      "p0": false,
+      "evidenceLevel": "E4",
+      "preconditions": [
+        "目录布局、Manifest、Migration Marker 和回滚 ADR 冻结"
+      ],
+      "steps": [
+        "Migration Artifact Manifest"
+      ],
+      "faultBoundary": "Migration Artifact Manifest",
+      "oracle": "文件、哈希、版本链可验证",
+      "invariants": [
+        "INV-RT95-02",
+        "INV-RT95-12",
+        "INV-RT95-13",
+        "INV-RT95-14"
+      ],
+      "status": "Designed",
+      "caseVariants": [],
+      "evidenceFiles": [],
+      "limitations": [
+        "测试合同，不代表已实现或通过；组件 variant 仅为候选证据，不能自动升级顶层 TC。"
+      ]
+    },
+    {
+      "id": "TC-RT95-091",
+      "category": "task-contract-graph",
+      "p0": true,
+      "evidenceLevel": "E2/E3",
+      "preconditions": [
+        "Task Contract、Task ID 和 Plan version 冻结"
+      ],
+      "steps": [
+        "完整 Contract 正常提交"
+      ],
+      "faultBoundary": "完整 Contract 正常提交",
+      "oracle": "字段无默认降级",
+      "invariants": [
+        "INV-RT95-04",
+        "INV-RT95-05",
+        "INV-RT95-06",
+        "INV-RT95-07"
+      ],
+      "status": "Designed",
+      "caseVariants": [],
+      "evidenceFiles": [],
+      "limitations": [
+        "测试合同，不代表已实现或通过；组件 variant 仅为候选证据，不能自动升级顶层 TC。"
+      ]
+    },
+    {
+      "id": "TC-RT95-092",
+      "category": "task-contract-graph",
+      "p0": true,
+      "evidenceLevel": "E2/E3",
+      "preconditions": [
+        "Task Contract、Task ID 和 Plan version 冻结"
+      ],
+      "steps": [
+        "Draft 未 Commit 即 Dispatch"
+      ],
+      "faultBoundary": "Draft 未 Commit 即 Dispatch",
+      "oracle": "拒绝，零副作用",
+      "invariants": [
+        "INV-RT95-04",
+        "INV-RT95-05",
+        "INV-RT95-06",
+        "INV-RT95-07"
+      ],
+      "status": "Designed",
+      "caseVariants": [],
+      "evidenceFiles": [],
+      "limitations": [
+        "测试合同，不代表已实现或通过；组件 variant 仅为候选证据，不能自动升级顶层 TC。"
+      ]
+    },
+    {
+      "id": "TC-RT95-093",
+      "category": "task-contract-graph",
+      "p0": true,
+      "evidenceLevel": "E2/E3",
+      "preconditions": [
+        "Task Contract、Task ID 和 Plan version 冻结"
+      ],
+      "steps": [
+        "原子 Commit Graph"
+      ],
+      "faultBoundary": "原子 Commit Graph",
+      "oracle": "不出现半图",
+      "invariants": [
+        "INV-RT95-04",
+        "INV-RT95-05",
+        "INV-RT95-06",
+        "INV-RT95-07"
+      ],
+      "status": "Designed",
+      "caseVariants": [],
+      "evidenceFiles": [],
+      "limitations": [
+        "测试合同，不代表已实现或通过；组件 variant 仅为候选证据，不能自动升级顶层 TC。"
+      ]
+    },
+    {
+      "id": "TC-RT95-094",
+      "category": "task-contract-graph",
+      "p0": false,
+      "evidenceLevel": "E2",
+      "preconditions": [
+        "Task Contract、Task ID 和 Plan version 冻结"
+      ],
+      "steps": [
+        "Task ID 稳定重放"
+      ],
+      "faultBoundary": "Task ID 稳定重放",
+      "oracle": "同 Plan 得相同 ID",
+      "invariants": [
+        "INV-RT95-04",
+        "INV-RT95-05",
+        "INV-RT95-06",
+        "INV-RT95-07"
+      ],
+      "status": "Designed",
+      "caseVariants": [],
+      "evidenceFiles": [],
+      "limitations": [
+        "测试合同，不代表已实现或通过；组件 variant 仅为候选证据，不能自动升级顶层 TC。"
+      ]
+    },
+    {
+      "id": "TC-RT95-095",
+      "category": "task-contract-graph",
+      "p0": true,
+      "evidenceLevel": "E2",
+      "preconditions": [
+        "Task Contract、Task ID 和 Plan version 冻结"
+      ],
+      "steps": [
+        "acceptance coverage 完整"
+      ],
+      "faultBoundary": "acceptance coverage 完整",
+      "oracle": "每 criterion 至少一 Task/Oracle",
+      "invariants": [
+        "INV-RT95-04",
+        "INV-RT95-05",
+        "INV-RT95-06",
+        "INV-RT95-07"
+      ],
+      "status": "Designed",
+      "caseVariants": [],
+      "evidenceFiles": [],
+      "limitations": [
+        "测试合同，不代表已实现或通过；组件 variant 仅为候选证据，不能自动升级顶层 TC。"
+      ]
+    },
+    {
+      "id": "TC-RT95-096",
+      "category": "task-contract-graph",
+      "p0": false,
+      "evidenceLevel": "E2",
+      "preconditions": [
+        "Task Contract、Task ID 和 Plan version 冻结"
+      ],
+      "steps": [
+        "File Claim 冲突"
+      ],
+      "faultBoundary": "File Claim 冲突",
+      "oracle": "Reject 或显式串行化",
+      "invariants": [
+        "INV-RT95-04",
+        "INV-RT95-05",
+        "INV-RT95-06",
+        "INV-RT95-07"
+      ],
+      "status": "Designed",
+      "caseVariants": [],
+      "evidenceFiles": [],
+      "limitations": [
+        "测试合同，不代表已实现或通过；组件 variant 仅为候选证据，不能自动升级顶层 TC。"
+      ]
+    },
+    {
+      "id": "TC-RT95-097",
+      "category": "task-contract-graph",
+      "p0": true,
+      "evidenceLevel": "E2",
+      "preconditions": [
+        "Task Contract、Task ID 和 Plan version 冻结"
+      ],
+      "steps": [
+        "Task 预算总和超 Job"
+      ],
+      "faultBoundary": "Task 预算总和超 Job",
+      "oracle": "Commit 前拒绝",
+      "invariants": [
+        "INV-RT95-04",
+        "INV-RT95-05",
+        "INV-RT95-06",
+        "INV-RT95-07"
+      ],
+      "status": "Designed",
+      "caseVariants": [],
+      "evidenceFiles": [],
+      "limitations": [
+        "测试合同，不代表已实现或通过；组件 variant 仅为候选证据，不能自动升级顶层 TC。"
+      ]
+    },
+    {
+      "id": "TC-RT95-098",
+      "category": "task-contract-graph",
+      "p0": true,
+      "evidenceLevel": "E2/E3",
+      "preconditions": [
+        "Task Contract、Task ID 和 Plan version 冻结"
+      ],
+      "steps": [
+        "Amendment 增加 Task"
+      ],
+      "faultBoundary": "Amendment 增加 Task",
+      "oracle": "新 revision、Diff、原因持久化",
+      "invariants": [
+        "INV-RT95-04",
+        "INV-RT95-05",
+        "INV-RT95-06",
+        "INV-RT95-07"
+      ],
+      "status": "Designed",
+      "caseVariants": [],
+      "evidenceFiles": [],
+      "limitations": [
+        "测试合同，不代表已实现或通过；组件 variant 仅为候选证据，不能自动升级顶层 TC。"
+      ]
+    },
+    {
+      "id": "TC-RT95-099",
+      "category": "task-contract-graph",
+      "p0": true,
+      "evidenceLevel": "E2/E3",
+      "preconditions": [
+        "Task Contract、Task ID 和 Plan version 冻结"
+      ],
+      "steps": [
+        "删除已有副作用 Task"
+      ],
+      "faultBoundary": "删除已有副作用 Task",
+      "oracle": "拒绝静默删除，保留事实",
+      "invariants": [
+        "INV-RT95-04",
+        "INV-RT95-05",
+        "INV-RT95-06",
+        "INV-RT95-07"
+      ],
+      "status": "Designed",
+      "caseVariants": [],
+      "evidenceFiles": [],
+      "limitations": [
+        "测试合同，不代表已实现或通过；组件 variant 仅为候选证据，不能自动升级顶层 TC。"
+      ]
+    },
+    {
+      "id": "TC-RT95-100",
+      "category": "task-contract-graph",
+      "p0": true,
+      "evidenceLevel": "E2/E3",
+      "preconditions": [
+        "Task Contract、Task ID 和 Plan version 冻结"
+      ],
+      "steps": [
+        "旧 Graph 事件到新 Graph"
+      ],
+      "faultBoundary": "旧 Graph 事件到新 Graph",
+      "oracle": "不解锁、不完成新节点",
+      "invariants": [
+        "INV-RT95-04",
+        "INV-RT95-05",
+        "INV-RT95-06",
+        "INV-RT95-07"
+      ],
+      "status": "Designed",
+      "caseVariants": [],
+      "evidenceFiles": [],
+      "limitations": [
+        "测试合同，不代表已实现或通过；组件 variant 仅为候选证据，不能自动升级顶层 TC。"
+      ]
+    },
+    {
+      "id": "TC-RT95-101",
+      "category": "supervisor-wait-guidance-heartbeat",
+      "p0": true,
+      "evidenceLevel": "E2/E3",
+      "preconditions": [
+        "Supervisor、WaitSpec、Mailbox 和 Heartbeat 协议冻结"
+      ],
+      "steps": [
+        "Supervisor 全状态正向迁移"
+      ],
+      "faultBoundary": "Supervisor 全状态正向迁移",
+      "oracle": "每步有持久事件/前置条件",
+      "invariants": [
+        "INV-RT95-03",
+        "INV-RT95-05",
+        "INV-RT95-13"
+      ],
+      "status": "Designed",
+      "caseVariants": [],
+      "evidenceFiles": [],
+      "limitations": [
+        "测试合同，不代表已实现或通过；组件 variant 仅为候选证据，不能自动升级顶层 TC。"
+      ]
+    },
+    {
+      "id": "TC-RT95-102",
+      "category": "supervisor-wait-guidance-heartbeat",
+      "p0": true,
+      "evidenceLevel": "E2/E3",
+      "preconditions": [
+        "Supervisor、WaitSpec、Mailbox 和 Heartbeat 协议冻结"
+      ],
+      "steps": [
+        "依赖完成 Wake"
+      ],
+      "faultBoundary": "依赖完成 Wake",
+      "oracle": "下游立即解锁，无忙轮询",
+      "invariants": [
+        "INV-RT95-03",
+        "INV-RT95-05",
+        "INV-RT95-13"
+      ],
+      "status": "Designed",
+      "caseVariants": [],
+      "evidenceFiles": [],
+      "limitations": [
+        "测试合同，不代表已实现或通过；组件 variant 仅为候选证据，不能自动升级顶层 TC。"
+      ]
+    },
+    {
+      "id": "TC-RT95-103",
+      "category": "supervisor-wait-guidance-heartbeat",
+      "p0": true,
+      "evidenceLevel": "E3",
+      "preconditions": [
+        "Supervisor、WaitSpec、Mailbox 和 Heartbeat 协议冻结"
+      ],
+      "steps": [
+        "任一 Child 完成"
+      ],
+      "faultBoundary": "任一 Child 完成",
+      "oracle": "单独验证，不等整批",
+      "invariants": [
+        "INV-RT95-03",
+        "INV-RT95-05",
+        "INV-RT95-13"
+      ],
+      "status": "Designed",
+      "caseVariants": [],
+      "evidenceFiles": [],
+      "limitations": [
+        "测试合同，不代表已实现或通过；组件 variant 仅为候选证据，不能自动升级顶层 TC。"
+      ]
+    },
+    {
+      "id": "TC-RT95-104",
+      "category": "supervisor-wait-guidance-heartbeat",
+      "p0": true,
+      "evidenceLevel": "E3",
+      "preconditions": [
+        "Supervisor、WaitSpec、Mailbox 和 Heartbeat 协议冻结"
+      ],
+      "steps": [
+        "人工回复 Wake"
+      ],
+      "faultBoundary": "人工回复 Wake",
+      "oracle": "正确 Job/WaitSpec 消费一次",
+      "invariants": [
+        "INV-RT95-03",
+        "INV-RT95-05",
+        "INV-RT95-13"
+      ],
+      "status": "Designed",
+      "caseVariants": [],
+      "evidenceFiles": [],
+      "limitations": [
+        "测试合同，不代表已实现或通过；组件 variant 仅为候选证据，不能自动升级顶层 TC。"
+      ]
+    },
+    {
+      "id": "TC-RT95-105",
+      "category": "supervisor-wait-guidance-heartbeat",
+      "p0": false,
+      "evidenceLevel": "E2/E3",
+      "preconditions": [
+        "Supervisor、WaitSpec、Mailbox 和 Heartbeat 协议冻结"
+      ],
+      "steps": [
+        "Quota 恢复 Wake"
+      ],
+      "faultBoundary": "Quota 恢复 Wake",
+      "oracle": "waiting→runnable 一次",
+      "invariants": [
+        "INV-RT95-03",
+        "INV-RT95-05",
+        "INV-RT95-13"
+      ],
+      "status": "Designed",
+      "caseVariants": [],
+      "evidenceFiles": [],
+      "limitations": [
+        "测试合同，不代表已实现或通过；组件 variant 仅为候选证据，不能自动升级顶层 TC。"
+      ]
+    },
+    {
+      "id": "TC-RT95-106",
+      "category": "supervisor-wait-guidance-heartbeat",
+      "p0": true,
+      "evidenceLevel": "E2/E3",
+      "preconditions": [
+        "Supervisor、WaitSpec、Mailbox 和 Heartbeat 协议冻结"
+      ],
+      "steps": [
+        "Guidance 安全边界消费"
+      ],
+      "faultBoundary": "Guidance 安全边界消费",
+      "oracle": "不打断执行中的 Model/Tool",
+      "invariants": [
+        "INV-RT95-03",
+        "INV-RT95-05",
+        "INV-RT95-13"
+      ],
+      "status": "Designed",
+      "caseVariants": [],
+      "evidenceFiles": [],
+      "limitations": [
+        "测试合同，不代表已实现或通过；组件 variant 仅为候选证据，不能自动升级顶层 TC。"
+      ]
+    },
+    {
+      "id": "TC-RT95-107",
+      "category": "supervisor-wait-guidance-heartbeat",
+      "p0": true,
+      "evidenceLevel": "E2",
+      "preconditions": [
+        "Supervisor、WaitSpec、Mailbox 和 Heartbeat 协议冻结"
+      ],
+      "steps": [
+        "Guidance 重复/错 Run"
+      ],
+      "faultBoundary": "Guidance 重复/错 Run",
+      "oracle": "fail-closed，Receipt 唯一",
+      "invariants": [
+        "INV-RT95-03",
+        "INV-RT95-05",
+        "INV-RT95-13"
+      ],
+      "status": "Designed",
+      "caseVariants": [],
+      "evidenceFiles": [],
+      "limitations": [
+        "测试合同，不代表已实现或通过；组件 variant 仅为候选证据，不能自动升级顶层 TC。"
+      ]
+    },
+    {
+      "id": "TC-RT95-108",
+      "category": "supervisor-wait-guidance-heartbeat",
+      "p0": false,
+      "evidenceLevel": "E2/E3",
+      "preconditions": [
+        "Supervisor、WaitSpec、Mailbox 和 Heartbeat 协议冻结"
+      ],
+      "steps": [
+        "正常 Heartbeat"
+      ],
+      "faultBoundary": "正常 Heartbeat",
+      "oracle": "Lease 延续，无 lost 误报",
+      "invariants": [
+        "INV-RT95-03",
+        "INV-RT95-05",
+        "INV-RT95-13"
+      ],
+      "status": "Designed",
+      "caseVariants": [],
+      "evidenceFiles": [],
+      "limitations": [
+        "测试合同，不代表已实现或通过；组件 variant 仅为候选证据，不能自动升级顶层 TC。"
+      ]
+    },
+    {
+      "id": "TC-RT95-109",
+      "category": "supervisor-wait-guidance-heartbeat",
+      "p0": true,
+      "evidenceLevel": "E3",
+      "preconditions": [
+        "Supervisor、WaitSpec、Mailbox 和 Heartbeat 协议冻结"
+      ],
+      "steps": [
+        "Worker 停止 Heartbeat"
+      ],
+      "faultBoundary": "Worker 停止 Heartbeat",
+      "oracle": "有界进入 lost/recovery decision",
+      "invariants": [
+        "INV-RT95-03",
+        "INV-RT95-05",
+        "INV-RT95-13"
+      ],
+      "status": "Designed",
+      "caseVariants": [],
+      "evidenceFiles": [],
+      "limitations": [
+        "测试合同，不代表已实现或通过；组件 variant 仅为候选证据，不能自动升级顶层 TC。"
+      ]
+    },
+    {
+      "id": "TC-RT95-110",
+      "category": "supervisor-wait-guidance-heartbeat",
+      "p0": true,
+      "evidenceLevel": "E3",
+      "preconditions": [
+        "Supervisor、WaitSpec、Mailbox 和 Heartbeat 协议冻结"
+      ],
+      "steps": [
+        "Supervisor 重启"
+      ],
+      "faultBoundary": "Supervisor 重启",
+      "oracle": "Wait/priority/deadline/reason 一致",
+      "invariants": [
+        "INV-RT95-03",
+        "INV-RT95-05",
+        "INV-RT95-13"
+      ],
+      "status": "Designed",
+      "caseVariants": [],
+      "evidenceFiles": [],
+      "limitations": [
+        "测试合同，不代表已实现或通过；组件 variant 仅为候选证据，不能自动升级顶层 TC。"
+      ]
+    },
+    {
+      "id": "TC-RT95-111",
+      "category": "evidence-proof-arbiter",
+      "p0": true,
+      "evidenceLevel": "E2/E3",
+      "preconditions": [
+        "Evidence、Proof Fragment、CompletionProof、Contradiction、Arbiter Schema 冻结"
+      ],
+      "steps": [
+        "文件存在且 digest 正确"
+      ],
+      "faultBoundary": "文件存在且 digest 正确",
+      "oracle": "Artifact Verifier passed",
+      "invariants": [
+        "INV-RT95-07",
+        "INV-RT95-08",
+        "INV-RT95-09",
+        "INV-RT95-10",
+        "INV-RT95-11"
+      ],
+      "status": "Designed",
+      "caseVariants": [
+        "W0-E01-001"
+      ],
+      "evidenceFiles": [],
+      "limitations": [
+        "测试合同，不代表已实现或通过；组件 variant 仅为候选证据，不能自动升级顶层 TC。"
+      ]
+    },
+    {
+      "id": "TC-RT95-112",
+      "category": "evidence-proof-arbiter",
+      "p0": true,
+      "evidenceLevel": "E2/E3",
+      "preconditions": [
+        "Evidence、Proof Fragment、CompletionProof、Contradiction、Arbiter Schema 冻结"
+      ],
+      "steps": [
+        "文件替换/digest 错"
+      ],
+      "faultBoundary": "文件替换/digest 错",
+      "oracle": "criterion 未满足",
+      "invariants": [
+        "INV-RT95-07",
+        "INV-RT95-08",
+        "INV-RT95-09",
+        "INV-RT95-10",
+        "INV-RT95-11"
+      ],
+      "status": "Designed",
+      "caseVariants": [
+        "W0-E01-003"
+      ],
+      "evidenceFiles": [],
+      "limitations": [
+        "测试合同，不代表已实现或通过；组件 variant 仅为候选证据，不能自动升级顶层 TC。"
+      ]
+    },
+    {
+      "id": "TC-RT95-113",
+      "category": "evidence-proof-arbiter",
+      "p0": true,
+      "evidenceLevel": "E2/E3",
+      "preconditions": [
+        "Evidence、Proof Fragment、CompletionProof、Contradiction、Arbiter Schema 冻结"
+      ],
+      "steps": [
+        "测试命令成功"
+      ],
+      "faultBoundary": "测试命令成功",
+      "oracle": "绑定命令、exit、report hash",
+      "invariants": [
+        "INV-RT95-07",
+        "INV-RT95-08",
+        "INV-RT95-09",
+        "INV-RT95-10",
+        "INV-RT95-11"
+      ],
+      "status": "Designed",
+      "caseVariants": [],
+      "evidenceFiles": [],
+      "limitations": [
+        "测试合同，不代表已实现或通过；组件 variant 仅为候选证据，不能自动升级顶层 TC。"
+      ]
+    },
+    {
+      "id": "TC-RT95-114",
+      "category": "evidence-proof-arbiter",
+      "p0": true,
+      "evidenceLevel": "E2",
+      "preconditions": [
+        "Evidence、Proof Fragment、CompletionProof、Contradiction、Arbiter Schema 冻结"
+      ],
+      "steps": [
+        "报告过期/旧 Plan"
+      ],
+      "faultBoundary": "报告过期/旧 Plan",
+      "oracle": "Evidence rejected stale",
+      "invariants": [
+        "INV-RT95-07",
+        "INV-RT95-08",
+        "INV-RT95-09",
+        "INV-RT95-10",
+        "INV-RT95-11"
+      ],
+      "status": "Designed",
+      "caseVariants": [
+        "W0-ELEG-002",
+        "W0-EVAL-003",
+        "W0-EVAL-005"
+      ],
+      "evidenceFiles": [],
+      "limitations": [
+        "测试合同，不代表已实现或通过；组件 variant 仅为候选证据，不能自动升级顶层 TC。"
+      ]
+    },
+    {
+      "id": "TC-RT95-115",
+      "category": "evidence-proof-arbiter",
+      "p0": true,
+      "evidenceLevel": "E2/E3",
+      "preconditions": [
+        "Evidence、Proof Fragment、CompletionProof、Contradiction、Arbiter Schema 冻结"
+      ],
+      "steps": [
+        "外部 Oracle 不一致"
+      ],
+      "faultBoundary": "外部 Oracle 不一致",
+      "oracle": "blocking contradiction",
+      "invariants": [
+        "INV-RT95-07",
+        "INV-RT95-08",
+        "INV-RT95-09",
+        "INV-RT95-10",
+        "INV-RT95-11"
+      ],
+      "status": "Designed",
+      "caseVariants": [
+        "W0-EVAL-001"
+      ],
+      "evidenceFiles": [],
+      "limitations": [
+        "测试合同，不代表已实现或通过；组件 variant 仅为候选证据，不能自动升级顶层 TC。"
+      ]
+    },
+    {
+      "id": "TC-RT95-116",
+      "category": "evidence-proof-arbiter",
+      "p0": true,
+      "evidenceLevel": "E3",
+      "preconditions": [
+        "Evidence、Proof Fragment、CompletionProof、Contradiction、Arbiter Schema 冻结"
+      ],
+      "steps": [
+        "Reviewer 与 Worker 隔离"
+      ],
+      "faultBoundary": "Reviewer 与 Worker 隔离",
+      "oracle": "Reviewer 只读 Proof/Artifact",
+      "invariants": [
+        "INV-RT95-07",
+        "INV-RT95-08",
+        "INV-RT95-09",
+        "INV-RT95-10",
+        "INV-RT95-11"
+      ],
+      "status": "Designed",
+      "caseVariants": [],
+      "evidenceFiles": [],
+      "limitations": [
+        "测试合同，不代表已实现或通过；组件 variant 仅为候选证据，不能自动升级顶层 TC。"
+      ]
+    },
+    {
+      "id": "TC-RT95-117",
+      "category": "evidence-proof-arbiter",
+      "p0": true,
+      "evidenceLevel": "E2/E3",
+      "preconditions": [
+        "Evidence、Proof Fragment、CompletionProof、Contradiction、Arbiter Schema 冻结"
+      ],
+      "steps": [
+        "两 Reviewer 冲突"
+      ],
+      "faultBoundary": "两 Reviewer 冲突",
+      "oracle": "创建 Arbiter，不多数投票",
+      "invariants": [
+        "INV-RT95-07",
+        "INV-RT95-08",
+        "INV-RT95-09",
+        "INV-RT95-10",
+        "INV-RT95-11"
+      ],
+      "status": "Designed",
+      "caseVariants": [],
+      "evidenceFiles": [],
+      "limitations": [
+        "测试合同，不代表已实现或通过；组件 variant 仅为候选证据，不能自动升级顶层 TC。"
+      ]
+    },
+    {
+      "id": "TC-RT95-118",
+      "category": "evidence-proof-arbiter",
+      "p0": true,
+      "evidenceLevel": "E2",
+      "preconditions": [
+        "Evidence、Proof Fragment、CompletionProof、Contradiction、Arbiter Schema 冻结"
+      ],
+      "steps": [
+        "Arbiter 不引用冲突证据"
+      ],
+      "faultBoundary": "Arbiter 不引用冲突证据",
+      "oracle": "Verdict 拒绝",
+      "invariants": [
+        "INV-RT95-07",
+        "INV-RT95-08",
+        "INV-RT95-09",
+        "INV-RT95-10",
+        "INV-RT95-11"
+      ],
+      "status": "Designed",
+      "caseVariants": [
+        "W0-EVAL-002"
+      ],
+      "evidenceFiles": [],
+      "limitations": [
+        "测试合同，不代表已实现或通过；组件 variant 仅为候选证据，不能自动升级顶层 TC。"
+      ]
+    },
+    {
+      "id": "TC-RT95-119",
+      "category": "evidence-proof-arbiter",
+      "p0": true,
+      "evidenceLevel": "E2/E3",
+      "preconditions": [
+        "Evidence、Proof Fragment、CompletionProof、Contradiction、Arbiter Schema 冻结"
+      ],
+      "steps": [
+        "Proof 缺一 criterion"
+      ],
+      "faultBoundary": "Proof 缺一 criterion",
+      "oracle": "Job 不 completed",
+      "invariants": [
+        "INV-RT95-07",
+        "INV-RT95-08",
+        "INV-RT95-09",
+        "INV-RT95-10",
+        "INV-RT95-11"
+      ],
+      "status": "Designed",
+      "caseVariants": [
+        "W0-C01-005"
+      ],
+      "evidenceFiles": [],
+      "limitations": [
+        "测试合同，不代表已实现或通过；组件 variant 仅为候选证据，不能自动升级顶层 TC。"
+      ]
+    },
+    {
+      "id": "TC-RT95-120",
+      "category": "evidence-proof-arbiter",
+      "p0": true,
+      "evidenceLevel": "E3",
+      "preconditions": [
+        "Evidence、Proof Fragment、CompletionProof、Contradiction、Arbiter Schema 冻结"
+      ],
+      "steps": [
+        "Proof 完整无矛盾"
+      ],
+      "faultBoundary": "Proof 完整无矛盾",
+      "oracle": "单 generation 提交并允许交付",
+      "invariants": [
+        "INV-RT95-07",
+        "INV-RT95-08",
+        "INV-RT95-09",
+        "INV-RT95-10",
+        "INV-RT95-11"
+      ],
+      "status": "Designed",
+      "caseVariants": [],
+      "evidenceFiles": [],
+      "limitations": [
+        "测试合同，不代表已实现或通过；组件 variant 仅为候选证据，不能自动升级顶层 TC。"
+      ]
+    },
+    {
+      "id": "TC-RT95-121",
+      "category": "capability-namespace",
+      "p0": true,
+      "evidenceLevel": "E2/E3",
+      "preconditions": [
+        "Effective Grant 与 Namespace 标识冻结"
+      ],
+      "steps": [
+        "Profile 允许、Job 禁 Tool"
+      ],
+      "faultBoundary": "Profile 允许、Job 禁 Tool",
+      "oracle": "最终拒绝",
+      "invariants": [
+        "INV-RT95-06",
+        "INV-RT95-12"
+      ],
+      "status": "Designed",
+      "caseVariants": [
+        "W0-D01-001",
+        "W0-D02-001"
+      ],
+      "evidenceFiles": [],
+      "limitations": [
+        "测试合同，不代表已实现或通过；组件 variant 仅为候选证据，不能自动升级顶层 TC。"
+      ]
+    },
+    {
+      "id": "TC-RT95-122",
+      "category": "capability-namespace",
+      "p0": true,
+      "evidenceLevel": "E2/E3",
+      "preconditions": [
+        "Effective Grant 与 Namespace 标识冻结"
+      ],
+      "steps": [
+        "Job 允许、Task 禁 Tool"
+      ],
+      "faultBoundary": "Job 允许、Task 禁 Tool",
+      "oracle": "最终拒绝",
+      "invariants": [
+        "INV-RT95-06",
+        "INV-RT95-12"
+      ],
+      "status": "Designed",
+      "caseVariants": [],
+      "evidenceFiles": [],
+      "limitations": [
+        "测试合同，不代表已实现或通过；组件 variant 仅为候选证据，不能自动升级顶层 TC。"
+      ]
+    },
+    {
+      "id": "TC-RT95-123",
+      "category": "capability-namespace",
+      "p0": true,
+      "evidenceLevel": "E3",
+      "preconditions": [
+        "Effective Grant 与 Namespace 标识冻结"
+      ],
+      "steps": [
+        "用户未确认写操作"
+      ],
+      "faultBoundary": "用户未确认写操作",
+      "oracle": "副作用前拒绝",
+      "invariants": [
+        "INV-RT95-06",
+        "INV-RT95-12"
+      ],
+      "status": "Designed",
+      "caseVariants": [
+        "W0-D01-003",
+        "W0-D02-002"
+      ],
+      "evidenceFiles": [],
+      "limitations": [
+        "测试合同，不代表已实现或通过；组件 variant 仅为候选证据，不能自动升级顶层 TC。"
+      ]
+    },
+    {
+      "id": "TC-RT95-124",
+      "category": "capability-namespace",
+      "p0": true,
+      "evidenceLevel": "E3",
+      "preconditions": [
+        "Effective Grant 与 Namespace 标识冻结"
+      ],
+      "steps": [
+        "Job A 读取 Job B Artifact"
+      ],
+      "faultBoundary": "Job A 读取 Job B Artifact",
+      "oracle": "Namespace 拒绝",
+      "invariants": [
+        "INV-RT95-06",
+        "INV-RT95-12"
+      ],
+      "status": "Designed",
+      "caseVariants": [],
+      "evidenceFiles": [],
+      "limitations": [
+        "测试合同，不代表已实现或通过；组件 variant 仅为候选证据，不能自动升级顶层 TC。"
+      ]
+    },
+    {
+      "id": "TC-RT95-125",
+      "category": "capability-namespace",
+      "p0": true,
+      "evidenceLevel": "E3",
+      "preconditions": [
+        "Effective Grant 与 Namespace 标识冻结"
+      ],
+      "steps": [
+        "Job A 使用 Job B Credential"
+      ],
+      "faultBoundary": "Job A 使用 Job B Credential",
+      "oracle": "拒绝且日志不泄密",
+      "invariants": [
+        "INV-RT95-06",
+        "INV-RT95-12"
+      ],
+      "status": "Designed",
+      "caseVariants": [],
+      "evidenceFiles": [],
+      "limitations": [
+        "测试合同，不代表已实现或通过；组件 variant 仅为候选证据，不能自动升级顶层 TC。"
+      ]
+    },
+    {
+      "id": "TC-RT95-126",
+      "category": "capability-namespace",
+      "p0": true,
+      "evidenceLevel": "E2/E3",
+      "preconditions": [
+        "Effective Grant 与 Namespace 标识冻结"
+      ],
+      "steps": [
+        "MCP Result 错 correlationId"
+      ],
+      "faultBoundary": "MCP Result 错 correlationId",
+      "oracle": "不交给错误 Invocation",
+      "invariants": [
+        "INV-RT95-06",
+        "INV-RT95-12"
+      ],
+      "status": "Designed",
+      "caseVariants": [],
+      "evidenceFiles": [],
+      "limitations": [
+        "测试合同，不代表已实现或通过；组件 variant 仅为候选证据，不能自动升级顶层 TC。"
+      ]
+    },
+    {
+      "id": "TC-RT95-127",
+      "category": "capability-namespace",
+      "p0": true,
+      "evidenceLevel": "E2/E3",
+      "preconditions": [
+        "Effective Grant 与 Namespace 标识冻结"
+      ],
+      "steps": [
+        "Tool Result 错投 Turn/Job"
+      ],
+      "faultBoundary": "Tool Result 错投 Turn/Job",
+      "oracle": "Reducer 拒绝",
+      "invariants": [
+        "INV-RT95-06",
+        "INV-RT95-12"
+      ],
+      "status": "Designed",
+      "caseVariants": [
+        "W0-C02-006"
+      ],
+      "evidenceFiles": [],
+      "limitations": [
+        "测试合同，不代表已实现或通过；组件 variant 仅为候选证据，不能自动升级顶层 TC。"
+      ]
+    },
+    {
+      "id": "TC-RT95-128",
+      "category": "capability-namespace",
+      "p0": true,
+      "evidenceLevel": "E2/E3",
+      "preconditions": [
+        "Effective Grant 与 Namespace 标识冻结"
+      ],
+      "steps": [
+        "Child 请求 full_access"
+      ],
+      "faultBoundary": "Child 请求 full_access",
+      "oracle": "只能取交集，不能扩大",
+      "invariants": [
+        "INV-RT95-06",
+        "INV-RT95-12"
+      ],
+      "status": "Designed",
+      "caseVariants": [
+        "W0-DLEG-001"
+      ],
+      "evidenceFiles": [],
+      "limitations": [
+        "测试合同，不代表已实现或通过；组件 variant 仅为候选证据，不能自动升级顶层 TC。"
+      ]
+    },
+    {
+      "id": "TC-RT95-129",
+      "category": "capability-namespace",
+      "p0": true,
+      "evidenceLevel": "E2/E3",
+      "preconditions": [
+        "Effective Grant 与 Namespace 标识冻结"
+      ],
+      "steps": [
+        "Worktree 链接/路径逃逸"
+      ],
+      "faultBoundary": "Worktree 链接/路径逃逸",
+      "oracle": "拒绝",
+      "invariants": [
+        "INV-RT95-06",
+        "INV-RT95-12"
+      ],
+      "status": "Designed",
+      "caseVariants": [
+        "W0-D01-002",
+        "W0-DLEG-002"
+      ],
+      "evidenceFiles": [],
+      "limitations": [
+        "测试合同，不代表已实现或通过；组件 variant 仅为候选证据，不能自动升级顶层 TC。"
+      ]
+    },
+    {
+      "id": "TC-RT95-130",
+      "category": "capability-namespace",
+      "p0": true,
+      "evidenceLevel": "E3",
+      "preconditions": [
+        "Effective Grant 与 Namespace 标识冻结"
+      ],
+      "steps": [
+        "Terminal 跨 Job 控制"
+      ],
+      "faultBoundary": "Terminal 跨 Job 控制",
+      "oracle": "不能 signal/attach 他 Job 进程",
+      "invariants": [
+        "INV-RT95-06",
+        "INV-RT95-12"
+      ],
+      "status": "Designed",
+      "caseVariants": [],
+      "evidenceFiles": [],
+      "limitations": [
+        "测试合同，不代表已实现或通过；组件 variant 仅为候选证据，不能自动升级顶层 TC。"
+      ]
+    },
+    {
+      "id": "TC-RT95-131",
+      "category": "quota-backpressure-fairness",
+      "p0": true,
+      "evidenceLevel": "E2/E3",
+      "preconditions": [
+        "配额单位、阈值、等待和失败策略冻结"
+      ],
+      "steps": [
+        "Job A Token 耗尽"
+      ],
+      "faultBoundary": "Job A Token 耗尽",
+      "oracle": "A 等待/失败，B 继续",
+      "invariants": [
+        "INV-RT95-12",
+        "INV-RT95-13"
+      ],
+      "status": "Designed",
+      "caseVariants": [],
+      "evidenceFiles": [],
+      "limitations": [
+        "测试合同，不代表已实现或通过；组件 variant 仅为候选证据，不能自动升级顶层 TC。"
+      ]
+    },
+    {
+      "id": "TC-RT95-132",
+      "category": "quota-backpressure-fairness",
+      "p0": false,
+      "evidenceLevel": "E2/E3",
+      "preconditions": [
+        "配额单位、阈值、等待和失败策略冻结"
+      ],
+      "steps": [
+        "Tool 并发超限"
+      ],
+      "faultBoundary": "Tool 并发超限",
+      "oracle": "有界排队，无超发",
+      "invariants": [
+        "INV-RT95-12",
+        "INV-RT95-13"
+      ],
+      "status": "Designed",
+      "caseVariants": [],
+      "evidenceFiles": [],
+      "limitations": [
+        "测试合同，不代表已实现或通过；组件 variant 仅为候选证据，不能自动升级顶层 TC。"
+      ]
+    },
+    {
+      "id": "TC-RT95-133",
+      "category": "quota-backpressure-fairness",
+      "p0": true,
+      "evidenceLevel": "E3",
+      "preconditions": [
+        "配额单位、阈值、等待和失败策略冻结"
+      ],
+      "steps": [
+        "进程数超限"
+      ],
+      "faultBoundary": "进程数超限",
+      "oracle": "新进程不启动，旧进程不误杀",
+      "invariants": [
+        "INV-RT95-12",
+        "INV-RT95-13"
+      ],
+      "status": "Designed",
+      "caseVariants": [],
+      "evidenceFiles": [],
+      "limitations": [
+        "测试合同，不代表已实现或通过；组件 variant 仅为候选证据，不能自动升级顶层 TC。"
+      ]
+    },
+    {
+      "id": "TC-RT95-134",
+      "category": "quota-backpressure-fairness",
+      "p0": false,
+      "evidenceLevel": "E2/E3",
+      "preconditions": [
+        "配额单位、阈值、等待和失败策略冻结"
+      ],
+      "steps": [
+        "Tool 输出字节超限"
+      ],
+      "faultBoundary": "Tool 输出字节超限",
+      "oracle": "按合同截断/失败，无内存失控",
+      "invariants": [
+        "INV-RT95-12",
+        "INV-RT95-13"
+      ],
+      "status": "Designed",
+      "caseVariants": [],
+      "evidenceFiles": [],
+      "limitations": [
+        "测试合同，不代表已实现或通过；组件 variant 仅为候选证据，不能自动升级顶层 TC。"
+      ]
+    },
+    {
+      "id": "TC-RT95-135",
+      "category": "quota-backpressure-fairness",
+      "p0": true,
+      "evidenceLevel": "E2/E3",
+      "preconditions": [
+        "配额单位、阈值、等待和失败策略冻结"
+      ],
+      "steps": [
+        "Artifact 磁盘超限"
+      ],
+      "faultBoundary": "Artifact 磁盘超限",
+      "oracle": "原子拒绝，不写半文件",
+      "invariants": [
+        "INV-RT95-12",
+        "INV-RT95-13"
+      ],
+      "status": "Designed",
+      "caseVariants": [],
+      "evidenceFiles": [],
+      "limitations": [
+        "测试合同，不代表已实现或通过；组件 variant 仅为候选证据，不能自动升级顶层 TC。"
+      ]
+    },
+    {
+      "id": "TC-RT95-136",
+      "category": "quota-backpressure-fairness",
+      "p0": true,
+      "evidenceLevel": "E2/E3",
+      "preconditions": [
+        "配额单位、阈值、等待和失败策略冻结"
+      ],
+      "steps": [
+        "A=100 Child、B=1 Child"
+      ],
+      "faultBoundary": "A=100 Child、B=1 Child",
+      "oracle": "B 等待时间有界",
+      "invariants": [
+        "INV-RT95-12",
+        "INV-RT95-13"
+      ],
+      "status": "Designed",
+      "caseVariants": [],
+      "evidenceFiles": [],
+      "limitations": [
+        "测试合同，不代表已实现或通过；组件 variant 仅为候选证据，不能自动升级顶层 TC。"
+      ]
+    },
+    {
+      "id": "TC-RT95-137",
+      "category": "quota-backpressure-fairness",
+      "p0": true,
+      "evidenceLevel": "E3",
+      "preconditions": [
+        "配额单位、阈值、等待和失败策略冻结"
+      ],
+      "steps": [
+        "Quota Wait 时重启"
+      ],
+      "faultBoundary": "Quota Wait 时重启",
+      "oracle": "原等待原因/优先级恢复",
+      "invariants": [
+        "INV-RT95-12",
+        "INV-RT95-13"
+      ],
+      "status": "Designed",
+      "caseVariants": [],
+      "evidenceFiles": [],
+      "limitations": [
+        "测试合同，不代表已实现或通过；组件 variant 仅为候选证据，不能自动升级顶层 TC。"
+      ]
+    },
+    {
+      "id": "TC-RT95-138",
+      "category": "quota-backpressure-fairness",
+      "p0": false,
+      "evidenceLevel": "E2/E3",
+      "preconditions": [
+        "配额单位、阈值、等待和失败策略冻结"
+      ],
+      "steps": [
+        "deadline 早于排队机会"
+      ],
+      "faultBoundary": "deadline 早于排队机会",
+      "oracle": "明确 timeout，不静默丢 Task",
+      "invariants": [
+        "INV-RT95-12",
+        "INV-RT95-13"
+      ],
+      "status": "Designed",
+      "caseVariants": [],
+      "evidenceFiles": [],
+      "limitations": [
+        "测试合同，不代表已实现或通过；组件 variant 仅为候选证据，不能自动升级顶层 TC。"
+      ]
+    },
+    {
+      "id": "TC-RT95-139",
+      "category": "quota-backpressure-fairness",
+      "p0": true,
+      "evidenceLevel": "E2",
+      "preconditions": [
+        "配额单位、阈值、等待和失败策略冻结"
+      ],
+      "steps": [
+        "Quota 计数重复事件"
+      ],
+      "faultBoundary": "Quota 计数重复事件",
+      "oracle": "不重复扣减/返还",
+      "invariants": [
+        "INV-RT95-12",
+        "INV-RT95-13"
+      ],
+      "status": "Designed",
+      "caseVariants": [],
+      "evidenceFiles": [],
+      "limitations": [
+        "测试合同，不代表已实现或通过；组件 variant 仅为候选证据，不能自动升级顶层 TC。"
+      ]
+    },
+    {
+      "id": "TC-RT95-140",
+      "category": "quota-backpressure-fairness",
+      "p0": true,
+      "evidenceLevel": "E3",
+      "preconditions": [
+        "配额单位、阈值、等待和失败策略冻结"
+      ],
+      "steps": [
+        "MCP/Tool Storm"
+      ],
+      "faultBoundary": "MCP/Tool Storm",
+      "oracle": "其他 Job 延迟/正确性过门禁",
+      "invariants": [
+        "INV-RT95-12",
+        "INV-RT95-13"
+      ],
+      "status": "Designed",
+      "caseVariants": [],
+      "evidenceFiles": [],
+      "limitations": [
+        "测试合同，不代表已实现或通过；组件 variant 仅为候选证据，不能自动升级顶层 TC。"
+      ]
+    },
+    {
+      "id": "TC-RT95-141",
+      "category": "performance-durability-reproduction",
+      "p0": false,
+      "evidenceLevel": "E3",
+      "preconditions": [
+        "硬件、Commit、配置、Provider 类型和阈值冻结"
+      ],
+      "steps": [
+        "目标并发 Spike 5 分钟"
+      ],
+      "faultBoundary": "目标并发 Spike 5 分钟",
+      "oracle": "无状态污染/失控拒绝",
+      "invariants": [
+        "INV-RT95-12",
+        "INV-RT95-13",
+        "INV-RT95-14"
+      ],
+      "status": "Designed",
+      "caseVariants": [],
+      "evidenceFiles": [],
+      "limitations": [
+        "测试合同，不代表已实现或通过；组件 variant 仅为候选证据，不能自动升级顶层 TC。"
+      ]
+    },
+    {
+      "id": "TC-RT95-142",
+      "category": "performance-durability-reproduction",
+      "p0": false,
+      "evidenceLevel": "E3",
+      "preconditions": [
+        "硬件、Commit、配置、Provider 类型和阈值冻结"
+      ],
+      "steps": [
+        "Steady 30 分钟"
+      ],
+      "faultBoundary": "Steady 30 分钟",
+      "oracle": "吞吐/P95/错误率达阈值",
+      "invariants": [
+        "INV-RT95-12",
+        "INV-RT95-13",
+        "INV-RT95-14"
+      ],
+      "status": "Designed",
+      "caseVariants": [],
+      "evidenceFiles": [],
+      "limitations": [
+        "测试合同，不代表已实现或通过；组件 variant 仅为候选证据，不能自动升级顶层 TC。"
+      ]
+    },
+    {
+      "id": "TC-RT95-143",
+      "category": "performance-durability-reproduction",
+      "p0": false,
+      "evidenceLevel": "E3",
+      "preconditions": [
+        "硬件、Commit、配置、Provider 类型和阈值冻结"
+      ],
+      "steps": [
+        "70% 并发 2 小时"
+      ],
+      "faultBoundary": "70% 并发 2 小时",
+      "oracle": "RSS/句柄/Queue 无持续泄漏",
+      "invariants": [
+        "INV-RT95-12",
+        "INV-RT95-13",
+        "INV-RT95-14"
+      ],
+      "status": "Designed",
+      "caseVariants": [],
+      "evidenceFiles": [],
+      "limitations": [
+        "测试合同，不代表已实现或通过；组件 variant 仅为候选证据，不能自动升级顶层 TC。"
+      ]
+    },
+    {
+      "id": "TC-RT95-144",
+      "category": "performance-durability-reproduction",
+      "p0": false,
+      "evidenceLevel": "E3",
+      "preconditions": [
+        "硬件、Commit、配置、Provider 类型和阈值冻结"
+      ],
+      "steps": [
+        "8 小时耐久"
+      ],
+      "faultBoundary": "8 小时耐久",
+      "oracle": "无累积重复 Return/Proof",
+      "invariants": [
+        "INV-RT95-12",
+        "INV-RT95-13",
+        "INV-RT95-14"
+      ],
+      "status": "Designed",
+      "caseVariants": [],
+      "evidenceFiles": [],
+      "limitations": [
+        "测试合同，不代表已实现或通过；组件 variant 仅为候选证据，不能自动升级顶层 TC。"
+      ]
+    },
+    {
+      "id": "TC-RT95-145",
+      "category": "performance-durability-reproduction",
+      "p0": false,
+      "evidenceLevel": "E3",
+      "preconditions": [
+        "硬件、Commit、配置、Provider 类型和阈值冻结"
+      ],
+      "steps": [
+        "1k/10k/100k 对象"
+      ],
+      "faultBoundary": "1k/10k/100k 对象",
+      "oracle": "查询/恢复不超冻结阈值",
+      "invariants": [
+        "INV-RT95-12",
+        "INV-RT95-13",
+        "INV-RT95-14"
+      ],
+      "status": "Designed",
+      "caseVariants": [],
+      "evidenceFiles": [],
+      "limitations": [
+        "测试合同，不代表已实现或通过；组件 variant 仅为候选证据，不能自动升级顶层 TC。"
+      ]
+    },
+    {
+      "id": "TC-RT95-146",
+      "category": "performance-durability-reproduction",
+      "p0": true,
+      "evidenceLevel": "E3",
+      "preconditions": [
+        "硬件、Commit、配置、Provider 类型和阈值冻结"
+      ],
+      "steps": [
+        "Kill 后 Recovery Drain"
+      ],
+      "faultBoundary": "Kill 后 Recovery Drain",
+      "oracle": "积压清空且无重复副作用",
+      "invariants": [
+        "INV-RT95-12",
+        "INV-RT95-13",
+        "INV-RT95-14"
+      ],
+      "status": "Designed",
+      "caseVariants": [],
+      "evidenceFiles": [],
+      "limitations": [
+        "测试合同，不代表已实现或通过；组件 variant 仅为候选证据，不能自动升级顶层 TC。"
+      ]
+    },
+    {
+      "id": "TC-RT95-147",
+      "category": "performance-durability-reproduction",
+      "p0": true,
+      "evidenceLevel": "E3",
+      "preconditions": [
+        "硬件、Commit、配置、Provider 类型和阈值冻结"
+      ],
+      "steps": [
+        "GATE-40：8 窗口×5 seed"
+      ],
+      "faultBoundary": "GATE-40：8 窗口×5 seed",
+      "oracle": "保存全部正负 raw",
+      "invariants": [
+        "INV-RT95-12",
+        "INV-RT95-13",
+        "INV-RT95-14"
+      ],
+      "status": "Designed",
+      "caseVariants": [],
+      "evidenceFiles": [],
+      "limitations": [
+        "测试合同，不代表已实现或通过；组件 variant 仅为候选证据，不能自动升级顶层 TC。"
+      ]
+    },
+    {
+      "id": "TC-RT95-148",
+      "category": "performance-durability-reproduction",
+      "p0": false,
+      "evidenceLevel": "E4 候选",
+      "preconditions": [
+        "硬件、Commit、配置、Provider 类型和阈值冻结"
+      ],
+      "steps": [
+        "完整单变量消融"
+      ],
+      "faultBoundary": "完整单变量消融",
+      "oracle": "每次仅移除一个机制",
+      "invariants": [
+        "INV-RT95-12",
+        "INV-RT95-13",
+        "INV-RT95-14"
+      ],
+      "status": "Designed",
+      "caseVariants": [],
+      "evidenceFiles": [],
+      "limitations": [
+        "测试合同，不代表已实现或通过；组件 variant 仅为候选证据，不能自动升级顶层 TC。"
+      ]
+    },
+    {
+      "id": "TC-RT95-149",
+      "category": "performance-durability-reproduction",
+      "p0": true,
+      "evidenceLevel": "E4 候选",
+      "preconditions": [
+        "硬件、Commit、配置、Provider 类型和阈值冻结"
+      ],
+      "steps": [
+        "外部无指导复现"
+      ],
+      "faultBoundary": "外部无指导复现",
+      "oracle": "两个环境按 SOP 得到规定投影",
+      "invariants": [
+        "INV-RT95-12",
+        "INV-RT95-13",
+        "INV-RT95-14"
+      ],
+      "status": "Designed",
+      "caseVariants": [],
+      "evidenceFiles": [],
+      "limitations": [
+        "测试合同，不代表已实现或通过；组件 variant 仅为候选证据，不能自动升级顶层 TC。"
+      ]
+    },
+    {
+      "id": "TC-RT95-150",
+      "category": "performance-durability-reproduction",
+      "p0": true,
+      "evidenceLevel": "E4 候选",
+      "preconditions": [
+        "硬件、Commit、配置、Provider 类型和阈值冻结"
+      ],
+      "steps": [
+        "Manifest/Claim 门禁"
+      ],
+      "faultBoundary": "Manifest/Claim 门禁",
+      "oracle": "Claim、Commit、报告、限制一致",
+      "invariants": [
+        "INV-RT95-12",
+        "INV-RT95-13",
+        "INV-RT95-14"
+      ],
+      "status": "Designed",
+      "caseVariants": [],
+      "evidenceFiles": [],
+      "limitations": [
+        "测试合同，不代表已实现或通过；组件 variant 仅为候选证据，不能自动升级顶层 TC。"
+      ]
+    }
+  ]
+}

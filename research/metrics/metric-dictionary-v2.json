@@ -1,0 +1,404 @@
+{
+  "schemaVersion": "god-agent-metric-dictionary-v2",
+  "revision": 6,
+  "status": "w0-fifth-reviewer-returned-remediated-pending-sixth-review",
+  "claimBoundary": "This dictionary defines constructs and validation rules; it does not prove F01/F02, complete E3, GATE-40, exactly-once, production readiness, external reproduction, or E4.",
+  "legacyPolicy": {
+    "taskSuccess": "legacyTaskSuccess",
+    "recoverySuccess": "legacyRecoverySuccess",
+    "automaticMappingAllowed": false,
+    "missingFacts": ["missing", "not_applicable"]
+  },
+  "caseIdentityRequired": [
+    "runId",
+    "caseId",
+    "variant",
+    "fixtureRevision",
+    "seed",
+    "planVersion",
+    "faultWindow",
+    "oracleRevision",
+    "commit",
+    "tree",
+    "preregistrationDigest",
+    "configDigest",
+    "environmentDigest",
+    "entryPoint",
+    "providerKind",
+    "toolKind",
+    "budgetDigest",
+    "faultPlanDigest",
+    "evidenceLevel",
+    "environment",
+    "evidenceRefs"
+  ],
+  "aggregationIdentity": {
+    "stratumKey": [
+      "commit",
+      "tree",
+      "preregistrationDigest",
+      "configDigest",
+      "environmentDigest",
+      "entryPoint",
+      "providerKind",
+      "toolKind",
+      "budgetDigest",
+      "faultPlanDigest",
+      "fixtureRevision",
+      "planVersion",
+      "faultWindow",
+      "oracleRevision",
+      "evidenceLevel"
+    ],
+    "armAggregationKey": "stratumKey + variant",
+    "pairedUnitKey": "stratumKey + seed + caseId",
+    "runIdentityOnly": ["runId"],
+    "rules": [
+      "variant, seed, caseId, and runId are not members of stratumKey.",
+      "Cases in one armAggregationKey may be aggregated across seeds under a preregistered statistical plan.",
+      "pairedUnitKey identifies the same seed and case across variants; variant is deliberately excluded.",
+      "Uncontrolled cross-stratum aggregation is forbidden; preregistered hierarchical or covariate models are explicit exceptions."
+    ]
+  },
+  "digestEncoding": {
+    "algorithm": "sha256",
+    "encoding": "lowercase-hex",
+    "meaning": "Digest fields identify archived canonical inputs; a file name alone is insufficient."
+  },
+  "oracleSeparation": {
+    "runtimeQueryOracle": "Information queryable by the production Runtime under its granted capabilities; it may affect runtime decisions.",
+    "runtimeVisibilityRule": "The Runtime Occurrence Ledger contains only runtime-visible outcomes, receipts, runtime query evidence, and runtime evidence references. It contains no Harness ground-truth fields or values.",
+    "harnessGroundTruthOracle": "Privileged hidden experimental truth used only for retrospective labels and metrics; it must never enter Employee or Runtime context, prompts, tools, artifacts visible during execution, completion decisions, or recovery decisions.",
+    "harnessGroundTruthJoin": "A Research/SOP Custodian may reveal the Harness-only ledger only after the Runtime case is terminal. Effect metrics join by occurrenceId; retrospective completion truth, including criteria with no Effect, joins by caseId + criterionId + requirementRevision.",
+    "retrospectiveEligibility": "The post-run Harness-only ledger fields available and decisive must both be true; otherwise the observation is missing and excluded with a disclosed count.",
+    "groundTruthLeakAction": "invalidate-case"
+  },
+  "effectPolicyV2": {
+    "effectDomain": ["none", "workspace", "external_system"],
+    "operation": ["none", "read", "create", "update", "delete", "execute", "communicate"],
+    "reversibility": ["not_applicable", "reversible", "irreversible"],
+    "replay": ["not_applicable", "idempotent", "deduplicated", "non_idempotent"],
+    "observability": ["not_applicable", "queryable", "non_queryable"],
+    "compensation": ["not_applicable", "compensatable", "non_compensatable"],
+    "effectRecordRequired": [
+      "effectId",
+      "criterionIds",
+      "requiredForCompletion",
+      "blocking",
+      "effectDomain",
+      "operation",
+      "reversibility",
+      "replay",
+      "observability",
+      "compensation",
+      "automaticReplayAllowed",
+      "expectedCardinality",
+      "runtimeOutcomeState",
+      "unresolvedOccurrenceIds",
+      "runtimeOccurrences"
+    ],
+    "runtimeOccurrenceRequired": [
+      "occurrenceId",
+      "invocationId",
+      "attempt",
+      "runtimeVisibleOutcome",
+      "completionReceiptRef",
+      "failureReceiptRef",
+      "runtimeQueryOracleRef",
+      "decisiveRuntimeQueryResolution",
+      "runtimeEvidenceRefs"
+    ],
+    "runtimeOutcomeReducerV1": {
+      "version": "runtime-outcome-reducer-v1",
+      "inputs": ["effect record presence", "runtimeOccurrences", "runtime-visible completion/failure receipts", "decisive runtime query resolutions"],
+      "unresolvedOccurrenceIds": "All occurrenceIds whose runtimeVisibleOutcome is outcome_unknown and that are not covered by a decisive runtime query resolution. An effect record with no decisive success/failure receipt or resolution remains unresolved.",
+      "rulesInOrder": [
+        "If no effect record exists, runtimeOutcomeState is not_applicable.",
+        "If an effect record exists and unresolvedOccurrenceIds is non-empty, runtimeOutcomeState is outcome_unknown.",
+        "If unresolvedOccurrenceIds is empty and decisive runtime-visible receipts or resolutions conflict, reject the case as an invariant violation.",
+        "If unresolvedOccurrenceIds is empty and a decisive failure receipt or resolution exists with no conflicting success, runtimeOutcomeState is known_failure.",
+        "If unresolvedOccurrenceIds is empty and a decisive completion receipt or success resolution exists with no failure, runtimeOutcomeState is known_success.",
+        "If an effect record exists but none of the preceding terminal rules applies, runtimeOutcomeState is outcome_unknown."
+      ],
+      "notApplicableRule": "not_applicable is valid only when no effect record exists; it is invalid for a declared effect."
+    },
+    "harnessOnlyOccurrenceRequired": [
+      "occurrenceId",
+      "effectId",
+      "effectOccurred",
+      "groundTruthOutcome",
+      "available",
+      "decisive",
+      "harnessEvidenceRefs"
+    ],
+    "harnessOnlyLedgerPolicy": {
+      "namespace": "harness-only",
+      "runtimeAccessible": false,
+      "employeeAccessible": false,
+      "contractCarriesOnly": ["opaqueHarnessLedgerHandle", "revealAfterTerminal", "custodian", "postRunJoinKey"],
+      "revealAfterTerminal": true,
+      "custodian": "Research/SOP Custodian",
+      "postRunJoinKey": "occurrenceId"
+    },
+    "duplicateFormula": "max(0, observedCardinality - expectedCardinality), where observedCardinality is computed only from occurrences with available and decisive harness ground truth",
+    "multipleEffectsRule": "effectId identifies one logical effect across retries; occurrenceId is unique per observed attempt; runtimeOutcomeReducerV1 prevents one known occurrence from masking another unresolved occurrence. Free-text ALL_EFFECTS is invalid.",
+    "capabilityRiskOrder": ["none", "read_only", "workspace_write", "external_reversible", "external_irreversible"],
+    "capabilityCeilingRule": "requiredRisk(effect) <= Capability ceiling under the total order none < read_only < workspace_write < external_reversible < external_irreversible; equality of risk names does not expand namespace, operation, credential, quota, expiry, or confirmation grants.",
+    "capabilityMapping": {
+      "none": "effectDomain=none and operation=none",
+      "read_only": "operation=read with no mutation",
+      "workspace_write": "effectDomain=workspace and operation in create/update/delete/execute",
+      "external_reversible": "effectDomain=external_system and reversibility=reversible",
+      "external_irreversible": "effectDomain=external_system and reversibility=irreversible; automaticReplayAllowed defaults false"
+    },
+    "policyInvalidCombinations": [
+      {"id": "EFFECT-INV-001", "when": "effectDomain=none and operation is not none, or operation=none and effectDomain is not none", "action": "reject"},
+      {"id": "EFFECT-INV-002", "when": "operation=read and reversibility, replay, or compensation is not not_applicable", "action": "reject"},
+      {"id": "EFFECT-INV-003", "when": "effectDomain=external_system and operation is create, update, delete, execute, or communicate but reversibility is not reversible or irreversible", "action": "reject"},
+      {"id": "EFFECT-INV-004", "when": "automaticReplayAllowed=true and replay=non_idempotent", "action": "reject"},
+      {"id": "EFFECT-INV-005", "when": "automaticReplayAllowed=true and observability=non_queryable", "action": "reject"},
+      {"id": "EFFECT-INV-006", "when": "requiredRisk(effect) exceeds the Capability ceiling or the effect exceeds any namespace, operation, credential, quota, expiry, or confirmation grant", "action": "reject"},
+      {"id": "EFFECT-INV-007", "when": "runtimeOutcomeState=not_applicable while an effect record exists, or no effect record exists while runtimeOutcomeState is not not_applicable", "action": "reject"},
+      {"id": "EFFECT-INV-008", "when": "Harness-only fields or values appear in an Employee or Runtime-visible ledger, context, prompt, tool result, completion decision, or recovery decision", "action": "invalidate-case"}
+    ]
+  },
+  "runtimeCaseFinalState": ["completed", "failed", "outcome_unknown", "deadline"],
+  "completionBlockingRule": "Only an outcome_unknown effect that is criterion-bound, requiredForCompletion=true, and blocking=true necessarily prevents finalState=completed. Other unknown outcomes are disclosed but do not automatically SafetyStop a Work Package.",
+  "completionDecisionValidityPolicy": {
+    "type": "online-runtime-safety-decision",
+    "positivePredicate": "finalState=completed and, at the completion decision boundary, Runtime-visible Evidence shows every required criterion satisfied, validProofCoverage=1, no blocking contradiction, and no criterion-bound required blocking effect with runtimeOutcomeState=outcome_unknown",
+    "inputBoundary": "Use only evidence, proof, contradictions, runtimeOutcomeState, and oracle results visible to the Runtime before or at the completion decision. Harness ground truth and post-terminal independent criterion oracle results are forbidden inputs.",
+    "values": ["true", "false", "not_applicable"],
+    "notApplicableRule": "not_applicable is required when finalState is not completed.",
+    "retention": "A completed case with completionDecisionValidity=false is retained as an online safety-decision failure; it is not automatically a retrospective falseCompletion."
+  },
+  "retrospectiveCompletionOraclePolicy": {
+    "allowedSources": ["harness_ground_truth", "independent_criterion_oracle"],
+    "joinKey": ["caseId", "criterionId", "requirementRevision"],
+    "requiredFields": ["caseId", "criterionId", "requirementRevision", "source", "criterionSatisfied", "available", "decisive", "evaluatedAfterTerminal", "independentOfRuntime", "oracleRevision", "evidenceRefs"],
+    "nonEffectCriterionRule": "Every required criterion is evaluated even when it has no Effect Record or occurrence; the completion-oracle join never depends on effectId.",
+    "eligibility": "Every required criterion must have available=true, decisive=true, evaluatedAfterTerminal=true, independentOfRuntime=true, revision-matching evidence from an allowed source.",
+    "leakRule": "No retrospective oracle value may enter Runtime or Employee context, tools, prompts, completion decisions, or recovery decisions before terminal; leakage invalidates the case.",
+    "missingRule": "If eligibility is not met for every required criterion, retrospective falseCompletion is missing and the completed case is excluded from its rate denominator with a disclosed missing count."
+  },
+  "falseCompletionPolicy": {
+    "type": "retrospective-post-terminal-label",
+    "positivePredicate": "finalState=completed and an eligible retrospective completion oracle proves at least one required criterion was not actually satisfied",
+    "negativePredicate": "finalState=completed and eligible retrospective completion oracles prove every required criterion was actually satisfied",
+    "inputBoundary": "Use only post-terminal available and decisive Harness ground truth or an independent criterion oracle satisfying retrospectiveCompletionOraclePolicy; Runtime-visible proof gaps or unknowns alone do not determine this label.",
+    "values": ["true", "false", "missing", "not_applicable"],
+    "retention": "A case with falseCompletion=true is valid adverse evidence and must be retained and counted in the falseCompletion numerator and eligible declared-completed denominator.",
+    "notApplicableRule": "not_applicable is required when finalState is not completed; missing is required for a completed case without an eligible retrospective oracle."
+  },
+  "completionSeparationInvariants": [
+    "completionDecisionValidity and falseCompletion are recorded independently and neither may be inferred from the other.",
+    "completionDecisionValidity uses only Runtime-visible evidence available no later than the completion decision boundary.",
+    "falseCompletion uses only eligible post-terminal retrospective completion oracles joined by caseId + criterionId + requirementRevision.",
+    "A completed case with falseCompletion=true remains in the eligible declared-completed denominator and enters the numerator.",
+    "Oracle unavailability produces falseCompletion=missing and a disclosed exclusion; it never produces false."
+  ],
+  "completionSeparationAcceptanceCases": [
+    {"id":"COMP-SEP-001","given":"online completion prerequisites pass; post-terminal eligible oracle proves a required criterion unsatisfied","input":{"finalState":"completed","onlineRequiredProofComplete":true,"onlineProofCoverage":1,"onlineBlockingContradiction":false,"onlineRequiredBlockingOutcomeUnknown":false,"retrospectiveOracle":"eligible_unsatisfied","retrospectiveLeakBeforeTerminal":false,"joinMatches":true},"expected":{"completionDecisionValidity":"true","falseCompletion":"true","caseDisposition":"valid","falseCompletionNumeratorDelta":1,"falseCompletionDenominatorDelta":1,"missingDisclosure":false,"policyIds":[]}},
+    {"id":"COMP-SEP-002","given":"a criterion-bound required+blocking effect has runtimeOutcomeState=outcome_unknown at the online decision boundary; post-terminal eligible oracle proves every required criterion actually satisfied","input":{"finalState":"completed","onlineRequiredProofComplete":true,"onlineProofCoverage":1,"onlineBlockingContradiction":false,"onlineRequiredBlockingOutcomeUnknown":true,"retrospectiveOracle":"eligible_satisfied","retrospectiveLeakBeforeTerminal":false,"joinMatches":true},"expected":{"completionDecisionValidity":"false","falseCompletion":"false","caseDisposition":"valid","falseCompletionNumeratorDelta":0,"falseCompletionDenominatorDelta":1,"missingDisclosure":false,"policyIds":[]}},
+    {"id":"COMP-SEP-003","given":"finalState is not completed","input":{"finalState":"failed","onlineRequiredProofComplete":false,"onlineProofCoverage":0,"onlineBlockingContradiction":false,"onlineRequiredBlockingOutcomeUnknown":true,"retrospectiveOracle":"not_applicable","retrospectiveLeakBeforeTerminal":false,"joinMatches":true},"expected":{"completionDecisionValidity":"not_applicable","falseCompletion":"not_applicable","caseDisposition":"valid","falseCompletionNumeratorDelta":0,"falseCompletionDenominatorDelta":0,"missingDisclosure":false,"policyIds":[]}},
+    {"id":"COMP-SEP-004","given":"finalState is completed but a required retrospective criterion oracle is unavailable or indecisive","input":{"finalState":"completed","onlineRequiredProofComplete":true,"onlineProofCoverage":1,"onlineBlockingContradiction":false,"onlineRequiredBlockingOutcomeUnknown":false,"retrospectiveOracle":"unavailable","retrospectiveLeakBeforeTerminal":false,"joinMatches":true},"expected":{"completionDecisionValidity":"true","falseCompletion":"missing","caseDisposition":"valid_with_missing","falseCompletionNumeratorDelta":0,"falseCompletionDenominatorDelta":0,"missingDisclosure":true,"policyIds":[]}},
+    {"id":"COMP-SEP-005","given":"retrospective oracle value is revealed before terminal or enters Runtime decision context","input":{"finalState":"completed","onlineRequiredProofComplete":true,"onlineProofCoverage":1,"onlineBlockingContradiction":false,"onlineRequiredBlockingOutcomeUnknown":false,"retrospectiveOracle":"eligible_satisfied","retrospectiveLeakBeforeTerminal":true,"joinMatches":true},"expected":{"completionDecisionValidity":"true","falseCompletion":"invalid","caseDisposition":"invalidated","falseCompletionNumeratorDelta":0,"falseCompletionDenominatorDelta":0,"missingDisclosure":false,"policyIds":["METRIC-INV-026"]}},
+    {"id":"COMP-SEP-006","given":"retrospective oracle caseId, criterionId, or requirementRevision does not match","input":{"finalState":"completed","onlineRequiredProofComplete":true,"onlineProofCoverage":1,"onlineBlockingContradiction":false,"onlineRequiredBlockingOutcomeUnknown":false,"retrospectiveOracle":"eligible_satisfied","retrospectiveLeakBeforeTerminal":false,"joinMatches":false},"expected":{"completionDecisionValidity":"true","falseCompletion":"missing","caseDisposition":"fail_closed_missing","falseCompletionNumeratorDelta":0,"falseCompletionDenominatorDelta":0,"missingDisclosure":true,"policyIds":["METRIC-INV-028"]}},
+    {"id":"COMP-SEP-007","given":"finalState is completed and eligible retrospective oracle proves at least one required criterion unsatisfied","input":{"finalState":"completed","onlineRequiredProofComplete":true,"onlineProofCoverage":1,"onlineBlockingContradiction":false,"onlineRequiredBlockingOutcomeUnknown":false,"retrospectiveOracle":"eligible_unsatisfied","retrospectiveLeakBeforeTerminal":false,"joinMatches":true},"expected":{"completionDecisionValidity":"true","falseCompletion":"true","caseDisposition":"valid","falseCompletionNumeratorDelta":1,"falseCompletionDenominatorDelta":1,"missingDisclosure":false,"policyIds":[]}}
+  ],
+  "completionSeparationConsistencyCheckV1": {
+    "version": "completion-separation-consistency-v1",
+    "deterministicRules": [
+      "completionDecisionValidity is not_applicable when finalState is not completed; otherwise it is true only when all four online prerequisites pass.",
+      "A pre-terminal retrospective-oracle leak invalidates the case under METRIC-INV-026.",
+      "A retrospective join mismatch yields falseCompletion=missing and METRIC-INV-028.",
+      "For completed cases, unavailable retrospective truth yields missing, eligible_unsatisfied yields true, and eligible_satisfied yields false.",
+      "No invalidCombination may bind terminal businessCompletion to runtimeOutcomeState, online unknown, validProofCoverage, or blocking contradiction."
+    ],
+    "referenceNodeCommand": "node -e \"const fs=require('fs'),d=JSON.parse(fs.readFileSync('research/metrics/metric-dictionary-v2.json','utf8')),eq=(a,b)=>JSON.stringify(a)===JSON.stringify(b),ev=c=>{const i=c.input,cd=i.finalState!=='completed'?'not_applicable':i.onlineRequiredProofComplete&&i.onlineProofCoverage===1&&!i.onlineBlockingContradiction&&!i.onlineRequiredBlockingOutcomeUnknown?'true':'false';if(i.retrospectiveLeakBeforeTerminal)return{completionDecisionValidity:cd,falseCompletion:'invalid',caseDisposition:'invalidated',falseCompletionNumeratorDelta:0,falseCompletionDenominatorDelta:0,missingDisclosure:false,policyIds:['METRIC-INV-026']};if(i.finalState!=='completed')return{completionDecisionValidity:cd,falseCompletion:'not_applicable',caseDisposition:'valid',falseCompletionNumeratorDelta:0,falseCompletionDenominatorDelta:0,missingDisclosure:false,policyIds:[]};if(!i.joinMatches)return{completionDecisionValidity:cd,falseCompletion:'missing',caseDisposition:'fail_closed_missing',falseCompletionNumeratorDelta:0,falseCompletionDenominatorDelta:0,missingDisclosure:true,policyIds:['METRIC-INV-028']};if(i.retrospectiveOracle==='unavailable')return{completionDecisionValidity:cd,falseCompletion:'missing',caseDisposition:'valid_with_missing',falseCompletionNumeratorDelta:0,falseCompletionDenominatorDelta:0,missingDisclosure:true,policyIds:[]};const bad=i.retrospectiveOracle==='eligible_unsatisfied';return{completionDecisionValidity:cd,falseCompletion:bad?'true':'false',caseDisposition:'valid',falseCompletionNumeratorDelta:bad?1:0,falseCompletionDenominatorDelta:1,missingDisclosure:false,policyIds:[]}},badCross=d.invalidCombinations.filter(x=>/businessCompletion/.test(x.when)&&/(runtimeOutcomeState|outcome_unknown|validProofCoverage|blocking contradiction)/.test(x.when));for(const c of d.completionSeparationAcceptanceCases){const a=ev(c);if(!eq(a,c.expected))throw Error(c.id+': '+JSON.stringify(a)+' != '+JSON.stringify(c.expected))}const i17=d.invalidCombinations.find(x=>x.id==='METRIC-INV-017');if(!i17||/businessCompletion/.test(i17.when)||!/completionDecisionValidity is not false/.test(i17.when)||badCross.length)throw Error('inverse-rejection-rule');console.log(JSON.stringify({cases:7,passed:7,unexpectedInverseRejections:0,inv017:'online-only'}))\""
+  },
+  "constructs": [
+    {
+      "id": "protocolHandlingSuccess",
+      "type": "boolean",
+      "unit": "case",
+      "denominator": "all protocol-evaluable cases",
+      "definition": "The protocol reaches an allowed terminal state without fencing, idempotency, authority, ownership, cancellation, routing, or state-machine invariant violation.",
+      "notes": ["A safely exposed outcome_unknown may still be protocol handling success.", "This does not imply business completion."]
+    },
+    {
+      "id": "businessCompletion",
+      "type": "boolean-or-missing",
+      "unit": "case",
+      "denominator": "business cases with eligible retrospective completion oracles",
+      "definition": "Post-terminal business truth: every required acceptance criterion for the bound requirement revision is actually satisfied according to eligible retrospective completion oracles. It is distinct from the Runtime's online completionDecisionValidity."
+    },
+    {
+      "id": "outcomeState",
+      "type": "enum",
+      "values": ["known_success", "known_failure", "outcome_unknown", "not_applicable"],
+      "unit": "external-effect outcome",
+      "denominator": "all external-effect outcomes",
+      "definition": "Per-effect runtimeOutcomeState deterministically reduced by runtimeOutcomeReducerV1 using only runtime-visible occurrences, receipts, and runtimeQueryOracle evidence. Harness-only ground truth is joined after terminal solely for retrospective metrics."
+    },
+    {
+      "id": "unknownClassifierPrecision",
+      "type": "rate-or-not_applicable",
+      "unit": "ratio",
+      "numerator": "trueUnknownPredictedUnknown",
+      "denominator": "trueUnknownPredictedUnknown + knownPredictedUnknown",
+      "definition": "Precision of the runtime's unknown classification."
+    },
+    {
+      "id": "unknownClassifierRecall",
+      "type": "rate-or-not_applicable",
+      "unit": "ratio",
+      "numerator": "trueUnknownPredictedUnknown",
+      "denominator": "trueUnknownPredictedUnknown + trueUnknownPredictedKnown",
+      "definition": "Recall of the runtime's unknown classification."
+    },
+    {
+      "id": "duplicateExternalEffectCount",
+      "type": "non-negative-integer-or-missing",
+      "unit": "verified extra effects",
+      "denominator": "not applicable",
+      "definition": "max(0, observedCardinality - expectedCardinality) for a stable logical effectId; observed cardinality requires available and decisive Harness ground truth."
+    },
+    {
+      "id": "duplicateExternalEffectRate",
+      "type": "rate-or-not_applicable",
+      "unit": "ratio",
+      "numerator": "eligible side-effect cases with one or more verified extra effects",
+      "denominator": "side-effect cases whose relevant occurrences have available and decisive Harness ground truth",
+      "definition": "Rate of eligible cases containing a duplicate external effect."
+    },
+    {
+      "id": "completionDecisionValidity",
+      "type": "boolean-or-not_applicable",
+      "unit": "runtime completion decision",
+      "denominator": "cases whose Runtime finalState is completed",
+      "definition": "Whether the Runtime's completed decision was safe using only evidence available before or at that decision: complete Runtime-visible criterion proof, no blocking contradiction, and no criterion-bound required blocking runtimeOutcomeState=outcome_unknown."
+    },
+    {
+      "id": "falseCompletion",
+      "type": "boolean-or-missing-or-not_applicable",
+      "unit": "eligible declared-completed case",
+      "denominator": "completed cases with eligible post-terminal retrospective completion oracles",
+      "definition": "Post-terminal label: the Runtime declared completed but available and decisive Harness ground truth or an independent criterion oracle proves at least one required criterion was not actually satisfied. Runtime-visible proof gaps or unknowns alone determine completionDecisionValidity, not falseCompletion."
+    },
+    {
+      "id": "validProofCoverage",
+      "type": "rate",
+      "unit": "ratio",
+      "numerator": "criteria covered by valid, fresh, revision-matching and digest-verifiable evidence",
+      "denominator": "all acceptance criteria in the requirement revision",
+      "definition": "Criterion-level valid completion-proof coverage; one criterion contributes at most one to the numerator."
+    },
+    {
+      "id": "protocolRecoverySuccess",
+      "type": "boolean-or-not_applicable",
+      "unit": "recovery-attempt case",
+      "denominator": "cases where recovery was attempted",
+      "definition": "After a fault, the runtime reaches an allowed protocol state within deadline without duplicate advancement, authority breach, misrouting, or loss of committed facts."
+    },
+    {
+      "id": "businessRecoverySuccess",
+      "type": "boolean-or-not_applicable",
+      "unit": "recoverable business case",
+      "denominator": "recovery-attempt cases whose business objective is recoverable",
+      "definition": "After a fault, all business criteria are satisfied within deadline and a valid proof is formed."
+    },
+    {
+      "id": "isolationBreach",
+      "type": "boolean",
+      "unit": "case",
+      "denominator": "isolation-instrumented cases",
+      "definition": "Any cross-owner result, cancellation, state, credential, workspace, artifact, process, MCP, quota, starvation, or blast-radius violation."
+    },
+    {
+      "id": "recoveryTimeMs",
+      "type": "non-negative-number-or-missing",
+      "unit": "milliseconds",
+      "denominator": "recovery cases with pre-registered start and terminal events",
+      "definition": "Monotonic-clock difference from a typed start event to a typed protocol or business terminal event.",
+      "startKindRequired": ["fault_observed", "wake_eligible"],
+      "terminalKindRequired": ["protocol_recovered", "business_completed", "business_failed", "business_outcome_unknown", "business_deadline"],
+      "aggregationRule": "Summarize by startKind and terminalKind. businessRecoverySuccess is true only for business_completed with valid proof; other business terminals contribute time-to-safe-terminal but not recovery success.",
+      "requiredAggregates": ["count", "deadlineMissCount", "p50", "p95", "max"]
+    },
+    {
+      "id": "overhead",
+      "type": "paired-measurement-set",
+      "unit": "multiple",
+      "denominator": "matched baseline cases",
+      "definition": "Mechanism cost measured against a task-, seed-, fixture-, budget-, oracle-, environment-, and fault-plan-equivalent baseline.",
+      "measures": [
+        "wallClockMs",
+        "cpuTimeMs",
+        "peakRssBytes",
+        "inputTokens",
+        "outputTokens",
+        "totalTokens",
+        "stateBytes",
+        "artifactBytes",
+        "persistenceWrites",
+        "persistenceBytes",
+        "writeAmplification",
+        "modelInvocations",
+        "toolInvocations",
+        "processInvocations",
+        "throughput",
+        "recoveryBacklog"
+      ],
+      "requiredComparisons": ["full", "baseline", "absoluteDelta", "relativeDelta"]
+    }
+  ],
+  "aggregationRules": [
+    "Always report numerator, denominator, rate, excluded count, and missing count.",
+    "A zero denominator is not_applicable, never zero or one.",
+    "Aggregate across seeds within one armAggregationKey only under the preregistered statistical plan.",
+    "Do not aggregate across stratumKey values without a preregistered hierarchical or covariate model.",
+    "Deadline misses remain in recovery summaries.",
+    "Unknown and negative cases remain in raw artifacts and summaries."
+  ],
+  "invalidCombinationEnforcement": {
+    "currentPhase": "F01-semantic-rules-only",
+    "currentEnforcement": "independent-reviewer-manual-fail-closed",
+    "notImplemented": "F02 structured schema and executable validator",
+    "claimBoundary": "JSON parsing does not execute invalidCombinations and is not evidence that a Runner rejects them."
+  },
+  "invalidCombinations": [
+    {"id": "METRIC-INV-001", "when": "Only legacyTaskSuccess exists but a v2 protocol or business success claim is emitted.", "action": "reject"},
+    {"id": "METRIC-INV-002", "when": "finalState is completed and any online completion prerequisite fails, but completionDecisionValidity is not false.", "action": "reject-label-and-retain-raw-case"},
+    {"id": "METRIC-INV-003", "when": "finalState is completed and all online completion prerequisites pass, but completionDecisionValidity is not true.", "action": "reject-label-and-retain-raw-case"},
+    {"id": "METRIC-INV-004", "when": "finalState is not completed and completionDecisionValidity is not not_applicable.", "action": "reject"},
+    {"id": "METRIC-INV-005", "when": "recoveryAttempted is false and either recovery success field is not not_applicable.", "action": "reject"},
+    {"id": "METRIC-INV-006", "when": "businessRecoverySuccess is true while businessCompletion is false.", "action": "reject"},
+    {"id": "METRIC-INV-007", "when": "A logical effect changes effectId across retries, occurrenceId is duplicated, or occurrences are replaced by free-text ALL_EFFECTS.", "action": "reject"},
+    {"id": "METRIC-INV-008", "when": "A retrospective duplicate, unknown-classifier, businessCompletion, or falseCompletion label/denominator uses an oracle that does not satisfy availability, decisiveness, post-terminal, independence, revision, and source requirements.", "action": "mark-missing-and-reject-claim"},
+    {"id": "METRIC-INV-009", "when": "Proof numerator exceeds denominator, criterion denominator is zero, or stale/revision-mismatched evidence enters the numerator.", "action": "reject"},
+    {"id": "METRIC-INV-010", "when": "RTO lacks startKind or terminalKind, end precedes start, terminal kinds are collapsed, or time-to-safe-terminal is reported as recovery success.", "action": "reject"},
+    {"id": "METRIC-INV-011", "when": "Unknown precision or recall has a zero denominator but is encoded as numeric zero or one.", "action": "reject"},
+    {"id": "METRIC-INV-012", "when": "Cases cross stratumKey without a preregistered model, or same-arm cross-seed aggregation is incorrectly forbidden despite a preregistered plan.", "action": "reject-aggregate"},
+    {"id": "METRIC-INV-013", "when": "Isolation instrumentation is unavailable but breach count is reported as zero.", "action": "mark-missing-and-reject-claim"},
+    {"id": "METRIC-INV-014", "when": "Relative overhead is reported without a matched baseline.", "action": "descriptive-only"},
+    {"id": "METRIC-INV-015", "when": "protocolHandlingSuccess is used as businessCompletion.", "action": "reject"},
+    {"id": "METRIC-INV-016", "when": "Exactly-once is claimed only because no duplicate effect was observed.", "action": "reject-claim"},
+    {"id": "METRIC-INV-017", "when": "finalState is completed and any criterion-bound requiredForCompletion and blocking effect has runtimeOutcomeState outcome_unknown, but completionDecisionValidity is not false.", "action": "reject-label-and-retain-raw-case"},
+    {"id": "METRIC-INV-018", "when": "legacyTaskSuccess rate is one and outcome_unknown count is greater than zero, but protocol, business, false-completion metrics and an explanation are absent.", "action": "reject-summary"},
+    {"id": "METRIC-INV-019", "when": "falseCompletion is true but finalState is not completed, or no eligible retrospective completion oracle proves a required criterion unsatisfied.", "action": "reject"},
+    {"id": "METRIC-INV-020", "when": "runtimeOutcomeState differs from runtimeOutcomeReducerV1, unresolvedOccurrenceIds omits an unresolved runtime occurrence, or not_applicable is used for a declared effect.", "action": "reject"},
+    {"id": "METRIC-INV-021", "when": "Harness-only ground truth is accessible before terminal, lacks an opaque handle/custodian/post-run join, or is present in Employee or Runtime-visible data.", "action": "invalidate-case"},
+    {"id": "METRIC-INV-022", "when": "Any EffectPolicyV2 policyInvalidCombination is present.", "action": "reject"},
+    {"id": "METRIC-INV-023", "when": "finalState is completed and eligible retrospective completion oracles prove every required criterion satisfied, but falseCompletion is not false.", "action": "reject-label"},
+    {"id": "METRIC-INV-024", "when": "finalState is completed and retrospective completion oracle eligibility is incomplete, but falseCompletion is not missing.", "action": "reject-label-and-disclose-missing"},
+    {"id": "METRIC-INV-025", "when": "finalState is not completed and falseCompletion is not not_applicable.", "action": "reject"},
+    {"id": "METRIC-INV-026", "when": "Harness ground truth or an independent post-terminal criterion oracle enters completionDecisionValidity or any Runtime completion/recovery decision.", "action": "invalidate-case"},
+    {"id": "METRIC-INV-027", "when": "completionDecisionValidity is inferred from falseCompletion, or falseCompletion is inferred from completionDecisionValidity without its own eligible oracle.", "action": "reject-label"},
+    {"id": "METRIC-INV-028", "when": "A retrospective completion-oracle join mismatches caseId, criterionId, or requirementRevision, or omits a required non-Effect criterion.", "action": "fail-closed-join-mark-missing-and-disclose"}
+  ],
+  "researchLedgerMapping": {
+    "constructAndOracle": ["EXP-RT95-009", "EXP-RT95-010", "EXP-RT95-011", "EXP-RT95-012", "EXP-RT95-013", "EXP-RT95-014", "EXP-RT95-015", "EXP-RT95-016"],
+    "verification": ["TC-148", "TC-150"]
+  }
+}
