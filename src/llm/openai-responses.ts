@@ -48,7 +48,7 @@ export interface OpenAiResponsesOptions {
   ) => Promise<void>;
 }
 
-export const DEFAULT_OPENAI_RESPONSES_TIMEOUT_MS = 120_000;
+export const DEFAULT_OPENAI_RESPONSES_TIMEOUT_MS = 180_000;
 
 /**
  * 使用原生 fetch 调用 OpenAI Responses API。

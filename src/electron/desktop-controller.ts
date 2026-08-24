@@ -56,6 +56,9 @@ export interface DesktopRuntimeClient {
   advanceFixedProduct?(threadId: string, expectedStage: import("../agents/fixed-software-team-coordinator.js").FixedProductStage): Promise<unknown>;
   getRequirement?(threadId: string): Promise<import("../requirements/requirement.js").Requirement | undefined>;
   confirmRequirement?(requirementId: string, revision: number, contentHash: string): Promise<import("../requirements/requirement.js").Requirement>;
+  confirmDesign?(requirementId: string, revision: number, contentHash: string): Promise<import("../requirements/requirement.js").Requirement>;
+  submitDesignFeedback?(requirementId: string, feedback: string): Promise<import("../requirements/requirement.js").Requirement>;
+  reworkEngineeringChat?(threadId: string, taskId: string, reason: string): Promise<unknown>;
   readThreadHistory(threadId: string): Promise<ThreadHistoryResult>;
   getCapabilities(): Promise<RuntimeCapabilities>;
   searchWorkspaceFiles?(query: string): Promise<DesktopWorkspaceSearchResult>;
@@ -394,6 +397,32 @@ export class DesktopController {
     await this.runtime.confirmRequirement(requirement.id, requirement.revision, requirement.planArtifact.contentHash);
     this.activeAgentThreadId = undefined;
     return this.sendMessage(`确认执行 ${requirement.id} v${requirement.revision}，请严格按已确认计划执行并完成测试验收。`);
+  }
+
+  async confirmDesign(): Promise<DesktopSnapshot> {
+    if (this.activeThreadId === undefined || this.runtime.confirmDesign === undefined || this.runtime.getRequirement === undefined) {
+      throw new Error("当前没有可确认的产品设计");
+    }
+    const requirement = await this.runtime.getRequirement(this.activeThreadId);
+    if (requirement?.designStatus !== "draft_ready" || requirement.designArtifact === undefined) throw new Error("产品原稿与 Mock 尚未就绪");
+    await this.runtime.confirmDesign(requirement.id, requirement.revision, requirement.designArtifact.contentHash);
+    return this.getSnapshot();
+  }
+
+  async submitDesignFeedback(feedback: string): Promise<DesktopSnapshot> {
+    if (this.activeThreadId === undefined || this.runtime.submitDesignFeedback === undefined || this.runtime.getRequirement === undefined) {
+      throw new Error("当前没有可修改的产品设计");
+    }
+    const requirement = await this.runtime.getRequirement(this.activeThreadId);
+    if (requirement?.designStatus !== "draft_ready") throw new Error("产品原稿与 Mock 尚未就绪");
+    await this.runtime.submitDesignFeedback(requirement.id, feedback);
+    return this.getSnapshot();
+  }
+
+  async reworkEngineeringChat(taskId: string, reason: string): Promise<DesktopSnapshot> {
+    if (this.activeThreadId === undefined || this.runtime.reworkEngineeringChat === undefined) throw new Error("当前没有可返工的工程 Chat");
+    await this.runtime.reworkEngineeringChat(this.activeThreadId, taskId, reason);
+    return this.getSnapshot();
   }
 
   async searchWorkspaceFiles(query: string): Promise<DesktopWorkspaceSearchResult> {
@@ -842,7 +871,16 @@ export class DesktopController {
 
       case "turn/timed_out":
         this.finishRuntimeSession(threadId, run, "timed_out", "failed");
-        this.setTurnState(threadId, run, "timed_out", "Turn 已超时");
+        this.upsertRuntimeItem({
+          id: "safe-timeout",
+          turnId,
+          kind: "error",
+          code: "turn_timed_out",
+          title: "本轮等待超时",
+          safeMessage: "对话过程和已生成文件已保留。可发送“继续完成刚才的任务”，或新建任务重新开始。",
+          retryable: true,
+        }, threadId, run);
+        this.setTurnState(threadId, run, "timed_out", "本轮等待超时，进度已保存，可继续");
         return;
 
       case "turn/failed":

@@ -8,6 +8,7 @@ import type { ExecutionFeedback } from "./execution-engine.js";
 import type { ExecutionEngineResult } from "./execution-engine.js";
 import type { StageAdvancingExecutionEngine } from "./execution-engine-router.js";
 import type { ExecutionLeaseCoordinator } from "../runtime/execution-lease-coordinator.js";
+import type { V3ProductDeliveryCoordinator } from "./v3-product-delivery-coordinator.js";
 
 export class TeamWorkflowExecutionEngine implements StageAdvancingExecutionEngine {
   readonly id = "team_workflow";
@@ -19,17 +20,18 @@ export class TeamWorkflowExecutionEngine implements StageAdvancingExecutionEngin
     private readonly runtimeStore: AgentRuntimeStore,
     private readonly coordinator: WorkflowTeamCoordinator,
     private readonly provision: (context: ExecutionContext) => void,
-    private readonly validateTools: (allowedTools: string[]) => void = () => undefined,
+    private readonly validateTools: (allowedTools: string[], workflowVersion?: string) => void = () => undefined,
     private readonly executionLeases?: ExecutionLeaseCoordinator,
     private readonly persist?: () => void | Promise<void>,
+    private readonly v3Coordinator?: V3ProductDeliveryCoordinator,
   ) {}
 
   supports(kind: RequirementExecutionKind): boolean { return kind === "software_product_delivery"; }
   isActive(jobId: string): boolean { return this.activeDrives.has(jobId); }
-  validateStart(allowedTools: string[]): void { this.validateTools(allowedTools); }
+  validateStart(allowedTools: string[], workflowVersion?: string): void { this.validateTools(allowedTools, workflowVersion); }
   async provideFeedback(jobId: string, feedback: ExecutionFeedback): Promise<boolean> {
     return this.withExecutionLease(jobId, false, () =>
-      this.coordinator.provideFeedback(jobId, feedback));
+      this.coordinatorFor(jobId).provideFeedback(jobId, feedback));
   }
   async start(context: ExecutionContext): Promise<ExecutionEngineResult> {
     await this.runDrive(context.jobId, true, context);
@@ -51,13 +53,13 @@ export class TeamWorkflowExecutionEngine implements StageAdvancingExecutionEngin
   async advance(jobId: string, expectedStage: FixedProductStage): Promise<{ stage: FixedProductStage; changed: boolean }> {
     return this.withExecutionLease(
       jobId,
-      { stage: this.coordinator.getStage(jobId), changed: false },
-      () => this.coordinator.advance(jobId, expectedStage),
+      { stage: this.coordinatorFor(jobId).getStage(jobId), changed: false },
+      () => this.coordinatorFor(jobId).advance(jobId, expectedStage),
     );
   }
   snapshot(jobId: string): ExecutionEngineSnapshot {
     const job = this.runtimeStore.getJob(jobId);
-    return { engine: this.id, jobId, ...(job === undefined ? {} : { workflowVersion: job.workflowVersion }), stage: this.coordinator.getStage(jobId), terminal: job === undefined || ["completed", "failed", "partial", "cancelled"].includes(job.status) };
+    return { engine: this.id, jobId, ...(job === undefined ? {} : { workflowVersion: job.workflowVersion }), stage: job === undefined ? "completed" : this.coordinatorFor(jobId).getStage(jobId), terminal: job === undefined || ["completed", "failed", "partial", "cancelled"].includes(job.status) };
   }
 
   private async runDrive(
@@ -74,7 +76,7 @@ export class TeamWorkflowExecutionEngine implements StageAdvancingExecutionEngin
           await this.persist?.();
         }
         this.runtimeStore.reconcilePersistedJobs(jobId);
-        this.coordinator.recoverPersistedCheckpoints(jobId);
+        if (this.runtimeStore.getJob(jobId)?.workflowVersion === "software_product_delivery_v2") this.coordinator.recoverPersistedCheckpoints(jobId);
         await this.drive(jobId, allowModelCalls);
       });
     } finally {
@@ -98,15 +100,16 @@ export class TeamWorkflowExecutionEngine implements StageAdvancingExecutionEngin
   private async drive(jobId: string, allowModelCalls: boolean): Promise<void> {
     const job = this.runtimeStore.getJob(jobId);
     if (job === undefined) throw new Error(`Team Workflow Job is unavailable: ${jobId}`);
-    if (job.executionKind !== "software_product_delivery" || job.workflowVersion !== "software_product_delivery_v2") {
+    if (job.executionKind !== "software_product_delivery" || !["software_product_delivery_v2", "software_product_delivery_v3"].includes(job.workflowVersion)) {
       throw new Error(`Team Workflow Job version is unsupported: ${jobId}`);
     }
+    const coordinator = this.coordinatorFor(jobId);
     for (let transition = 0; transition < TeamWorkflowExecutionEngine.MAX_RESUME_TRANSITIONS; transition += 1) {
-      const decision = this.coordinator.recoveryDecision(jobId);
+      const decision = coordinator.recoveryDecision(jobId);
       if (decision.kind === "terminal" || decision.kind === "wait") return;
-      if (!allowModelCalls && !this.coordinator.canAdvanceWithoutModel(jobId, decision.stage)) return;
+      if (!allowModelCalls && !coordinator.canAdvanceWithoutModel(jobId, decision.stage)) return;
       const before = this.fingerprint(jobId);
-      const advanced = await this.coordinator.advance(jobId, decision.stage);
+      const advanced = await coordinator.advance(jobId, decision.stage);
       const after = this.fingerprint(jobId);
       if (!advanced.changed || before === after) return;
     }
@@ -118,10 +121,26 @@ export class TeamWorkflowExecutionEngine implements StageAdvancingExecutionEngin
     return JSON.stringify({
       status: job?.status,
       attempt: job?.attempt,
-      stage: this.coordinator.getStage(jobId),
+      stage: this.coordinatorFor(jobId).getStage(jobId),
       tasks: this.runtimeStore.listTasks(jobId).map((item) => [item.id, item.attempt, item.status]),
       returns: this.runtimeStore.listReturns(jobId).map((item) => [item.id, item.status, item.attempts, item.nextAttemptAt]),
       checkpoints: this.runtimeStore.listStageCheckpoints(jobId).map((item) => [item.idempotencyKey, item.status]),
     });
+  }
+  async requestEngineeringRework(jobId: string, taskId: string, reason: string): Promise<void> {
+    if (this.runtimeStore.getJob(jobId)?.workflowVersion !== "software_product_delivery_v3" || this.v3Coordinator === undefined) {
+      throw new Error("Engineering Chat rework requires a v3 Job");
+    }
+    await this.withExecutionLease(jobId, undefined, () => this.v3Coordinator!.requestEngineeringRework(jobId, taskId, reason));
+    await this.resume(jobId);
+  }
+
+  private coordinatorFor(jobId: string): WorkflowTeamCoordinator | V3ProductDeliveryCoordinator {
+    const version = this.runtimeStore.getJob(jobId)?.workflowVersion;
+    if (version === "software_product_delivery_v3") {
+      if (this.v3Coordinator === undefined) throw new Error("V3 Workflow coordinator is unavailable");
+      return this.v3Coordinator;
+    }
+    return this.coordinator;
   }
 }

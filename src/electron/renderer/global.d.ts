@@ -49,6 +49,9 @@ declare global {
         selectThread(threadId: string): Promise<DesktopSnapshot>;
         selectAgentThread(threadId?: string): Promise<DesktopSnapshot>;
         confirmRequirement(): Promise<DesktopSendResult>;
+        confirmDesign(): Promise<DesktopSnapshot>;
+        submitDesignFeedback(feedback: string): Promise<DesktopSnapshot>;
+        reworkEngineeringChat(taskId: string, reason: string): Promise<DesktopSnapshot>;
         advanceFixedProduct(expectedStage: import("../../agents/fixed-software-team-coordinator.js").FixedProductStage): Promise<DesktopSnapshot>;
         openPlan(path: string): Promise<boolean>;
         sendMessage(input: DesktopMessageInput): Promise<DesktopSendResult>;

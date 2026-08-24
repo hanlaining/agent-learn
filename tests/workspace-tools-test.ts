@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import {
   mkdtemp,
+  mkdir,
   rm,
   writeFile,
 } from "node:fs/promises";
@@ -14,6 +15,7 @@ import {
   WorkspaceSandbox,
 } from "../src/sandbox/workspace-sandbox.js";
 import {
+  assertWorkspacePathWithinTaskScope,
   createWorkspaceTools,
 } from "../src/tools/workspace-tools.js";
 import {
@@ -111,4 +113,29 @@ test("write_file 只能在 Workspace 内写入 UTF-8 文本", async (t) => {
     path: "result.txt", text: "done", sizeBytes: 4,
   });
   await assert.rejects(() => registry.execute("write_file", JSON.stringify({ path: "../outside.txt", text: "no" })), /Path escapes workspace/);
+});
+
+test("v3 Task 文件边界在 write_file 真正执行前拒绝越界路径", async (t) => {
+  const workspace = await mkdtemp(join(tmpdir(), "agent-v3-boundary-"));
+  t.after(() => rm(workspace, { recursive: true, force: true }));
+  const sandbox = await WorkspaceSandbox.create(workspace);
+  await mkdir(join(workspace, "src", "electron"), { recursive: true });
+  const scopes = new Map<string, { allowedPaths: string[]; deniedPaths: string[] }>([
+    ["front-turn", { allowedPaths: ["src/electron"], deniedPaths: ["src/app-server"] }],
+    ["back-turn", { allowedPaths: ["src/app-server"], deniedPaths: ["src/electron"] }],
+    ["integration-turn", { allowedPaths: ["tests"], deniedPaths: ["src/electron", "src/app-server"] }],
+  ]);
+  const registry = new ToolRegistry(createWorkspaceTools(sandbox, { authorizeWrite: ({ turnId, path }) => {
+    const scope = turnId === undefined ? undefined : scopes.get(turnId);
+    if (scope === undefined) throw new Error("Task scope unavailable");
+    assertWorkspacePathWithinTaskScope(path, scope);
+  } }));
+  await registry.execute("write_file", JSON.stringify({ path: "src/electron/App.tsx", text: "ok" }), undefined, "front-turn");
+  await assert.rejects(() => registry.execute("write_file", JSON.stringify({ path: "src/app-server/main.ts", text: "no" }), undefined, "front-turn"), /file boundary rejected/);
+  await assert.rejects(() => registry.execute("write_file", JSON.stringify({ path: "src/electron/../app-server/main.ts", text: "no" }), undefined, "front-turn"), /non-canonical path/);
+  await assert.rejects(() => registry.execute("write_file", JSON.stringify({ path: "src\\electron\\..\\app-server\\main.ts", text: "no" }), undefined, "front-turn"), /non-canonical path/);
+  await assert.rejects(() => registry.execute("write_file", JSON.stringify({ path: "src/electron/./App.tsx", text: "no" }), undefined, "front-turn"), /non-canonical path/);
+  await registry.execute("write_file", JSON.stringify({ path: "src//electron//Nested.tsx", text: "ok" }), undefined, "front-turn");
+  await assert.rejects(() => registry.execute("write_file", JSON.stringify({ path: "src/electron/App.tsx", text: "no" }), undefined, "back-turn"), /file boundary rejected/);
+  await assert.rejects(() => registry.execute("write_file", JSON.stringify({ path: "src/app-server/main.ts", text: "no" }), undefined, "integration-turn"), /file boundary rejected/);
 });

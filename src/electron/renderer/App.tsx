@@ -175,6 +175,7 @@ export function App() {
   const autoFollowRef = useRef(true);
   const pendingEventsRef = useRef<DesktopEvent[]>([]);
   const eventFrameRef = useRef<number | undefined>(undefined);
+  const runtimeRefreshRef = useRef<number | undefined>(undefined);
   const knownHistoryThreadIdsRef = useRef<Set<string> | undefined>(undefined);
 
   useEffect(() => {
@@ -255,6 +256,13 @@ export function App() {
     const removeDesktop = window.godAgent.desktop.onEvent((event) => {
       pendingEventsRef.current.push(event);
       eventFrameRef.current ??= window.requestAnimationFrame(flushEvents);
+      if (event.type === "agent/run_updated") {
+        if (runtimeRefreshRef.current !== undefined) window.clearTimeout(runtimeRefreshRef.current);
+        runtimeRefreshRef.current = window.setTimeout(() => {
+          runtimeRefreshRef.current = undefined;
+          void window.godAgent.desktop.getSnapshot().then((snapshot) => dispatch({ type: "snapshot", snapshot }));
+        }, 120);
+      }
     });
     const removePermission = window.godAgent.desktop.onPermissionRequest(
       setPermissionRequest,
@@ -269,6 +277,7 @@ export function App() {
       if (eventFrameRef.current !== undefined) {
         window.cancelAnimationFrame(eventFrameRef.current);
       }
+      if (runtimeRefreshRef.current !== undefined) window.clearTimeout(runtimeRefreshRef.current);
     };
   }, []);
 
@@ -914,7 +923,7 @@ export function App() {
                 {ui.snapshot?.activeAgentThreadId !== undefined && <div className="agent-thread-context"><button className="agent-thread-back" type="button" onClick={() => void replaceSnapshot(window.godAgent.desktop.selectAgentThread())}>← 返回 God</button><span><strong>{formatAgentProfileName(activeAgentRun?.agentProfileId)}</strong><small>{activeAgentRun?.task ?? "真实 Agent 对话"}</small></span></div>}
                 {ui.snapshot?.activeAgentThreadId === undefined && ui.snapshot?.requirement !== undefined && (
                   <section className="requirement-card" data-status={ui.snapshot.requirement.status}>
-                    <div><strong>{ui.snapshot.requirement.title}</strong><span>需求 v{ui.snapshot.requirement.revision} · {ui.snapshot.requirement.status === "planned" ? "等待确认" : "已确认执行"}</span></div>
+                    <div><strong>{ui.snapshot.requirement.title}</strong><span>需求 v{ui.snapshot.requirement.revision} · {ui.snapshot.requirement.status === "planned" ? "等待确认" : ui.snapshot.requirement.executionKind === "software_product_delivery" && ui.snapshot.requirement.designStatus !== "confirmed" ? "需求已确认，等待产品设计" : "已获执行许可"}</span></div>
                     <p>{ui.snapshot.requirement.objective}</p>
                     <small>测试用例 {ui.snapshot.requirement.testCases.length} 条 · 计划：{ui.snapshot.requirement.planArtifact.path}</small>
                     <div className="requirement-actions"><button type="button" className="secondary" onClick={() => void window.godAgent.desktop.openPlan(ui.snapshot!.requirement!.planArtifact.path)}>打开计划</button>{ui.snapshot.requirement.status === "planned" && <button type="button" onClick={() => {
@@ -929,6 +938,29 @@ export function App() {
                       })();
                     }}>确认执行</button>}</div>
                   </section>
+                )}
+                {ui.snapshot?.activeAgentThreadId === undefined && ui.snapshot?.requirement?.designArtifact !== undefined && (
+                  <section className="design-confirmation-card" data-status={ui.snapshot.requirement.designStatus}>
+                    <header><span><strong>产品原稿与交互 Mock</strong><small>{ui.snapshot.requirement.designStatus === "confirmed" ? "设计已确认，工程可开始" : "请先预览，确认后才启动工程"}</small></span><span className="design-gate-badge">设计闸门</span></header>
+                    <p>需求确认不等于设计确认。前端、后端和联调 Chat 在这里确认之前没有写入权限。</p>
+                    <div className="requirement-actions">
+                      <button type="button" className="secondary" onClick={() => void window.godAgent.desktop.openPlan(ui.snapshot!.requirement!.designArtifact!.path)}>打开原稿</button>
+                      {ui.snapshot.requirement.designArtifact.mockPreview !== undefined && <button type="button" className="secondary" onClick={() => void window.godAgent.desktop.openPlan(ui.snapshot!.requirement!.designArtifact!.mockPreview!)}>预览 Mock</button>}
+                      {ui.snapshot.requirement.designStatus === "draft_ready" && <button type="button" className="secondary" onClick={() => {
+                        const feedback = window.prompt("请输入需要修改的设计内容");
+                        if (feedback === null || feedback.trim().length === 0) return;
+                        void replaceSnapshot(window.godAgent.desktop.submitDesignFeedback(feedback));
+                      }}>提出修改</button>}
+                      {ui.snapshot.requirement.designStatus === "draft_ready" && <button type="button" onClick={() => void replaceSnapshot(window.godAgent.desktop.confirmDesign())}>确认设计</button>}
+                    </div>
+                  </section>
+                )}
+                {ui.snapshot?.activeAgentThreadId === undefined && ui.snapshot?.requirement?.designStatus === "confirmed" && (
+                  <EngineeringChatPanel runtime={ui.snapshot.agentRuntime} rework={(taskId) => {
+                    const reason = window.prompt("请输入该 Chat 的返工原因", "请根据验收证据修复后重新 Return");
+                    if (reason === null) return;
+                    void replaceSnapshot(window.godAgent.desktop.reworkEngineeringChat(taskId, reason));
+                  }} />
                 )}
                 {ui.snapshot?.messages
                   .filter((message) =>
@@ -1484,6 +1516,28 @@ function AgentFlowProgress({ runs, runtime, requirement, activeAgentThreadId, op
   const jobCompleted = jobStatus === "completed" || requirement?.status === "completed";
   const executionFinished = childRuns.length > 0 && finishedRuns === childRuns.length;
   const reviewActive = jobStatus === "reviewing" || (runtime?.tasks.some((item) => item.status === "reviewing") ?? false);
+  const isV3 = runtime?.job?.workflowVersion === "software_product_delivery_v3" || requirement?.executionKind === "software_product_delivery";
+  const v3Task = (profileId: string) => runtime?.tasks.find((task) => task.profileId === profileId && task.jobAttempt === runtime?.job?.attempt);
+  const productDone = v3Task("product_design")?.status === "completed";
+  const mockDone = v3Task("mock_preview")?.status === "completed";
+  const designConfirmed = requirement?.designStatus === "confirmed";
+  const engineeringProfiles = ["frontend_engineering", "backend_engineering", "integration_quality"];
+  const engineeringTasks = engineeringProfiles.map(v3Task).filter((task): task is import("../../agents/agent-runtime.js").AgentTask => task !== undefined);
+  const engineeringDone = engineeringTasks.length === 3 && engineeringTasks.every((task) => task.status === "completed");
+  const engineeringHasRework = engineeringTasks.some((task) => ["failed", "rework", "blocked"].includes(task.status));
+  const stagePassed = (stageId: string) => runtime?.evidence.some((item) => item.stageId === stageId && item.verdict === "passed") === true;
+  const integrationDone = stagePassed("integration_review");
+  const qualityDone = stagePassed("quality_review");
+  const v3FlowSteps = [
+    { label: "需求确认", detail: requirementConfirmed ? `v${requirement?.revision ?? 1} 已确认` : "等待用户确认需求", done: requirementConfirmed },
+    { label: "产品原稿", detail: productDone ? "面向用户的原稿已生成" : requirementConfirmed ? "正在生成页面与用户路径" : "等待需求确认", done: productDone },
+    { label: "交互 Mock", detail: mockDone ? "可点击 HTML Mock 已生成" : productDone ? "正在制作交互与页面状态" : "等待产品原稿", done: mockDone },
+    { label: "设计确认", detail: designConfirmed ? "用户已确认设计" : mockDone ? "等待用户预览并确认" : "等待 Mock", done: designConfirmed },
+    { label: "3 个工程 Chat", detail: engineeringTasks.length === 0 ? "设计确认后启动" : `${engineeringTasks.filter((task) => task.status === "completed").length}/3 已完成`, done: engineeringDone, rework: engineeringHasRework },
+    { label: "负责人联调", detail: integrationDone ? "前后端边界与接口已验收" : engineeringDone ? "等待负责人联调验收" : "等待三个工程 Chat Return", done: integrationDone },
+    { label: "独立测试", detail: qualityDone ? "已对照原稿与 Mock 验收" : integrationDone ? "等待独立测试" : "等待负责人联调", done: qualityDone },
+    { label: "最终交付", detail: jobCompleted ? "已验收并 Return God" : qualityDone ? "负责人最终验收并汇总" : "等待前序验收", done: jobCompleted },
+  ];
   let derivedCurrentStep = 1;
   if (requirementConfirmed) derivedCurrentStep = 2;
   if (dispatched) derivedCurrentStep = 3;
@@ -1491,41 +1545,60 @@ function AgentFlowProgress({ runs, runtime, requirement, activeAgentThreadId, op
   if (executionFinished && !reviewActive && !hasRework && (passedReviews > 0 || ["waiting_returns", "resuming"].includes(jobStatus ?? ""))) derivedCurrentStep = 5;
   if (jobCompleted) derivedCurrentStep = 6;
   const flowKey = runtime?.job?.id ?? requirement?.id ?? runs[0]?.jobId ?? "current";
-  const currentStep = Math.max(derivedCurrentStep, furthestStepByJob.current.get(flowKey) ?? 1);
-  furthestStepByJob.current.set(flowKey, currentStep);
+  const v3FirstPending = v3FlowSteps.findIndex((step) => !step.done);
+  const v3CurrentStep = v3FirstPending === -1 ? v3FlowSteps.length + 1 : v3FirstPending + 1;
+  const currentStep = isV3 ? v3CurrentStep : Math.max(derivedCurrentStep, furthestStepByJob.current.get(flowKey) ?? 1);
+  if (!isV3) furthestStepByJob.current.set(flowKey, currentStep);
   const stateFor = (index: number): AgentFlowStepState => {
+    if (isV3) {
+      const step = v3FlowSteps[index - 1];
+      if (step?.done) return "done";
+      if (step?.rework) return "rework";
+      return index === v3CurrentStep ? "active" : "waiting";
+    }
     if (index < currentStep || currentStep === 6) return "done";
     if (index > currentStep) return "waiting";
     if ((index === 3 || index === 4) && hasRework) return "rework";
     return "active";
   };
-  const completedSteps = currentStep === 6 ? 5 : Math.max(0, currentStep - 1);
-  const flowSteps = [
+  const legacyFlowSteps = [
     { label: "确认需求", detail: requirementConfirmed ? `v${requirement?.revision ?? 1} 已确认` : "等待确认" },
     { label: "分派任务", detail: dispatched ? `已分派 ${childRuns.length || runtime?.tasks.length || 0} 个任务` : "等待 God 分派" },
     { label: "Agent 执行", detail: childRuns.length === 0 ? "等待 Agent 启动" : `${finishedRuns}/${childRuns.length} 已结束${runningRuns > 0 ? ` · ${runningRuns} 进行中` : ""}` },
     { label: "Reviewer 验收", detail: hasRework ? `${Math.max(reworkTasks, failedReviews)} 项需返工` : passedReviews > 0 ? `${passedReviews} 项已通过` : "等待验收" },
     { label: "God 汇总", detail: jobCompleted ? "最终结果已完成" : currentStep === 5 ? "正在收口最终结果" : "等待前序完成" },
   ];
+  const flowSteps = isV3 ? v3FlowSteps : legacyFlowSteps;
+  const totalSteps = flowSteps.length;
+  const completedSteps = isV3 ? v3FlowSteps.filter((step) => step.done).length : currentStep === 6 ? 5 : Math.max(0, currentStep - 1);
+  const allStepsCompleted = completedSteps === totalSteps;
   const returnCount = runtime?.returns.length ?? 0;
-  const substages: Array<{ label: string; detail: string; state: AgentFlowStepState }> = [
+  const engineeringReturnCount = runtime?.returns.filter((item) => engineeringTasks.some((task) => task.id === item.taskId)).length ?? 0;
+  const consumedEngineeringReturns = runtime?.returns.filter((item) => item.status === "consumed" && engineeringTasks.some((task) => task.id === item.taskId)).length ?? 0;
+  const legacySubstages: Array<{ label: string; detail: string; state: AgentFlowStepState }> = [
     { label: "子任务分派", detail: dispatched ? "已完成" : "等待分派", state: dispatched ? "done" : currentStep === 2 ? "active" : "waiting" },
     { label: "并行执行", detail: childRuns.length === 0 ? "尚未开始" : `${finishedRuns}/${childRuns.length} 已结束`, state: executionFinished ? "done" : currentStep === 3 && !hasRework ? "active" : "waiting" },
     { label: "返工处理", detail: hasRework ? `${Math.max(reworkTasks, failedReviews)} 项处理中` : "暂无返工", state: hasRework ? "rework" : executionFinished ? "done" : "waiting" },
     { label: "Return 回传", detail: returnCount === 0 ? "等待回传" : `${consumedReturns}/${returnCount} 已接收`, state: returnCount > 0 && consumedReturns === returnCount ? "done" : returnCount > 0 ? "active" : "waiting" },
   ];
+  const substages: Array<{ label: string; detail: string; state: AgentFlowStepState }> = isV3 ? [
+    { label: "前端工程 Chat", detail: formatTaskStatus(v3Task("frontend_engineering")?.status), state: taskFlowState(v3Task("frontend_engineering")) },
+    { label: "后端工程 Chat", detail: formatTaskStatus(v3Task("backend_engineering")?.status), state: taskFlowState(v3Task("backend_engineering")) },
+    { label: "联调/测试 Chat", detail: formatTaskStatus(v3Task("integration_quality")?.status), state: taskFlowState(v3Task("integration_quality")) },
+    { label: "Return 回传", detail: engineeringReturnCount === 0 ? "等待三个 Chat 回传" : `${consumedEngineeringReturns}/${engineeringReturnCount} 已接收`, state: engineeringReturnCount === 3 && consumedEngineeringReturns === 3 ? "done" : engineeringReturnCount > 0 ? "active" : "waiting" },
+  ] : legacySubstages;
   return (
     <section className="agent-flow-progress" aria-label="God Agent 协作流程">
       <header className="agent-flow-header">
-        <span><strong>协作流程</strong><small>{currentStep === 6 ? "全部完成" : `正在进行第 ${currentStep} 步`}</small></span>
-        <strong>{completedSteps}/5</strong>
+        <span><strong>协作流程</strong><small>{allStepsCompleted ? "全部完成" : `正在进行第 ${Math.min(currentStep, totalSteps)} 步`}</small></span>
+        <strong>{completedSteps}/{totalSteps}</strong>
       </header>
-      <div className="agent-flow-track" aria-hidden="true"><span style={{ width: `${(completedSteps / 5) * 100}%` }} /></div>
+      <div className="agent-flow-track" aria-hidden="true"><span style={{ width: `${(completedSteps / totalSteps) * 100}%` }} /></div>
       <ol className="agent-flow-steps">
         {flowSteps.map((step, index) => {
           const stepNumber = index + 1;
           const state = stateFor(stepNumber);
-          const isExecutionStep = stepNumber === 3;
+          const isExecutionStep = isV3 ? stepNumber === 5 : stepNumber === 3;
           return <li key={step.label} className="agent-flow-step" data-state={state}>
             {isExecutionStep ? (
               <button type="button" className="agent-flow-step-button" aria-expanded={executionExpanded} aria-controls="agent-execution-substages" onClick={() => setExecutionExpanded((value) => !value)}>
@@ -1547,7 +1620,7 @@ function AgentFlowProgress({ runs, runtime, requirement, activeAgentThreadId, op
           </li>;
         })}
       </ol>
-      {runtime?.fixedProductStage !== undefined && runtime.fixedProductStage !== "completed" && <button className="fixed-product-advance agent-flow-next-action" type="button" onClick={() => void advance(runtime.fixedProductStage!)}>{formatFixedProductAction(runtime.fixedProductStage)}</button>}
+      {runtime?.fixedProductStage !== undefined && runtime.fixedProductStage !== "completed" && runtime.fixedProductStage !== "design_confirmation" && <button className="fixed-product-advance agent-flow-next-action" type="button" onClick={() => void advance(runtime.fixedProductStage!)}>{formatFixedProductAction(runtime.fixedProductStage)}</button>}
       <section className="agent-flow-agents" aria-label="子 Agent 最新工作">
         <header><strong>Agent 动态</strong><small>{childRuns.length} 个</small></header>
         {childRuns.length === 0 ? <p className="agent-flow-empty">任务分派后，这里会显示每个 Agent 的最新工作。</p> : (
@@ -1596,8 +1669,8 @@ function HistoryAgentTree({ runs, requirement, runtime, selectedId, select }: {
   return <div className="history-workflow-tree">
     <div className="history-god-node"><strong>God</strong><small>{requirement === undefined ? "当前 Chat" : `${requirement.title} · v${requirement.revision}`}</small></div>
     <details className="history-team-node" open>
-      <summary><strong>软件产品演示团队</strong><small>{formatAgentJobState(runtime?.job?.status)} · 1 位负责人 / 3 个角色</small></summary>
-      <p>目标：产品、工程、测试逐级向负责人 Return，负责人验收后再 Return God。</p>
+      <summary><strong>软件产品交付团队</strong><small>{formatAgentJobState(runtime?.job?.status)} · 设计 2 Chat / 工程 3 Chat / 独立测试 / 负责人</small></summary>
+      <p>目标：先完成原稿与 Mock 并由用户确认，再由三个工程 Chat 并行落地，经过负责人联调和独立测试后 Return God。</p>
       <ul className="history-agent-tree" aria-label="当前 Chat 固定软件团队树">
         {roots.flatMap((root) => children.get(root.id) ?? []).map(renderRun)}
       </ul>
@@ -1627,7 +1700,9 @@ function formatAgentLatestWork(run: import("../desktop-types.js").DesktopAgentRu
 function formatAgentProfileName(profileId: string | undefined): string {
   const names: Record<string, string> = {
     orchestrator: "God", software_team_lead: "软件团队负责人",
-    product_role: "产品角色 Agent", engineering_role: "工程角色 Agent", quality_role: "测试角色 Agent",
+    product_role: "产品角色 Agent", product_design: "产品原稿 Chat", mock_preview: "Mock 交互 Chat",
+    engineering_role: "工程角色 Agent", frontend_engineering: "前端工程 Chat", backend_engineering: "后端工程 Chat",
+    integration_quality: "联调测试 Chat", quality_role: "独立测试 Agent（测试角色 Agent）",
     investigator: "排查 Agent", researcher: "资料 Agent", coder: "编程 Agent", tester: "测试 Agent", reviewer: "审查 Agent",
   };
   return profileId === undefined ? "Agent" : names[profileId] ?? profileId;
@@ -1637,7 +1712,12 @@ function formatAgentResponsibility(profileId: string): string {
   const responsibilities: Record<string, string> = {
     software_team_lead: "拆分、监工、验收，并只把合格结果 Return God",
     product_role: "只负责产品需求、页面结构与产品验收条件",
+    product_design: "生成面向用户确认的产品原稿，不写工程代码",
+    mock_preview: "生成可预览交互与页面状态，不写前端业务代码",
     engineering_role: "只负责工程方案和获准的实现工作",
+    frontend_engineering: "只修改前端文件并 Return 变更与验证证据",
+    backend_engineering: "只修改后端、API 与数据文件",
+    integration_quality: "负责联调、测试与构建，不修改前后端业务文件",
     quality_role: "独立检查产品与工程结果，不修改前两者产物",
     reviewer: "独立审查证据和回归风险",
   };
@@ -1669,12 +1749,100 @@ function describePower(effort: string | undefined): string {
 }
 
 function formatFixedProductAction(stage: import("../../agents/fixed-software-team-coordinator.js").FixedProductStage): string {
+  if (stage === "product_design_ready") return "生成产品原稿";
+  if (stage === "mock_preview_ready") return "生成交互 Mock";
+  if (stage === "design_confirmation") return "等待你确认设计";
+  if (stage === "engineering_fanout") return "启动 3 个工程 Chat";
+  if (stage === "engineering_fanout_ready") return "负责人联调验收";
+  if (stage === "integration_review") return "独立测试验收";
+  if (stage === "quality_review") return "负责人最终验收";
+  if (stage === "lead_acceptance") return "Return God 并汇总交付";
   if (stage === "ready_first_return") return "1. 产品生成第一轮 Return";
   if (stage === "first_return_ready") return "2. 负责人验收并驳回";
   if (stage === "rework") return "3. 原产品 Thread 返工（Attempt 2）";
   if (stage === "second_return_ready") return "4. 负责人通过并 Return God";
   if (stage === "lead_return_ready") return "5. God 接收并单次汇总";
   return "完整项目闭环已完成";
+}
+
+function EngineeringChatPanel({ runtime, rework }: {
+  runtime: import("../desktop-types.js").DesktopAgentRuntimeView | undefined;
+  rework: (taskId: string) => void;
+}) {
+  const profiles = ["frontend_engineering", "backend_engineering", "integration_quality"];
+  const currentJobAttempt = runtime?.job?.attempt;
+  const taskFor = (profile: string) => runtime?.tasks.find((task) => task.profileId === profile && task.jobAttempt === currentJobAttempt);
+  const tasks = profiles.map(taskFor).filter((task): task is import("../../agents/agent-runtime.js").AgentTask => task !== undefined);
+  const reworkStageAllowed = runtime?.fixedProductStage === "engineering_fanout" || runtime?.fixedProductStage === "engineering_fanout_ready";
+  return <section className="engineering-chat-panel"><header><span><strong>工程阶段 · 默认 3 个 Chat</strong><small>前端、后端、联调/测试同时执行，全部 Return 后才进入负责人验收</small></span><span>{tasks.filter((task) => task.status === "completed").length}/3</span></header><div className="engineering-chat-grid">{profiles.map((profile) => {
+    const task = taskFor(profile);
+    const evidence = task === undefined ? undefined : runtime?.evidence.filter((item) => item.taskId === task.id).at(-1);
+    const returned = task === undefined ? undefined : runtime?.returns.filter((item) => item.taskId === task.id).at(-1);
+    const result = readEngineeringCardResult(evidence?.summary);
+    const returnResult = readEngineeringCardResult(returned?.result.summary);
+    const canRework = reworkStageAllowed && task !== undefined && ["failed", "rework", "blocked", "completed"].includes(task.status) && task.attempt < task.maxAttempts;
+    return <article key={profile} data-status={task?.status ?? "pending"}>
+      <strong>{formatAgentProfileName(profile)}</strong>
+      <small>{task === undefined ? "等待设计确认后分派" : `${formatTaskStatus(task.status)} · 第 ${task.attempt} 次尝试`}</small>
+      <div className="engineering-chat-result">
+        <section><strong>交付物</strong>{result.deliverables.length === 0 ? <p>等待 Chat 返回变更文件与交付物</p> : <ul>{result.deliverables.map((item, index) => <li key={`${profile}-deliverable-${index}`}>{item}</li>)}</ul>}</section>
+        <section><strong>验证证据</strong>{result.evidence.length === 0 ? <p>等待测试或构建证据</p> : <ul>{result.evidence.map((item, index) => <li key={`${profile}-evidence-${index}`}>{item}</li>)}</ul>}</section>
+        <section><strong>风险与阻塞</strong>{result.blockers.length === 0 ? <p>暂无已报告阻塞</p> : <ul>{result.blockers.map((item, index) => <li key={`${profile}-blocker-${index}`}>{item}</li>)}</ul>}</section>
+        <section><strong>Return</strong><p>{returned === undefined ? "等待 Return" : `${formatReturnStatus(returned.status)} · ${returnResult.summary || returned.result.status}`}</p></section>
+      </div>
+      {canRework && <button type="button" className="secondary" onClick={() => rework(task.id)}>只返工这个 Chat</button>}
+    </article>;
+  })}</div></section>;
+}
+
+interface EngineeringCardResult {
+  summary: string;
+  deliverables: string[];
+  evidence: string[];
+  blockers: string[];
+}
+
+function readEngineeringCardResult(value: string | undefined): EngineeringCardResult {
+  const empty = { summary: "", deliverables: [], evidence: [], blockers: [] };
+  if (value === undefined || value.trim().length === 0) return empty;
+  try {
+    const parsed = JSON.parse(value) as Record<string, unknown>;
+    return {
+      summary: typeof parsed.summary === "string" ? parsed.summary : "",
+      deliverables: stringItems(parsed.deliverables),
+      evidence: stringItems(parsed.evidence),
+      blockers: stringItems(parsed.blockers),
+    };
+  } catch {
+    return { ...empty, summary: value };
+  }
+}
+
+function stringItems(value: unknown): string[] {
+  return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string" && item.trim().length > 0) : [];
+}
+
+function formatTaskStatus(status: import("../../agents/agent-runtime.js").AgentTaskStatus | undefined): string {
+  const labels: Partial<Record<import("../../agents/agent-runtime.js").AgentTaskStatus, string>> = {
+    draft: "等待分派", blocked: "等待处理阻塞", ready: "准备开始", claimed: "已领取",
+    running: "执行中", awaiting_evidence: "等待验证证据", reviewing: "验收中", rework: "等待返工",
+    completed: "已完成", failed: "执行失败", cancelled: "已取消", lost: "等待恢复",
+  };
+  return status === undefined ? "尚未开始" : labels[status] ?? status;
+}
+
+function taskFlowState(task: import("../../agents/agent-runtime.js").AgentTask | undefined): AgentFlowStepState {
+  if (task?.status === "completed") return "done";
+  if (task !== undefined && ["failed", "rework", "blocked"].includes(task.status)) return "rework";
+  if (task !== undefined && ["claimed", "running", "awaiting_evidence", "reviewing"].includes(task.status)) return "active";
+  return "waiting";
+}
+
+function formatReturnStatus(status: import("../../agents/agent-runtime.js").AgentReturnStatus): string {
+  if (status === "ready") return "已生成，等待负责人接收";
+  if (status === "delivering") return "正在回传";
+  if (status === "consumed") return "负责人已接收";
+  return "回传失败";
 }
 
 function formatThreadState(state: import("../desktop-types.js").DesktopTurnState): string {

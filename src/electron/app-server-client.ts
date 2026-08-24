@@ -175,6 +175,15 @@ export class AppServerClient {
   async confirmRequirement(requirementId: string, revision: number, contentHash: string): Promise<import("../requirements/requirement.js").Requirement> {
     return await this.sendRequest("requirement/confirm", { requirementId, revision, contentHash }) as import("../requirements/requirement.js").Requirement;
   }
+  async confirmDesign(requirementId: string, revision: number, contentHash: string): Promise<import("../requirements/requirement.js").Requirement> {
+    return await this.sendRequest("requirement/design-confirm", { requirementId, revision, contentHash }) as import("../requirements/requirement.js").Requirement;
+  }
+  async submitDesignFeedback(requirementId: string, feedback: string): Promise<import("../requirements/requirement.js").Requirement> {
+    return await this.sendRequest("requirement/design-feedback", { requirementId, feedback }) as import("../requirements/requirement.js").Requirement;
+  }
+  async reworkEngineeringChat(threadId: string, taskId: string, reason: string): Promise<unknown> {
+    return this.sendRequest("agent/engineering-chat/rework", { threadId, taskId, reason });
+  }
 
   async readThreadHistory(
     threadId: string,

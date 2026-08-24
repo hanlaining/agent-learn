@@ -98,6 +98,7 @@ const AGENT_INSTRUCTIONS = `
 
 const SAFE_TOOL_COMMENTARY_FALLBACK = "正在检查相关实现……";
 const TOOL_ROUND_FINALIZATION_INSTRUCTIONS = `工具预算已经用尽。不得再调用任何工具；必须只依据当前对话中已有的 Return、Evidence 和工具结果，直接给用户输出完整最终答复。不要声称执行了尚未执行的工具。`;
+export const DEFAULT_AGENT_TURN_TIMEOUT_MS = 10 * 60 * 1_000;
 
 interface ModelRequestResult {
   response: LlmResponse;
@@ -130,6 +131,21 @@ export interface AgentLoopOptions {
     provider: string;
     defaultModel: string;
   };
+  afterModelResponsePersisted?(input: {
+    threadId: string;
+    turnId: string;
+    invocationId: string;
+    purpose: string;
+    executionContext?: AgentInvocationContext;
+  }): void | Promise<void>;
+  afterToolResultPersisted?(input: {
+    turnId: string;
+    modelInvocationId: string;
+    toolInvocationId: string;
+    toolName: string;
+    callId: string;
+    result: unknown;
+  }): void | Promise<void>;
   toolInvocationWal?: {
     store: ToolInvocationStore;
     persist: () => Promise<void>;
@@ -217,6 +233,8 @@ export class AgentLoop {
   private readonly continueAfterAgentReturns?: AgentLoopOptions["continueAfterAgentReturns"];
   private readonly resolveExecutionContext?: AgentLoopOptions["resolveExecutionContext"];
   private readonly modelInvocationWal?: AgentLoopOptions["modelInvocationWal"];
+  private readonly afterModelResponsePersisted?: AgentLoopOptions["afterModelResponsePersisted"];
+  private readonly afterToolResultPersisted?: AgentLoopOptions["afterToolResultPersisted"];
   private readonly toolInvocationWal?: AgentLoopOptions["toolInvocationWal"];
   private readonly executionLeases: ExecutionLeaseCoordinator | undefined;
   private readonly activeTurns = new Map<
@@ -273,13 +291,15 @@ export class AgentLoop {
     this.llm = options.llm;
     this.events = options.events ?? NOOP_AGENT_EVENT_SINK;
     this.maxToolRounds = options.maxToolRounds ?? 3;
-    this.turnTimeoutMs = options.turnTimeoutMs ?? 120_000;
+    this.turnTimeoutMs = options.turnTimeoutMs ?? DEFAULT_AGENT_TURN_TIMEOUT_MS;
     this.instructions = options.additionalInstructions === undefined
       ? AGENT_INSTRUCTIONS
       : `${AGENT_INSTRUCTIONS}\n\n${options.additionalInstructions.trim()}`;
     this.continueAfterAgentReturns = options.continueAfterAgentReturns;
     this.resolveExecutionContext = options.resolveExecutionContext;
     this.modelInvocationWal = options.modelInvocationWal;
+    this.afterModelResponsePersisted = options.afterModelResponsePersisted;
+    this.afterToolResultPersisted = options.afterToolResultPersisted;
     this.toolInvocationWal = options.toolInvocationWal;
     this.executionLeases = options.executionLeases;
     if (this.toolInvocationWal !== undefined && this.modelInvocationWal === undefined) {
@@ -911,6 +931,13 @@ export class AgentLoop {
           normalizedResult: normalizeModelResponse(response),
         });
         await wal.persist();
+        await this.afterModelResponsePersisted?.({
+          threadId: turn.threadId,
+          turnId,
+          invocationId,
+          purpose,
+          ...(executionContext === undefined ? {} : { executionContext }),
+        });
       }
     }
 
@@ -1094,6 +1121,14 @@ export class AgentLoop {
 
     invocation = wal.store.recordResult(invocation.toolInvocationId, normalizedResult);
     await wal.persist();
+    await this.afterToolResultPersisted?.({
+      turnId: input.turnId,
+      modelInvocationId: input.modelInvocationId,
+      toolInvocationId: invocation.toolInvocationId,
+      toolName: input.functionCall.name,
+      callId: input.functionCall.callId,
+      result: invocation.result,
+    });
     // Keep result_received for audit/recovery, but never publish a late result
     // or start a continuation after the Turn has been cancelled.
     this.assertTurnActive(input.turnId, input.signal);

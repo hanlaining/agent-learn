@@ -2,7 +2,9 @@ import type { AgentReasoningEffort } from "./agent-profile.js";
 import type { RuntimeStageMetric } from "../observability/runtime-metrics.js";
 
 export type AgentCollaborationMode = "off" | "auto" | "manual";
-export type AgentRole = "investigator" | "researcher" | "coder" | "tester" | "reviewer";
+export type AgentRole = "investigator" | "researcher" | "coder" | "tester" | "reviewer" |
+  "product_design" | "mock_preview" | "frontend_engineering" | "backend_engineering" |
+  "integration_quality" | "quality_role" | "software_team_lead";
 export type AgentAccessMode = "read_only" | "workspace" | "full_access";
 
 export interface AgentTeamConfig {
@@ -10,6 +12,8 @@ export interface AgentTeamConfig {
   mode: AgentCollaborationMode;
   maxSubagents: number;
   maxConcurrent: number;
+  /** software_product_delivery_v3 工程阶段默认并行 Chat 数。 */
+  engineeringChatCount?: number;
   maxDepth: number;
   allowedProfiles: AgentRole[];
   scheduling: "dependency_graph" | "independent_only";
@@ -31,6 +35,7 @@ export const DEFAULT_AGENT_TEAM_CONFIG: AgentTeamConfig = {
   mode: "auto",
   maxSubagents: 10,
   maxConcurrent: 4,
+  engineeringChatCount: 3,
   maxDepth: 3,
   allowedProfiles: ["investigator", "researcher", "coder", "tester", "reviewer"],
   scheduling: "dependency_graph",
@@ -247,6 +252,7 @@ export function normalizeAgentTeamConfig(value: Partial<AgentTeamConfig> = {}): 
     version: 1,
     maxSubagents,
     maxConcurrent: clampInteger(value.maxConcurrent, 1, maxSubagents, Math.min(4, maxSubagents)),
+    engineeringChatCount: clampInteger(value.engineeringChatCount, 3, 3, 3),
     maxDepth: clampInteger(value.maxDepth, 1, 3, 3),
     accessMode: value.accessMode === "read_only" || value.accessMode === "full_access"
       ? value.accessMode

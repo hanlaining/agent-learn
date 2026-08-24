@@ -56,6 +56,13 @@ export interface WorkflowTeamCoordinatorOptions {
     stageAttempt: number;
   }): WorkflowTeamExecution | undefined;
   commitRecoveredModelExecution?(invocationId: string, targetCommitKey: string): void;
+  beforeStageResultCommit?(input: {
+    jobId: string;
+    runId: string;
+    stageId: "product" | "engineering" | "quality";
+    stageAttempt: number;
+    result: StageResult;
+  }): void | Promise<void>;
   requirement(jobId: string): WorkflowRequirementContext;
   feedback?(jobId: string): { turnId: string; text: string } | undefined;
   modelInfo?(profileId: TeamProfile): { model: string; reasoningEffort?: string };
@@ -662,6 +669,13 @@ export class WorkflowTeamCoordinator {
           threadId: input.threadId, attempt: checkpoint.stageAttempt, allowedTools: template.allowedTools, prompt: input.prompt });
         result = execution.result; turnId = execution.turnId; recoveredInvocationId = execution.invocationId;
       }
+      await this.options.beforeStageResultCommit?.({
+        jobId: input.jobId,
+        runId: input.runId,
+        stageId: input.stageId,
+        stageAttempt: checkpoint.stageAttempt,
+        result,
+      });
       if (checkpoint.status === "running") this.options.runtimeStore.setStageStatus(checkpoint.idempotencyKey, "validating");
       this.options.runStore.rebindAttempt(input.runId, turnId, input.attempt);
       const evidence = this.options.runtimeStore.addEvidence({ jobId: input.jobId, taskId: input.taskId, runId: input.runId, kind: input.kind,

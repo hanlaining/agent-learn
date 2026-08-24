@@ -6,6 +6,7 @@ import type { ExecutionControl, ExecutionFeedback } from "./execution-engine.js"
 
 export interface StageAdvancingExecutionEngine extends ExecutionEngine {
   advance(jobId: string, expectedStage: FixedProductStage): Promise<{ stage: FixedProductStage; changed: boolean }>;
+  requestEngineeringRework?(jobId: string, taskId: string, reason: string): Promise<void>;
 }
 
 export class ExecutionEngineRouter {
@@ -27,7 +28,9 @@ export class ExecutionEngineRouter {
   provideFeedback(kind: RequirementExecutionKind, jobId: string, feedback: ExecutionFeedback): Promise<boolean> {
     return this.route(kind).provideFeedback?.(jobId, feedback) ?? Promise.resolve(false);
   }
-  validateStart(kind: RequirementExecutionKind, allowedTools: string[]): void { this.route(kind).validateStart?.(allowedTools); }
+  validateStart(kind: RequirementExecutionKind, allowedTools: string[], workflowVersion?: string): void {
+    this.route(kind).validateStart?.(allowedTools, workflowVersion);
+  }
   resume(kind: RequirementExecutionKind, jobId: string): Promise<ExecutionEngineResult> { return this.route(kind).resume(jobId); }
   cancel(kind: RequirementExecutionKind, jobId: string): Promise<void> { return this.route(kind).cancel(jobId); }
   recover(kind: RequirementExecutionKind, jobId: string): Promise<void> { return this.route(kind).recover(jobId); }
@@ -37,5 +40,11 @@ export class ExecutionEngineRouter {
     const engine = this.route(kind) as Partial<StageAdvancingExecutionEngine>;
     if (engine.advance === undefined) throw new Error(`Execution engine does not expose stages: ${kind}`);
     return engine.advance(jobId, expectedStage);
+  }
+
+  requestEngineeringRework(kind: RequirementExecutionKind, jobId: string, taskId: string, reason: string): Promise<void> {
+    const engine = this.route(kind) as Partial<StageAdvancingExecutionEngine>;
+    if (engine.requestEngineeringRework === undefined) throw new Error(`Execution engine does not support engineering rework: ${kind}`);
+    return engine.requestEngineeringRework(jobId, taskId, reason);
   }
 }

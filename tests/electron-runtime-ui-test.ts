@@ -617,13 +617,16 @@ test("父 Chat 接收失败子 Agent 更新并保留安全错误", () => {
   assert.equal(state.snapshot?.agentRuns[0]?.safeError, "Reviewer configuration is unavailable");
 });
 
-test("固定软件团队 UI 展示 God、负责人、三角色和真实 Thread 返回入口", () => {
+test("固定软件产品交付团队 UI 展示 v3 角色和真实 Thread 返回入口", () => {
   const source = readFileSync(new URL("../src/electron/renderer/App.tsx", import.meta.url), "utf8");
-  assert.match(source, /软件产品演示团队/);
+  assert.match(source, /软件产品交付团队/);
+  assert.match(source, /设计 2 Chat \/ 工程 3 Chat \/ 独立测试 \/ 负责人/);
   assert.match(source, /软件团队负责人/);
-  assert.match(source, /产品角色 Agent/);
-  assert.match(source, /工程角色 Agent/);
-  assert.match(source, /测试角色 Agent/);
+  assert.match(source, /产品原稿 Chat/);
+  assert.match(source, /前端工程 Chat/);
+  assert.match(source, /后端工程 Chat/);
+  assert.match(source, /联调测试 Chat/);
+  assert.match(source, /独立测试 Agent/);
   assert.match(source, /selectAgentThread\(run\?\.threadId\)/);
   assert.match(source, /← 返回 God/);
 });
@@ -789,6 +792,22 @@ test("God 极简流程只在右侧活动栏展示并支持 AgentChat 快捷入�
   assert.match(styles, /\.agent-flow-agent-button \{[\s\S]*grid-template-columns: 6px minmax\(0, 1fr\) 12px;[\s\S]*min-width: 0;/);
   assert.match(styles, /\.agent-flow-agent-button strong, \.agent-flow-agent-button small \{[\s\S]*text-overflow: ellipsis;[\s\S]*white-space: nowrap;/);
   assert.match(styles, /@container inspector \(max-width: 260px\) \{[\s\S]*\.agent-flow-agent-button/);
+});
+
+test("v3 UI 在工程前展示原稿与交互 Mock，并在确认后展示三个工程 Chat 与单 Chat 返工", () => {
+  const app = readFileSync(resolve("src/electron/renderer/App.tsx"), "utf8");
+  const preload = readFileSync(resolve("src/electron/preload.cjs"), "utf8");
+  for (const label of ["产品原稿与交互 Mock", "打开原稿", "预览 Mock", "提出修改", "确认设计", "工程阶段 · 默认 3 个 Chat", "只返工这个 Chat"]) assert.match(app, new RegExp(label));
+  for (const label of ["需求确认", "产品原稿", "交互 Mock", "设计确认", "3 个工程 Chat", "负责人联调", "独立测试", "最终交付"]) assert.match(app, new RegExp(label));
+  for (const label of ["交付物", "验证证据", "风险与阻塞", "Return"]) assert.match(app, new RegExp(label));
+  assert.match(app, /fixedProductStage !== "design_confirmation"/);
+  assert.match(app, /需求已确认，等待产品设计/);
+  for (const profile of ["frontend_engineering", "backend_engineering", "integration_quality"]) assert.match(app, new RegExp(profile));
+  assert.match(app, /requirement\.designStatus === "confirmed"[\s\S]*<EngineeringChatPanel/);
+  assert.match(app, /event\.type === "agent\/run_updated"[\s\S]*desktop\.getSnapshot/);
+  assert.match(preload, /confirmDesign:[\s\S]*DESKTOP_CONFIRM_DESIGN_CHANNEL/);
+  assert.match(preload, /submitDesignFeedback:[\s\S]*DESKTOP_DESIGN_FEEDBACK_CHANNEL/);
+  assert.match(preload, /reworkEngineeringChat:[\s\S]*DESKTOP_ENGINEERING_REWORK_CHANNEL/);
 });
 
 test("输入工具栏与左栏按各自容器切换紧凑模式", () => {

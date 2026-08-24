@@ -136,7 +136,7 @@ export class AgentRuntimeStore {
   reconcileJobStatus(jobId: string): AgentJobStatus {
     const job = this.requireJob(jobId);
     if (job.status === "cancelled") return job.status;
-    if (job.executionKind === "software_product_delivery" && job.workflowVersion === "software_product_delivery_v2") {
+    if (job.executionKind === "software_product_delivery" && ["software_product_delivery_v2", "software_product_delivery_v3"].includes(job.workflowVersion)) {
       if (["failed", "partial"].includes(job.status)) return job.status;
       return this.reconcileSoftwareProductDeliveryJob(job);
     }
@@ -265,7 +265,7 @@ export class AgentRuntimeStore {
       const hasCurrentTasks = this.listTasks(job.id).some((task) =>
         task.parentTaskId === undefined && task.jobAttempt === job.attempt);
       const hasCurrentWorkflowCheckpoints = job.executionKind === "software_product_delivery" &&
-        job.workflowVersion === "software_product_delivery_v2" &&
+        ["software_product_delivery_v2", "software_product_delivery_v3"].includes(job.workflowVersion) &&
         this.listStageCheckpoints(job.id).some((checkpoint) => checkpoint.jobAttempt === job.attempt);
       if (job.status !== "completed" || hasCurrentTasks || hasCurrentWorkflowCheckpoints) {
         this.reconcileJobStatus(job.id);
@@ -485,10 +485,13 @@ export class AgentRuntimeStore {
       this.setJobStatus(job.id, "failed");
       return "failed";
     }
-    const requiredStages = ["product", "engineering", "quality", "lead", "return_god"];
+    const requiredStages = job.workflowVersion === "software_product_delivery_v3"
+      ? ["product_design", "mock_preview", "frontend_engineering", "backend_engineering", "integration_quality", "integration_review", "quality_review", "lead_acceptance", "return_god"]
+      : ["product", "engineering", "quality", "lead", "return_god"];
     const stagesCompleted = requiredStages.every((stageId) =>
       checkpoints.some((item) => item.stageId === stageId && item.status === "completed"));
-    const leadReturnConsumed = returns.some((item) => item.stageId === "lead" && item.status === "consumed");
+    const finalReturnStage = job.workflowVersion === "software_product_delivery_v3" ? "return_god" : "lead";
+    const leadReturnConsumed = returns.some((item) => item.stageId === finalReturnStage && item.status === "consumed");
     if (stagesCompleted && leadReturnConsumed) {
       const currentEvidence = currentTasks.flatMap((task) => this.listEvidence(task.id));
       const evidenceById = new Map(currentEvidence.map((item) => [item.id, item]));

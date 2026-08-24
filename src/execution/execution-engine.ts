@@ -36,7 +36,7 @@ export interface ExecutionEngine {
   readonly control: ExecutionControl;
   supports(kind: RequirementExecutionKind): boolean;
   isActive?(jobId: string): boolean;
-  validateStart?(allowedTools: string[]): void;
+  validateStart?(allowedTools: string[], workflowVersion?: string): void;
   provideFeedback?(jobId: string, feedback: ExecutionFeedback): Promise<boolean>;
   start(context: ExecutionContext): Promise<ExecutionEngineResult>;
   resume(jobId: string): Promise<ExecutionEngineResult>;
