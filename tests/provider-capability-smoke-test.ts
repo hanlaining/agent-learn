@@ -101,3 +101,49 @@ test("能力矩阵明确区分未接线能力与 exactly-once 声明", async () 
   assert.equal(report.matrix.exactlyOnceClaim, "not-claimed");
   assert.match(report.matrix.evidence, /Idempotency-Key/);
 });
+
+test("openai-compatible Smoke 使用真实 Chat Completions 路径和消息体", async () => {
+  const config = loadProviderSmokeConfig({
+    PROVIDER_SMOKE_PROVIDER: "openai-compatible",
+    PROVIDER_SMOKE_MODEL: "gundam-fixture",
+    PROVIDER_SMOKE_BASE_URL: "http://127.0.0.1:18800/v1",
+    PROVIDER_SMOKE_OPERATIONS: "create,retry",
+  });
+  const fixture = createFixtureTransport();
+  const report = await runProviderCapabilitySmoke({
+    config,
+    transport: fixture,
+  });
+
+  assert.equal(report.status, "completed");
+  assert.equal(report.matrix.requestStatusQuery, "not-wired");
+  assert.ok(fixture.requests.every(
+    (request) => request.url ===
+      "http://127.0.0.1:18800/v1/chat/completions",
+  ));
+  const body = JSON.parse(String(fixture.requests[0]?.init.body));
+  assert.equal(body.model, "gundam-fixture");
+  assert.deepEqual(
+    body.messages.map((message: { role: string }) => message.role),
+    ["system", "user"],
+  );
+});
+
+test("openai-compatible Live Smoke 明确拒绝不存在的 status/cancel", () => {
+  const config = loadProviderSmokeConfig({
+    PROVIDER_SMOKE_LIVE: "1",
+    PROVIDER_SMOKE_API_KEY: "fixture",
+    PROVIDER_SMOKE_PROVIDER: "openai-compatible",
+    PROVIDER_SMOKE_MODEL: "gundam-fixture",
+    PROVIDER_SMOKE_MODEL_ALLOWLIST: "gundam-fixture",
+    PROVIDER_SMOKE_OPERATIONS: "create,status,cancel",
+    PROVIDER_SMOKE_MAX_REQUESTS: "3",
+    PROVIDER_SMOKE_MAX_REQUEST_COST_USD: "0.01",
+    PROVIDER_SMOKE_MAX_TOTAL_COST_USD: "0.01",
+    PROVIDER_SMOKE_TIMEOUT_MS: "1000",
+  });
+
+  assert.ok(validateLiveProviderSmokeConfig(config).some(
+    (error) => error.includes("does not expose status/cancel"),
+  ));
+});
