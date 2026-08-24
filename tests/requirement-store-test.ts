@@ -6,8 +6,9 @@ import test from "node:test";
 
 import { RequirementStore } from "../src/requirements/requirement-store.js";
 import { RequirementPlanWriter } from "../src/requirements/requirement-plan-writer.js";
+import { RequirementDesignWriter } from "../src/requirements/requirement-design-writer.js";
 import type { RequirementDraft } from "../src/requirements/requirement.js";
-import { isRequirementConfirmed } from "../src/requirements/requirement.js";
+import { isDesignConfirmed, isRequirementConfirmed } from "../src/requirements/requirement.js";
 
 const draft: RequirementDraft = {
   executionKind: "analysis_only",
@@ -62,4 +63,45 @@ test("Markdown 计划包含测试用例并返回稳定哈希和绝对路径", as
   const markdown = await readFile(artifact.path, "utf8");
   assert.match(markdown, /TC-01 确认门/); assert.match(markdown, /执行类型：analysis_only/);
   assert.match(markdown, /只有用户确认本版本后才开始执行/);
+});
+
+test("完整产品的需求确认与设计确认是两个独立硬门", async () => {
+  const root = await mkdtemp(join(tmpdir(), "god-agent-design-"));
+  const productDraft = { ...draft, executionKind: "software_product_delivery" as const };
+  const store = new RequirementStore(() => "2026-08-24T00:00:00.000Z");
+  const identity = store.nextPlanIdentity("chat-product");
+  const plan = await new RequirementPlanWriter(root).write({ ...identity, draft: productDraft });
+  const planned = store.prepare("chat-product", productDraft, plan);
+  assert.throws(() => store.markDesignDraft(planned.id, planned.revision, { path: "x.md", contentHash: "a".repeat(64), generatedAt: "now" }), /confirmed/);
+  const confirmed = store.confirm(planned.id, planned.revision, plan.contentHash);
+  assert.equal(isRequirementConfirmed(confirmed), true);
+  assert.equal(isDesignConfirmed(confirmed), false);
+  const mockSpec = 'MOCK_SPEC:{"initialScreen":"home","screens":[{"id":"home","title":"产品首页","description":"输入产品 Idea","states":["等待输入","正在生成"],"actions":[{"label":"生成方案","to":"plan","feedback":"方案已生成"}]},{"id":"plan","title":"方案确认","description":"查看需求方案","states":["待确认"],"actions":[{"label":"确认需求","to":"home","state":"需求已确认"}]}]}';
+  const artifact = await new RequirementDesignWriter(root, () => "2026-08-24T00:00:00.000Z").write({ requirement: confirmed, productDesign: "首页与结果页", mockPreview: mockSpec });
+  const draftReady = store.markDesignDraft(confirmed.id, confirmed.revision, artifact);
+  assert.equal(draftReady.designStatus, "draft_ready");
+  assert.throws(() => store.confirmDesign(confirmed.id, confirmed.revision, "b".repeat(64)), /changed/);
+  assert.equal(isDesignConfirmed(store.confirmDesign(confirmed.id, confirmed.revision, artifact.contentHash)), true);
+  assert.match(await readFile(artifact.path, "utf8"), /产品原稿与 Mock/);
+  const mockHtml = await readFile(artifact.mockPreview!, "utf8");
+  assert.match(mockHtml, /可点击交互 Mock/);
+  assert.match(mockHtml, /data-screen="0"/);
+  assert.match(mockHtml, /生成方案/);
+  assert.match(mockHtml, /data-to="1"/);
+});
+
+test("设计修改意见使旧设计失效并回到原稿与 Mock 返工", async () => {
+  const root = await mkdtemp(join(tmpdir(), "god-agent-design-feedback-"));
+  const productDraft = { ...draft, executionKind: "software_product_delivery" as const };
+  const store = new RequirementStore();
+  const identity = store.nextPlanIdentity("chat-product");
+  const plan = await new RequirementPlanWriter(root).write({ ...identity, draft: productDraft });
+  const planned = store.prepare("chat-product", productDraft, plan);
+  const confirmed = store.confirm(planned.id, planned.revision, plan.contentHash);
+  const artifact = await new RequirementDesignWriter(root).write({ requirement: confirmed, productDesign: "原稿", mockPreview: "Mock" });
+  store.markDesignDraft(confirmed.id, confirmed.revision, artifact);
+  const revised = store.requestDesignRevision(confirmed.id, confirmed.revision, "首页按钮改为底部固定");
+  assert.equal(revised.designStatus, "not_started");
+  assert.equal(revised.designFeedback, "首页按钮改为底部固定");
+  assert.equal(isDesignConfirmed(revised), false);
 });

@@ -43,6 +43,20 @@ test("DesktopController 工作区搜索限制查询并原样转发安全结果",
   await assert.rejects(() => controller.searchWorkspaceFiles("x".repeat(241)), /Invalid/);
 });
 
+test("DesktopController 支持预览后确认设计、提交修改和单工程 Chat 返工", async () => {
+  const runtime = new DesignDesktopRuntime();
+  const controller = new DesktopController(runtime);
+  const initial = await controller.getSnapshot();
+  assert.equal(initial.requirement?.designStatus, "draft_ready");
+  assert.equal((await controller.confirmDesign()).requirement?.designStatus, "confirmed");
+  assert.equal(runtime.confirmDesignCount, 1);
+  runtime.requirement.designStatus = "draft_ready";
+  await controller.submitDesignFeedback("调整首页主按钮");
+  assert.equal(runtime.lastDesignFeedback, "调整首页主按钮");
+  await controller.reworkEngineeringChat("task-front", "视觉回归");
+  assert.deepEqual(runtime.lastEngineeringRework, { threadId: "thread-1", taskId: "task-front", reason: "视觉回归" });
+});
+
 test("DesktopController 按当前 Chat 展示 outcome_unknown 并只转发处置动作", async () => {
   const runtime = new FakeDesktopRuntime();
   const controller = new DesktopController(runtime);
@@ -387,6 +401,11 @@ test("取消和超时都会保留过程并结束全部运行状态", async () =>
         : undefined,
       "已经产生的过程",
     );
+    if (terminal === "timed_out") {
+      const timeout = final?.items.find((item) => item.kind === "error");
+      assert.equal(timeout?.kind === "error" ? timeout.code : undefined, "turn_timed_out");
+      assert.match(timeout?.kind === "error" ? timeout.safeMessage : "", /已生成文件已保留/);
+    }
   }
 });
 
@@ -585,6 +604,27 @@ class FakeDesktopRuntime implements DesktopRuntimeClient {
       listener(event);
     }
   }
+}
+
+class DesignDesktopRuntime extends FakeDesktopRuntime {
+  confirmDesignCount = 0;
+  lastDesignFeedback?: string;
+  lastEngineeringRework?: { threadId: string; taskId: string; reason: string };
+  requirement = {
+    id: "requirement-1", parentThreadId: "thread-1", revision: 1, status: "executing" as const,
+    executionState: "executing" as const, executionKind: "software_product_delivery" as const,
+    title: "产品", objective: "落地产品", scope: ["src"], nonGoals: [], constraints: [], deliverables: ["产品"], acceptanceCriteria: ["通过"],
+    testCases: [{ id: "TC-1", title: "设计", kind: "ui" as const, steps: ["预览"], expected: "可确认" }], executionSteps: ["设计", "工程"],
+    planArtifact: { path: "D:/plans/plan.md", contentHash: "a".repeat(64), generatedAt: "2026-08-24T00:00:00.000Z" },
+    confirmedRevision: 1, confirmedContentHash: "a".repeat(64), confirmedAt: "2026-08-24T00:00:00.000Z",
+    designStatus: "draft_ready" as "draft_ready" | "confirmed",
+    designArtifact: { path: "D:/plans/design.md", contentHash: "b".repeat(64), generatedAt: "2026-08-24T00:00:00.000Z", mockPreview: "D:/plans/mock.html" },
+    createdAt: "2026-08-24T00:00:00.000Z", updatedAt: "2026-08-24T00:00:00.000Z",
+  };
+  async getRequirement() { return structuredClone(this.requirement); }
+  async confirmDesign() { this.confirmDesignCount += 1; this.requirement.designStatus = "confirmed"; return structuredClone(this.requirement); }
+  async submitDesignFeedback(_requirementId: string, feedback: string) { this.lastDesignFeedback = feedback; return structuredClone(this.requirement); }
+  async reworkEngineeringChat(threadId: string, taskId: string, reason: string) { this.lastEngineeringRework = { threadId, taskId, reason }; return {}; }
 }
 
 function outcomeUnknownRecord(): DesktopOutcomeUnknownResolution {

@@ -51,7 +51,7 @@ import type {
 } from "../runtime/json-file-runtime-persistence.js";
 import type { RequirementStore } from "../requirements/requirement-store.js";
 import { isRequirementConfirmed, type RequirementExecutionKind, type RequirementExecutionState } from "../requirements/requirement.js";
-import type { FixedProductStage } from "../agents/fixed-software-team-coordinator.js";
+import { FIXED_PRODUCT_STAGES, type FixedProductStage } from "../agents/fixed-software-team-coordinator.js";
 import type { ExecutionEngineRouter } from "../execution/execution-engine-router.js";
 import type { DynamicExecutionOwnership } from "../execution/dynamic-agent-execution-engine.js";
 import type { OutcomeUnknownResolutionService } from "../runtime/outcome-unknown-resolution-service.js";
@@ -80,6 +80,7 @@ export interface AppServerDependencies {
   workspaceSandbox?: Pick<WorkspaceSandbox, "searchFiles" | "validateFilePath">;
   skillNames?: readonly string[];
   executionEngineRouter?: ExecutionEngineRouter;
+  softwareProductDeliveryWorkflowVersion?: "software_product_delivery_v2" | "software_product_delivery_v3";
   executionOwnership?: DynamicExecutionOwnership;
   outcomeUnknownResolutionService?: OutcomeUnknownResolutionService;
   resolveOutcomeUnknownActor?: () => OutcomeUnknownActor | undefined;
@@ -117,6 +118,7 @@ export function registerAppServerHandlers(
     workspaceSandbox,
     skillNames = [],
     executionEngineRouter,
+    softwareProductDeliveryWorkflowVersion = "software_product_delivery_v2",
     executionOwnership,
     outcomeUnknownResolutionService,
     resolveOutcomeUnknownActor = () => undefined,
@@ -259,7 +261,7 @@ export function registerAppServerHandlers(
     await waitForStartupRecovery();
     if (executionEngineRouter === undefined || agentRuntimeStore === undefined ||
       !isRecord(params) || typeof params.threadId !== "string" || typeof params.expectedStage !== "string" ||
-      !["ready_first_return", "first_return_ready", "rework", "second_return_ready", "engineering_ready", "engineering_return_ready", "quality_ready", "quality_return_ready", "lead_return_ready", "completed"].includes(params.expectedStage)) {
+      !FIXED_PRODUCT_STAGES.includes(params.expectedStage as FixedProductStage)) {
       throw new Error("Invalid fixed product advance request");
     }
     const job = agentRuntimeStore.listJobs(params.threadId).sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
@@ -282,6 +284,65 @@ export function registerAppServerHandlers(
     const requirement = requirementStore.confirm(params.requirementId, Number(params.revision), params.contentHash);
     await saveState();
     return requirement;
+  });
+
+  connection.onRequest("requirement/design-confirm", async (params) => {
+    requireInitialized();
+    if (requirementStore === undefined || !isRecord(params) || typeof params.requirementId !== "string" ||
+      !Number.isInteger(params.revision) || typeof params.contentHash !== "string") {
+      throw new Error("Invalid design confirmation");
+    }
+    const before = requirementStore.get(params.requirementId);
+    const alreadyConfirmed = before?.designStatus === "confirmed" &&
+      before.designConfirmedRevision === Number(params.revision) &&
+      before.designConfirmedContentHash === params.contentHash;
+    const requirement = requirementStore.confirmDesign(params.requirementId, Number(params.revision), params.contentHash);
+    if (!alreadyConfirmed) await saveState();
+    if (alreadyConfirmed) return requirement;
+    const job = requirement.jobId === undefined ? undefined : agentRuntimeStore?.getJob(requirement.jobId);
+    if (job !== undefined && executionEngineRouter !== undefined && agentRunStore !== undefined) {
+      const continuation = lifecycleStore.createTurn(job.threadId);
+      lifecycleStore.appendItem(continuation.id, "user_message", { text: `确认设计 ${requirement.id} v${requirement.revision}` });
+      agentRuntimeStore?.rebindJobTurn(job.id, continuation.id);
+      agentRunStore.rebindAttempt(job.rootRunId, continuation.id, job.attempt);
+      // 设计确认提交后立即返回；工程链在可观察的 Job/Agent 状态中异步推进，
+      // 避免一个 RPC 同步等待多个模型 Turn 而让确认按钮假死。
+      void executionEngineRouter.resume(job.executionKind, job.id).catch(async () => {
+        const current = agentRuntimeStore?.getJob(job.id);
+        if (current !== undefined && !["completed", "failed", "partial", "cancelled"].includes(current.status)) {
+          agentRuntimeStore?.failJob(job.id, "failed", "async_resume_failed");
+        }
+        await saveState();
+      });
+    }
+    return requirement;
+  });
+
+  connection.onRequest("requirement/design-feedback", async (params) => {
+    requireInitialized();
+    if (requirementStore === undefined || executionEngineRouter === undefined || agentRuntimeStore === undefined ||
+      !isRecord(params) || typeof params.requirementId !== "string" || typeof params.feedback !== "string" || params.feedback.trim().length === 0) {
+      throw new Error("Invalid design feedback");
+    }
+    const requirement = requirementStore.get(params.requirementId);
+    const job = requirement?.jobId === undefined ? undefined : agentRuntimeStore.getJob(requirement.jobId);
+    if (requirement === undefined || job === undefined || job.workflowVersion !== "software_product_delivery_v3") throw new Error("V3 design Job is unavailable");
+    const accepted = await executionEngineRouter.provideFeedback(job.executionKind, job.id, { turnId: `design-feedback-${Date.now()}`, text: params.feedback });
+    if (!accepted) throw new Error("V3 design is not awaiting feedback");
+    await executionEngineRouter.resume(job.executionKind, job.id);
+    return requirementStore.get(requirement.id);
+  });
+
+  connection.onRequest("agent/engineering-chat/rework", async (params) => {
+    requireInitialized();
+    if (executionEngineRouter === undefined || agentRuntimeStore === undefined || !isRecord(params) ||
+      typeof params.threadId !== "string" || typeof params.taskId !== "string" || typeof params.reason !== "string") {
+      throw new Error("Invalid engineering Chat rework request");
+    }
+    const job = agentRuntimeStore.listJobs(params.threadId).filter((item) => item.workflowVersion === "software_product_delivery_v3").sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
+    if (job === undefined) throw new Error("V3 engineering Job is unavailable");
+    await executionEngineRouter.requestEngineeringRework(job.executionKind, job.id, params.taskId, params.reason);
+    return { jobId: job.id, taskId: params.taskId };
   });
 
   connection.onRequest("runtime/capabilities", () => {
@@ -467,7 +528,8 @@ export function registerAppServerHandlers(
     agentRegistry?.requireAll(jobTeamConfig.allowedProfiles);
     if (jobTeamConfig.independentReview) agentRegistry?.require("reviewer");
     if (executionRequested) executionEngineRouter?.validateStart(executionKind,
-      existingRequirementJob?.configSnapshot.allowedTools ?? jobTeamConfig.allowedTools ?? ["*"]);
+      existingRequirementJob?.configSnapshot.allowedTools ?? jobTeamConfig.allowedTools ?? ["*"],
+      existingRequirementJob?.workflowVersion);
     const activeTeamJob = existingRequirementJob?.executionKind === "software_product_delivery" &&
       !["completed", "partial", "failed", "cancelled"].includes(existingRequirementJob.status);
     const activeDynamicJob = existingRequirementJob !== undefined && existingRequirementJob.workflowVersion === "dynamic_v1" &&
@@ -502,7 +564,7 @@ export function registerAppServerHandlers(
     let job = rootRun === undefined || turnFact === undefined || requirement === undefined ? undefined
       : agentRuntimeStore?.createJob({ threadId: turnFact.threadId, rootTurnId: request.turnId,
           rootRunId: rootRun.rootRunId, configSnapshot: jobTeamConfig, executionKind,
-          workflowVersion: executionKind === "software_product_delivery" ? "software_product_delivery_v2" : "dynamic_v1",
+          workflowVersion: executionKind === "software_product_delivery" ? softwareProductDeliveryWorkflowVersion : "dynamic_v1",
           requirementId: requirement.id, requirementRevision: requirement.revision });
     if (job !== undefined && rootRun !== undefined && retryRequested && job.rootTurnId !== request.turnId) {
       job = agentRuntimeStore?.startJobAttempt(job.id, request.turnId, rootRun.rootRunId);
@@ -774,7 +836,14 @@ export function routeTeamConfigForExecutionKind(
   executionKind: RequirementExecutionKind,
 ): AgentTeamConfig {
   const normalized = normalizeAgentTeamConfig(config);
-  if (executionKind === "software_product_delivery") return normalized;
+  if (executionKind === "software_product_delivery") {
+    const fixedProfiles: import("../agents/agent-runtime.js").AgentRole[] = [
+      "product_design", "mock_preview", "frontend_engineering", "backend_engineering",
+      "integration_quality", "quality_role", "software_team_lead",
+    ];
+    return { ...normalized, engineeringChatCount: 3, maxConcurrent: Math.max(3, normalized.maxConcurrent),
+      allowedProfiles: [...new Set([...normalized.allowedProfiles, ...fixedProfiles])] };
+  }
   const workerProfiles = executionKind === "analysis_only"
     ? ["investigator", "researcher"]
     : ["coder", "tester", "investigator"];
@@ -856,6 +925,20 @@ function resolveWorkflowTurnResult(
 ): TurnRunResult {
   const job = jobId === undefined ? undefined : runtimeStore?.getJob(jobId);
   if (job?.status === "completed") return readCompletedTurnResult(lifecycleStore, turnId);
+  const currentTasks = jobId === undefined ? [] : runtimeStore?.listTasks(jobId)
+    .filter((item) => item.jobAttempt === job?.attempt) ?? [];
+  const awaitingDesignConfirmation = job?.workflowVersion === "software_product_delivery_v3" &&
+    currentTasks.some((item) => item.profileId === "product_design" && item.status === "completed") &&
+    currentTasks.some((item) => item.profileId === "mock_preview" && item.status === "completed") &&
+    !currentTasks.some((item) => ["frontend_engineering", "backend_engineering", "integration_quality"].includes(item.profileId));
+  if (awaitingDesignConfirmation) {
+    const existing = lifecycleStore.getItemsForTurn(turnId).filter((item) => item.type === "assistant_message").at(-1);
+    if (lifecycleStore.getTurn(turnId)?.status === "completed" && existing !== undefined) return { turn: lifecycleStore.getTurn(turnId)!, assistantMessage: existing };
+    const assistantMessage = lifecycleStore.appendItem(turnId, "assistant_message", {
+      text: "产品原稿与交互 Mock 已生成。请先在设计卡片中打开原稿、预览 Mock；需要调整可提交修改意见，确认没有问题后点击“确认设计”。确认前前端、后端和联调 Chat 不会启动。",
+    });
+    return { turn: lifecycleStore.completeTurn(turnId), assistantMessage };
+  }
   const blocked = jobId === undefined ? [] : runtimeStore?.listTasks(jobId)
     .filter((item) => item.jobAttempt === job?.attempt && item.status === "blocked") ?? [];
   if (job?.status !== "reviewing" || blocked.length === 0) {

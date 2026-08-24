@@ -63,6 +63,7 @@ import {
 } from "../tools/read-skill-tool.js";
 import {
   createWorkspaceTools,
+  assertWorkspacePathWithinTaskScope,
 } from "../tools/workspace-tools.js";
 import {
   applyAgentModeToTools,
@@ -79,7 +80,7 @@ import { AgentRuntimeCoordinator } from "../agents/agent-runtime-coordinator.js"
 import { ensureFixedSoftwareTeam } from "../agents/fixed-software-team.js";
 import { WorkflowTeamCoordinator } from "../execution/workflow-team-coordinator.js";
 import { WorkflowTemplateRegistry } from "../execution/workflows/workflow-template.js";
-import { SOFTWARE_PRODUCT_DELIVERY_TEMPLATE } from "../execution/workflows/software-product-delivery.js";
+import { SOFTWARE_PRODUCT_DELIVERY_TEMPLATE, SOFTWARE_PRODUCT_DELIVERY_V3_TEMPLATE } from "../execution/workflows/software-product-delivery.js";
 import { DynamicAgentExecutionEngine } from "../execution/dynamic-agent-execution-engine.js";
 import { TeamWorkflowExecutionEngine } from "../execution/team-workflow-execution-engine.js";
 import { ExecutionEngineRouter } from "../execution/execution-engine-router.js";
@@ -88,7 +89,9 @@ import { createRunAgentTool } from "../tools/run-agent-tool.js";
 import { createSharedBoardTools } from "../tools/shared-board-tools.js";
 import { createPrepareRequirementPlanTool } from "../tools/prepare-requirement-plan-tool.js";
 import { RequirementPlanWriter } from "../requirements/requirement-plan-writer.js";
-import { isRequirementConfirmed } from "../requirements/requirement.js";
+import { RequirementDesignWriter } from "../requirements/requirement-design-writer.js";
+import { isDesignConfirmed, isRequirementConfirmed } from "../requirements/requirement.js";
+import { V3ProductDeliveryCoordinator } from "../execution/v3-product-delivery-coordinator.js";
 import type {
   RuntimeCapabilities,
   RuntimeModelCapability,
@@ -232,10 +235,18 @@ const configuredSkillRoots =
     ?.split(delimiter)
     .map((path) => path.trim())
     .filter((path) => path.length > 0) ??
-  [join(workspacePath, "skills")];
+  [
+    join(workspacePath, "skills"),
+    // 默认发现当前用户已有的个人 Skills；项目同名项优先。
+    join(homedir(), ".codex", "skills"),
+  ];
 const skillLoader = await SkillLoader.create({
   roots: configuredSkillRoots,
   allowMissingRoots: true,
+  duplicatePolicy: "keep_first",
+  // 个人目录可能遗留旧编码或 Codex 专用 Skill；单个坏文件不能让 God 启动失败。
+  tolerateInvalidRoots: [join(homedir(), ".codex", "skills")],
+  legacyEncodingRoots: [join(homedir(), ".codex", "skills")],
 });
 const skillCatalogInstructions =
   skillLoader.createCatalogInstructions();
@@ -275,7 +286,19 @@ if (llmProvider !== undefined) {
   );
 
   workspaceTools.push(
-    ...createWorkspaceTools(workspaceSandbox),
+    ...createWorkspaceTools(workspaceSandbox, {
+      authorizeWrite: ({ turnId, path }) => {
+        if (turnId === undefined) return;
+        const run = agentRunStore.getByTurn(turnId);
+        const task = run?.taskId === undefined ? undefined : agentRuntimeStore.getTask(run.taskId);
+        const job = run === undefined ? undefined : agentRuntimeStore.getJob(run.jobId);
+        if (job?.workflowVersion !== "software_product_delivery_v3") return;
+        const requirement = job.requirementId === undefined ? undefined : requirementStore.get(job.requirementId);
+        if (!isDesignConfirmed(requirement)) throw new Error("Design confirmation is required before write_file");
+        if (task === undefined) throw new Error("V3 write_file requires a bound Task");
+        assertWorkspacePathWithinTaskScope(path, task.scope);
+      },
+    }),
     createRunCommandTool(commandRunner),
   );
 
@@ -382,6 +405,7 @@ const agentLoop =
 
 const workflowTemplates = new WorkflowTemplateRegistry();
 workflowTemplates.register(SOFTWARE_PRODUCT_DELIVERY_TEMPLATE);
+workflowTemplates.register(SOFTWARE_PRODUCT_DELIVERY_V3_TEMPLATE);
 const runtimeMetrics = new RuntimeMetricsLedger((metric) => agentRuntimeStore.recordStageMetric(metric));
 const workflowTeamCoordinator = agentLoop === undefined ? undefined : new WorkflowTeamCoordinator({
   runStore: agentRunStore,
@@ -405,7 +429,10 @@ const workflowTeamCoordinator = agentLoop === undefined ? undefined : new Workfl
         ? `${profile.instructions}\n\n你是 Workflow 的唯一最终交付者。只根据下面已验收的负责人 Return 回答用户一次；不得重新执行、委派或调用工具。\n\n${prompt}`
         : `${profile.instructions}\n\n你是版本化 Workflow Template 中的叶子阶段 Agent。不得创建子 Agent，不得越过当前阶段职责；${formatRepair ? "本轮只修复结构化格式，不得调用工具。" : "只使用 Runtime 明确授予的工具。"}`,
       allowedTools,
-      allowedSkills: [],
+      allowedSkills: formatRepair ? [] : intersectCapabilities(
+        profile.allowedSkills,
+        job?.configSnapshot.allowedSkills,
+      ),
       modelInvocationPurpose: formatRepair ? "format_repair" : "initial",
       invocationContext: {
         threadId,
@@ -418,7 +445,8 @@ const workflowTeamCoordinator = agentLoop === undefined ? undefined : new Workfl
     });
     const content = result.assistantMessage.content;
     return { turnId: turn.id, summary: typeof content === "object" && content !== null && "text" in content && typeof content.text === "string" ? content.text : "",
-      toolCalls: result.turn.itemIds.filter((itemId) => lifecycleStore.getItem(itemId)?.type === "tool_call").length };
+      toolCalls: result.turn.itemIds.filter((itemId) => lifecycleStore.getItem(itemId)?.type === "tool_call").length,
+      toolReceipts: collectToolReceipts(result.turn.itemIds) };
   },
   recoverModelExecution: (input) => {
     const invocation = modelInvocationStore.list()
@@ -487,6 +515,99 @@ const workflowTeamCoordinator = agentLoop === undefined ? undefined : new Workfl
   },
   persist: persistWorkflowState,
 });
+const requirementDesignWriter = new RequirementDesignWriter(
+  process.env.AGENT_PLANS_PATH ?? join(defaultStateRoot, "god-agent", "plans"),
+);
+const v3ProductDeliveryCoordinator = agentLoop === undefined ? undefined : new V3ProductDeliveryCoordinator({
+  runStore: agentRunStore,
+  runtimeStore: agentRuntimeStore,
+  template: SOFTWARE_PRODUCT_DELIVERY_V3_TEMPLATE,
+  execute: async ({ threadId, profileId, prompt, allowedTools, formatRepair,
+    jobId, jobAttempt, workflowVersion, stageId, stageAttempt, taskId, runId }) => {
+    const profile = agentRegistry.require(profileId);
+    const job = agentRuntimeStore.getJob(jobId);
+    const ownsRootTurn = profileId === "orchestrator" && stageId === "return_god";
+    const turn = ownsRootTurn && job !== undefined
+      ? lifecycleStore.getTurn(job.rootTurnId)
+      : lifecycleStore.createTurn(threadId);
+    if (turn === undefined) throw new Error("V3 Workflow execution Turn is unavailable");
+    if (!ownsRootTurn) lifecycleStore.appendItem(turn.id, "user_message", { text: prompt });
+    agentRunStore.rebindAttempt(runId, turn.id, agentRuntimeStore.getTask(taskId)?.attempt ?? 1);
+    const result = await agentLoop.run(turn.id, {
+      model: profile.defaultModel,
+      reasoningEffort: profile.reasoningEffort,
+      instructions: ownsRootTurn
+        ? `${profile.instructions}\n\n你是 Workflow 的唯一最终交付者，只根据已验收证据回答一次，不得重新执行或委派。`
+        : `${profile.instructions}\n\n你是 God-Agent v3 的当前阶段 Chat，不得创建子 Agent或越过文件边界；${formatRepair ? "本轮只修复 JSON，禁止工具。" : "只使用 Runtime 授予的工具。"}`,
+      allowedTools,
+      allowedSkills: formatRepair ? [] : intersectCapabilities(
+        profile.allowedSkills,
+        job?.configSnapshot.allowedSkills,
+      ),
+      modelInvocationPurpose: formatRepair ? "format_repair" : "initial",
+      invocationContext: { threadId, jobId, jobAttempt, workflowVersion, stageId, stageAttempt,
+        taskId, agentId: runId, ...(agentRuntimeStore.getTask(taskId)?.title === undefined ? {} : { taskTitle: agentRuntimeStore.getTask(taskId)!.title }) },
+    });
+    const content = result.assistantMessage.content;
+    return { turnId: turn.id, summary: typeof content === "object" && content !== null && "text" in content && typeof content.text === "string" ? content.text : "",
+      toolCalls: result.turn.itemIds.filter((itemId) => lifecycleStore.getItem(itemId)?.type === "tool_call").length,
+      toolReceipts: collectToolReceipts(result.turn.itemIds) };
+  },
+  requirement: (jobId) => {
+    const job = agentRuntimeStore.getJob(jobId);
+    const requirement = job?.requirementId === undefined ? undefined : requirementStore.get(job.requirementId);
+    if (requirement === undefined || requirement.revision !== job?.requirementRevision) throw new Error("Frozen V3 Requirement is unavailable");
+    return { objective: requirement.objective, scope: requirement.scope, nonGoals: requirement.nonGoals,
+      deliverables: requirement.deliverables, acceptanceCriteria: requirement.acceptanceCriteria,
+      artifacts: {
+        requirementPlanPath: requirement.planArtifact.path,
+        requirementPlanHash: requirement.planArtifact.contentHash,
+        ...(requirement.designArtifact === undefined ? {} : {
+          designPath: requirement.designArtifact.path,
+          designHash: requirement.designArtifact.contentHash,
+          ...(requirement.designArtifact.mockPreview === undefined ? {} : { mockPath: requirement.designArtifact.mockPreview }),
+        }),
+      },
+      ...(requirement.designFeedback === undefined ? {} : { designFeedback: requirement.designFeedback }),
+      prompt: JSON.stringify({ requirementId: requirement.id, revision: requirement.revision, title: requirement.title,
+        objective: requirement.objective, scope: requirement.scope, nonGoals: requirement.nonGoals,
+        constraints: requirement.constraints, deliverables: requirement.deliverables,
+        acceptanceCriteria: requirement.acceptanceCriteria, testCases: requirement.testCases }) };
+  },
+  designConfirmed: (jobId) => {
+    const job = agentRuntimeStore.getJob(jobId);
+    return isDesignConfirmed(job?.requirementId === undefined ? undefined : requirementStore.get(job.requirementId));
+  },
+  writeDesignArtifact: async (jobId, productDesign, mockPreview) => {
+    const job = agentRuntimeStore.getJob(jobId);
+    const requirement = job?.requirementId === undefined ? undefined : requirementStore.get(job.requirementId);
+    if (requirement === undefined) throw new Error("V3 Requirement is unavailable");
+    return requirementDesignWriter.write({ requirement, productDesign, mockPreview });
+  },
+  markDesignDraft: (jobId, artifact) => {
+    const job = agentRuntimeStore.getJob(jobId);
+    if (job?.requirementId === undefined || job.requirementRevision === undefined) throw new Error("V3 Requirement binding is unavailable");
+    requirementStore.markDesignDraft(job.requirementId, job.requirementRevision, artifact);
+  },
+  requestDesignRevision: (jobId, feedback) => {
+    const job = agentRuntimeStore.getJob(jobId);
+    if (job?.requirementId === undefined || job.requirementRevision === undefined) throw new Error("V3 Requirement binding is unavailable");
+    requirementStore.requestDesignRevision(job.requirementId, job.requirementRevision, feedback);
+  },
+  persist: persistWorkflowState,
+  onRunUpdated: (runId) => {
+    const run = agentRunStore.get(runId); const root = run === undefined ? undefined : agentRunStore.getRoot(runId);
+    if (run !== undefined && root !== undefined) events.emit({ type: "agent/run_updated", threadId: root.threadId, turnId: root.turnId, run });
+  },
+  onCompleted: (jobId) => {
+    const requirementId = agentRuntimeStore.getJob(jobId)?.requirementId;
+    if (requirementId !== undefined) requirementStore.setStatus(requirementId, "completed");
+  },
+  onFailed: (jobId) => {
+    const requirementId = agentRuntimeStore.getJob(jobId)?.requirementId;
+    if (requirementId !== undefined) requirementStore.setStatus(requirementId, "failed_retryable");
+  },
+});
 const dynamicExecutionEngine = new DynamicAgentExecutionEngine(agentRuntimeStore, {
   runStore: agentRunStore,
   ownership: executionLeaseCoordinator,
@@ -499,18 +620,20 @@ const dynamicExecutionEngine = new DynamicAgentExecutionEngine(agentRuntimeStore
   cancelChildren: (turnId) => multiAgentScheduler?.cancelChildren(turnId, (childTurnId) => agentLoop?.cancel(childTurnId) ?? false) ?? 0,
   recoverScheduler: (jobId) => multiAgentScheduler?.recoverJob(jobId),
 });
-const executionEngineRouter = workflowTeamCoordinator === undefined ? undefined : new ExecutionEngineRouter([
+const executionEngineRouter = workflowTeamCoordinator === undefined || v3ProductDeliveryCoordinator === undefined ? undefined : new ExecutionEngineRouter([
   dynamicExecutionEngine,
   new TeamWorkflowExecutionEngine(agentRuntimeStore, workflowTeamCoordinator, (context) => {
     const job = agentRuntimeStore.getJob(context.jobId);
     if (job === undefined) throw new Error("Execution Job is unavailable");
-    workflowTemplates.requireForExecution(job.executionKind, "software_product_delivery", "v2", job.configSnapshot.allowedTools ?? ["*"]);
+    const version = job.workflowVersion === "software_product_delivery_v3" ? "v3" : "v2";
+    workflowTemplates.requireForExecution(job.executionKind, "software_product_delivery", version, job.configSnapshot.allowedTools ?? ["*"]);
     const rootRun = agentRunStore.get(context.rootRunId);
     if (rootRun === undefined) throw new Error("Root Agent Run is unavailable");
-    ensureFixedSoftwareTeam(lifecycleStore, agentRunStore, rootRun);
-  }, (allowedTools) => {
-    workflowTemplates.requireForExecution("software_product_delivery", "software_product_delivery", "v2", allowedTools);
-  }, executionLeaseCoordinator, persistWorkflowState),
+    ensureFixedSoftwareTeam(lifecycleStore, agentRunStore, rootRun, job.workflowVersion);
+  }, (allowedTools, workflowVersion) => {
+    const version = workflowVersion === "software_product_delivery_v2" ? "v2" : "v3";
+    workflowTemplates.requireForExecution("software_product_delivery", "software_product_delivery", version, allowedTools);
+  }, executionLeaseCoordinator, persistWorkflowState, v3ProductDeliveryCoordinator),
 ]);
 
 if (agentLoop !== undefined) {
@@ -680,6 +803,9 @@ registerAppServerHandlers(connection, {
   skillNames: skillLoader.list().map((skill) => skill.name),
   waitForStartupRecovery: () => startupRecoveryPromise,
   ...(executionEngineRouter === undefined ? {} : { executionEngineRouter }),
+  softwareProductDeliveryWorkflowVersion: process.env.AGENT_SOFTWARE_PRODUCT_DELIVERY_WORKFLOW_VERSION === "software_product_delivery_v2"
+    ? "software_product_delivery_v2"
+    : "software_product_delivery_v3",
   executionOwnership: executionLeaseCoordinator,
   ...(multiAgentScheduler === undefined ? {} : {
     cancelChildAgentRuns: (turnId: string) =>
@@ -747,13 +873,13 @@ for (const job of agentRuntimeStore.listJobs()) {
   }
 }
 
-const isV2TeamReturn = (item: { jobId: string }): boolean => {
+const isTeamWorkflowReturn = (item: { jobId: string }): boolean => {
   const job = agentRuntimeStore.getJob(item.jobId);
   return job?.executionKind === "software_product_delivery" &&
-    job.workflowVersion === "software_product_delivery_v2";
+    ["software_product_delivery_v2", "software_product_delivery_v3"].includes(job.workflowVersion);
 };
 const pendingDynamicReturnCount = agentRuntimeStore.listReturns().filter((item) =>
-  item.status === "ready" && !isV2TeamReturn(item)).length;
+  item.status === "ready" && !isTeamWorkflowReturn(item)).length;
 
 if (pendingDynamicReturnCount > 0) {
   process.stderr.write(
@@ -838,6 +964,22 @@ function intersectCapabilities(left: readonly string[], right: readonly string[]
   if (left.includes("*")) return [...actualRight];
   if (actualRight.includes("*")) return [...left];
   return left.filter((item) => actualRight.includes(item));
+}
+
+function collectToolReceipts(itemIds: readonly string[]): Array<{ name: string; ok: boolean; exitCode?: number }> {
+  return itemIds.flatMap((itemId) => {
+    const item = lifecycleStore.getItem(itemId);
+    if (item?.type !== "tool_result" || typeof item.content !== "object" || item.content === null || Array.isArray(item.content)) return [];
+    const content = item.content as Record<string, unknown>;
+    if (typeof content.name !== "string") return [];
+    const result = typeof content.result === "object" && content.result !== null && !Array.isArray(content.result)
+      ? content.result as Record<string, unknown>
+      : undefined;
+    const denied = result?.status === "denied";
+    const exitCode = typeof result?.exitCode === "number" ? result.exitCode : undefined;
+    return [{ name: content.name, ok: !denied && (exitCode === undefined || exitCode === 0),
+      ...(exitCode === undefined ? {} : { exitCode }) }];
+  });
 }
 
 function replaceArrayContents<T>(target: T[], source: readonly T[]): void {

@@ -12,6 +12,9 @@ const DESKTOP_CREATE_THREAD_CHANNEL = "desktop:create-thread";
 const DESKTOP_SELECT_THREAD_CHANNEL = "desktop:select-thread";
 const DESKTOP_SELECT_AGENT_THREAD_CHANNEL = "desktop:select-agent-thread";
 const DESKTOP_CONFIRM_REQUIREMENT_CHANNEL = "desktop:confirm-requirement";
+const DESKTOP_CONFIRM_DESIGN_CHANNEL = "desktop:confirm-design";
+const DESKTOP_DESIGN_FEEDBACK_CHANNEL = "desktop:design-feedback";
+const DESKTOP_ENGINEERING_REWORK_CHANNEL = "desktop:engineering-rework";
 const DESKTOP_ADVANCE_FIXED_PRODUCT_CHANNEL = "desktop:advance-fixed-product";
 const DESKTOP_OPEN_PLAN_CHANNEL = "desktop:open-plan";
 const PREVIEW_GET_STATUS_CHANNEL = "preview:get-status";
@@ -263,7 +266,7 @@ function sanitizeAgentRuntime(value) {
     evidence: Array.isArray(value.evidence) ? value.evidence.slice(0, 500).map(clean) : [],
     board: Array.isArray(value.board) ? value.board.slice(0, 500).map(clean) : [],
     returns: Array.isArray(value.returns) ? value.returns.slice(0, 100).map(clean) : [],
-    ...(["ready_first_return", "first_return_ready", "rework", "second_return_ready", "engineering_ready", "engineering_return_ready", "quality_ready", "quality_return_ready", "lead_return_ready", "completed"].includes(value.fixedProductStage) ? { fixedProductStage: value.fixedProductStage } : {}),
+    ...(["ready_first_return", "first_return_ready", "rework", "second_return_ready", "engineering_ready", "engineering_return_ready", "quality_ready", "quality_return_ready", "lead_return_ready", "completed", "product_design_ready", "mock_preview_ready", "design_confirmation", "engineering_fanout", "engineering_fanout_ready", "integration_review", "quality_review", "lead_acceptance"].includes(value.fixedProductStage) ? { fixedProductStage: value.fixedProductStage } : {}),
   };
 }
 
@@ -816,8 +819,17 @@ contextBridge.exposeInMainWorld("godAgent", {
       if (!isRecord(value) || typeof value.turnId !== "string") throw new Error("确认执行返回无效结果");
       return { turnId: safeText(value.turnId, 200) };
     },
+    confirmDesign: async () => sanitizeSnapshot(await invoke(DESKTOP_CONFIRM_DESIGN_CHANNEL)),
+    submitDesignFeedback: async (feedback) => {
+      if (typeof feedback !== "string" || feedback.trim().length === 0 || feedback.length > 4000) throw new TypeError("Invalid design feedback");
+      return sanitizeSnapshot(await invoke(DESKTOP_DESIGN_FEEDBACK_CHANNEL, feedback));
+    },
+    reworkEngineeringChat: async (taskId, reason) => {
+      if (typeof taskId !== "string" || typeof reason !== "string" || reason.length > 4000) throw new TypeError("Invalid engineering rework request");
+      return sanitizeSnapshot(await invoke(DESKTOP_ENGINEERING_REWORK_CHANNEL, taskId, reason));
+    },
     advanceFixedProduct: async (expectedStage) => {
-      const stages = ["ready_first_return", "first_return_ready", "rework", "second_return_ready", "engineering_ready", "engineering_return_ready", "quality_ready", "quality_return_ready", "lead_return_ready", "completed"];
+      const stages = ["ready_first_return", "first_return_ready", "rework", "second_return_ready", "engineering_ready", "engineering_return_ready", "quality_ready", "quality_return_ready", "lead_return_ready", "completed", "product_design_ready", "mock_preview_ready", "design_confirmation", "engineering_fanout", "engineering_fanout_ready", "integration_review", "quality_review", "lead_acceptance"];
       if (typeof expectedStage !== "string" || !stages.includes(expectedStage)) throw new TypeError("Invalid fixed product stage");
       return sanitizeSnapshot(await invoke(DESKTOP_ADVANCE_FIXED_PRODUCT_CHANNEL, expectedStage));
     },

@@ -39,6 +39,7 @@ import { AgentRunStore } from "../src/agents/agent-run-store.js";
 import { AgentRuntimeStore } from "../src/agents/agent-runtime-store.js";
 import { RequirementStore } from "../src/requirements/requirement-store.js";
 import { ExecutionEngineRouter } from "../src/execution/execution-engine-router.js";
+import type { ExecutionEngine } from "../src/execution/execution-engine.js";
 import { DynamicAgentExecutionEngine } from "../src/execution/dynamic-agent-execution-engine.js";
 import { TeamWorkflowExecutionEngine } from "../src/execution/team-workflow-execution-engine.js";
 import { WorkflowTeamCoordinator } from "../src/execution/workflow-team-coordinator.js";
@@ -186,8 +187,12 @@ async function createConcurrentDynamicApp(
   const leaseStore = new PersistentRuntimeLeaseStore(join(directory, "leases.json"));
   const executionLeases = new ExecutionLeaseCoordinator(leaseStore, {
     ownerId: `handler-concurrent-${suffix}`,
-    ttlMs: 1_000,
-    renewIntervalMs: 500,
+    // These tests exercise same-process RPC serialization, not lease expiry.
+    // Coverage instrumentation can hold the intentionally blocked drive for
+    // more than one second, so keep the lease alive long enough that the
+    // assertion is not coupled to machine speed.
+    ttlMs: 10_000,
+    renewIntervalMs: 5_000,
     maxRenewals: 0,
   });
   const lifecycle = new LifecycleStore();
@@ -307,6 +312,127 @@ async function createConcurrentDynamicApp(
     cancelCalls: () => cancelCalls,
   };
 }
+
+test("design-confirm RPC 拒绝旧 revision 和错误 hash，合法确认只恢复同一 v3 Job 与团队", async () => {
+  const lifecycle = new LifecycleStore();
+  const runs = new AgentRunStore();
+  const runtime = new AgentRuntimeStore();
+  const requirements = new RequirementStore();
+  const thread = lifecycle.createThread();
+  const originalTurn = lifecycle.createTurn(thread.id);
+  const planned = requirements.prepare(thread.id, {
+    executionKind: "software_product_delivery",
+    title: "v3 design confirmation",
+    objective: "确认设计后恢复同一个工程 Job",
+    scope: ["src/electron", "src/app-server", "tests"],
+    nonGoals: ["不复制 Job 或团队"],
+    constraints: ["revision/hash 硬门"],
+    deliverables: ["前端", "后端", "联调"],
+    acceptanceCriteria: ["只恢复同一 Job"],
+    testCases: [{ id: "TC-V3-DESIGN-RPC", title: "设计确认 RPC", kind: "integration", steps: ["错误确认", "合法确认"], expected: "错误拒绝，合法恢复" }],
+    executionSteps: ["原稿", "Mock", "确认设计", "三 Chat 工程"],
+  }, { path: "D:/plans/v3-design-confirm.md", contentHash: "plan-v3-hash", generatedAt: "2026-08-24T00:00:00.000Z" });
+  requirements.confirm(planned.id, planned.revision, planned.planArtifact.contentHash);
+  const designHash = "d".repeat(64);
+  requirements.markDesignDraft(planned.id, planned.revision, {
+    path: "D:/plans/v3-design.md",
+    contentHash: designHash,
+    generatedAt: "2026-08-24T00:01:00.000Z",
+    mockPreview: "D:/plans/v3-design-mock.html",
+  });
+
+  const jobId = `job-${planned.id}-v${planned.revision}`;
+  const root = runs.ensureRoot(thread.id, originalTurn.id, "orchestrator", jobId);
+  const job = runtime.createJob({
+    threadId: thread.id,
+    rootTurnId: originalTurn.id,
+    rootRunId: root.id,
+    configSnapshot: DEFAULT_AGENT_TEAM_CONFIG,
+    executionKind: "software_product_delivery",
+    workflowVersion: "software_product_delivery_v3",
+    requirementId: planned.id,
+    requirementRevision: planned.revision,
+  });
+  runtime.setJobStatus(job.id, "reviewing");
+  requirements.attachJob(planned.id, job.id);
+  ensureFixedSoftwareTeam(lifecycle, runs, root, job.workflowVersion);
+  const originalTeamIdentity = runs.listForJob(job.id).map((run) => [run.id, run.threadId, run.agentProfileId]);
+  const resumeCalls: string[] = [];
+  const teamEngine: ExecutionEngine = {
+    id: "v3-design-confirm-test",
+    control: "workflow",
+    supports: (kind) => kind === "software_product_delivery",
+    start: async () => ({}),
+    resume: async (resumedJobId) => { resumeCalls.push(resumedJobId); return {}; },
+    cancel: async () => undefined,
+    recover: async () => undefined,
+    snapshot: (snapshotJobId) => ({ engine: "v3-design-confirm-test", jobId: snapshotJobId }),
+  };
+  const router = new ExecutionEngineRouter([
+    new DynamicAgentExecutionEngine(runtime),
+    teamEngine,
+  ]);
+  let saves = 0;
+  const app = createTestAppServer({
+    lifecycleStore: lifecycle,
+    agentRunStore: runs,
+    agentRuntimeStore: runtime,
+    requirementStore: requirements,
+    executionEngineRouter: router,
+    saveState: () => { saves += 1; },
+  });
+  await completeHandshake(app);
+
+  const staleRevision = app.client.sendRequest("requirement/design-confirm", {
+    requirementId: planned.id,
+    revision: planned.revision + 1,
+    contentHash: designHash,
+  });
+  const staleRevisionRejected = assert.rejects(staleRevision, /Design draft changed/);
+  await app.flushClientRequest();
+  await staleRevisionRejected;
+
+  const wrongHash = app.client.sendRequest("requirement/design-confirm", {
+    requirementId: planned.id,
+    revision: planned.revision,
+    contentHash: "e".repeat(64),
+  });
+  const wrongHashRejected = assert.rejects(wrongHash, /Design draft changed/);
+  await app.flushClientRequest();
+  await wrongHashRejected;
+  assert.deepEqual(resumeCalls, []);
+  assert.equal(saves, 0);
+  assert.equal(requirements.get(planned.id)?.designStatus, "draft_ready");
+
+  const confirmation = app.client.sendRequest("requirement/design-confirm", {
+    requirementId: planned.id,
+    revision: planned.revision,
+    contentHash: designHash,
+  });
+  await app.flushClientRequest();
+  const confirmed = await confirmation as { designStatus: string; jobId?: string };
+
+  assert.equal(confirmed.designStatus, "confirmed");
+  assert.equal(confirmed.jobId, job.id);
+  assert.deepEqual(resumeCalls, [job.id]);
+  assert.equal(saves, 1);
+  assert.equal(runtime.listJobs(thread.id).length, 1);
+  assert.equal(runtime.getJob(job.id)?.rootRunId, root.id);
+  assert.notEqual(runtime.getJob(job.id)?.rootTurnId, originalTurn.id);
+  assert.equal(requirements.get(planned.id)?.jobId, job.id);
+  assert.deepEqual(runs.listForJob(job.id).map((run) => [run.id, run.threadId, run.agentProfileId]), originalTeamIdentity);
+
+  const repeated = app.client.sendRequest("requirement/design-confirm", {
+    requirementId: planned.id,
+    revision: planned.revision,
+    contentHash: designHash,
+  });
+  await app.flushClientRequest();
+  assert.equal((await repeated as { designStatus: string }).designStatus, "confirmed");
+  assert.deepEqual(resumeCalls, [job.id], "相同设计确认重试不得重复启动工程链");
+  assert.equal(runtime.listJobs(thread.id).length, 1);
+  assert.equal(saves, 1);
+});
 
 test("outcome_unknown API 只接受服务端 resolutionId/version，不允许伪造 Invocation identity 或 digest", async () => {
   const resolutionStore = new OutcomeUnknownResolutionStore();

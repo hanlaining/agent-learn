@@ -15,8 +15,8 @@ import {
   InputItemBudgetExceededError,
 } from "../src/runtime/item-budget.js";
 
-test("Responses Provider 默认请求窗口与 Runtime 单轮上限对齐", () => {
-  assert.equal(DEFAULT_OPENAI_RESPONSES_TIMEOUT_MS, 120_000);
+test("Responses Provider 默认请求窗口允许复杂任务完成单次模型请求", () => {
+  assert.equal(DEFAULT_OPENAI_RESPONSES_TIMEOUT_MS, 180_000);
 });
 
 test("Provider 拒绝非法 timeoutMs 配置", () => {

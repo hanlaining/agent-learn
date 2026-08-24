@@ -15,6 +15,9 @@ export const WRITE_FILE_TOOL_NAME = "write_file";
  */
 export function createWorkspaceTools(
   sandbox: WorkspaceSandbox,
+  options: {
+    authorizeWrite?: (input: { turnId?: string; path: string }) => void | Promise<void>;
+  } = {},
 ): AgentTool[] {
   return [
     {
@@ -112,14 +115,42 @@ export function createWorkspaceTools(
         const input = parseArguments(WRITE_FILE_TOOL_NAME, argumentsJson, ["path", "text"]);
         return `写入 Workspace 文件：${readRequiredPath(WRITE_FILE_TOOL_NAME, input)}`;
       },
-      async execute(argumentsJson) {
+      async execute(argumentsJson, context) {
         const input = parseArguments(WRITE_FILE_TOOL_NAME, argumentsJson, ["path", "text"]);
         if (typeof input.text !== "string") throw new Error("write_file text must be a string");
-        const result = await sandbox.writeTextFile(readRequiredPath(WRITE_FILE_TOOL_NAME, input), input.text);
+        const path = readRequiredPath(WRITE_FILE_TOOL_NAME, input);
+        await options.authorizeWrite?.({ ...(context.turnId === undefined ? {} : { turnId: context.turnId }), path });
+        const result = await sandbox.writeTextFile(path, input.text);
         return { result, modelOutput: result };
       },
     },
   ];
+}
+
+export function assertWorkspacePathWithinTaskScope(
+  path: string,
+  scope: { allowedPaths: readonly string[]; deniedPaths: readonly string[] },
+): void {
+  const normalized = normalizeWorkspacePath(path);
+  const denied = scope.deniedPaths.some((candidate) => candidate === "*" || pathWithin(normalized, normalizeWorkspacePath(candidate)));
+  const allowed = scope.allowedPaths.some((candidate) => pathWithin(normalized, normalizeWorkspacePath(candidate)));
+  if (denied || !allowed) throw new Error(`Task file boundary rejected write: ${path}`);
+}
+
+function normalizeWorkspacePath(value: string): string {
+  const slashPath = value.replace(/\\/g, "/");
+  if (
+    slashPath.startsWith("/") ||
+    /^[a-zA-Z]:\//.test(slashPath) ||
+    slashPath.split("/").some((segment) => segment === "." || segment === "..")
+  ) {
+    throw new Error(`Task file boundary rejected non-canonical path: ${value}`);
+  }
+  return slashPath.replace(/\/{2,}/g, "/").replace(/\/\*\*$/, "").replace(/\/$/, "");
+}
+
+function pathWithin(path: string, boundary: string): boolean {
+  return path === boundary || path.startsWith(`${boundary}/`);
 }
 
 function parseArguments(

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import test from "node:test";
 
 import {
@@ -293,6 +293,7 @@ function createTestEnvironment(
 ): NodeJS.ProcessEnv {
   const environment: NodeJS.ProcessEnv = {
     AGENT_STATE_PATH: statePath,
+    AGENT_SKILLS_PATH: join(dirname(statePath), "skills"),
     ...additions,
   };
 

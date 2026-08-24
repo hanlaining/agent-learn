@@ -30,6 +30,9 @@ export interface SkillLoaderOptions {
   maxSkills?: number;
   maxSkillBytes?: number;
   allowMissingRoots?: boolean;
+  duplicatePolicy?: "error" | "keep_first";
+  tolerateInvalidRoots?: readonly string[];
+  legacyEncodingRoots?: readonly string[];
 }
 
 interface StoredSkill extends SkillDocument {
@@ -79,6 +82,15 @@ export class SkillLoader {
       }
 
       seenRoots.add(rootPath);
+      const tolerateInvalidSkills = options.tolerateInvalidRoots?.some((candidate) => {
+        try {
+          return realpathEquals(candidate, rootPath);
+        } catch {
+          return false;
+        }
+      }) ?? false;
+      const legacyEncoding = options.legacyEncodingRoots?.some((candidate) =>
+        realpathEquals(candidate, rootPath)) === true ? "gb18030" : undefined;
       const rootStats = await stat(rootPath);
 
       if (!rootStats.isDirectory()) {
@@ -96,16 +108,21 @@ export class SkillLoader {
           continue;
         }
 
-        const skill = await readSkillDirectory(
-          rootPath,
-          entry.name,
-          maxSkillBytes,
-        );
+        let skill: StoredSkill | undefined;
+        try {
+          skill = await readSkillDirectory(rootPath, entry.name, maxSkillBytes, legacyEncoding);
+        } catch (error) {
+          if (tolerateInvalidSkills) continue;
+          throw error;
+        }
 
         if (skill === undefined) {
           continue;
         }
 
+        if (skills.has(skill.name) && options.duplicatePolicy === "keep_first") {
+          continue;
+        }
         if (skills.has(skill.name)) {
           throw new Error(`Duplicate Skill name: ${skill.name}`);
         }
@@ -159,10 +176,16 @@ export class SkillLoader {
   }
 }
 
+function realpathEquals(configuredPath: string, actualPath: string): boolean {
+  return configuredPath.replace(/\\/g, "/").replace(/\/$/, "").toLocaleLowerCase() ===
+    actualPath.replace(/\\/g, "/").replace(/\/$/, "").toLocaleLowerCase();
+}
+
 async function readSkillDirectory(
   rootPath: string,
   directoryName: string,
   maxSkillBytes: number,
+  fallbackEncoding?: string,
 ): Promise<StoredSkill | undefined> {
   const configuredDirectory = join(rootPath, directoryName);
   const directoryPath = await realpath(configuredDirectory);
@@ -209,7 +232,12 @@ async function readSkillDirectory(
   try {
     text = new TextDecoder("utf-8", { fatal: true }).decode(data);
   } catch {
-    throw new Error(`SKILL.md must be UTF-8 text: ${directoryName}`);
+    if (fallbackEncoding === undefined) throw new Error(`SKILL.md must be UTF-8 text: ${directoryName}`);
+    try {
+      text = new TextDecoder(fallbackEncoding, { fatal: true }).decode(data);
+    } catch {
+      throw new Error(`SKILL.md must be UTF-8 text: ${directoryName}`);
+    }
   }
 
   const document = parseSkillDocument(text);

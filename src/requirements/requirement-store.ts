@@ -67,7 +67,62 @@ export class RequirementStore {
     item.confirmedRevision = revision;
     item.confirmedContentHash = contentHash;
     item.confirmedAt = this.now();
+    item.designStatus = "not_started";
+    delete item.designArtifact;
+    delete item.designConfirmedRevision;
+    delete item.designConfirmedContentHash;
+    delete item.designConfirmedAt;
+    delete item.designFeedback;
     item.updatedAt = item.confirmedAt;
+    return structuredClone(item);
+  }
+
+  markDesignDraft(id: string, revision: number, artifact: import("./requirement.js").RequirementDesignArtifact): Requirement {
+    const item = this.require(id);
+    if (!isRequirementConfirmed(item) || item.revision !== revision) {
+      throw new Error("Requirement must be confirmed before preparing a design draft");
+    }
+    item.designStatus = "draft_ready";
+    item.designArtifact = structuredClone(artifact);
+    delete item.designFeedback;
+    delete item.designConfirmedRevision;
+    delete item.designConfirmedContentHash;
+    delete item.designConfirmedAt;
+    item.updatedAt = this.now();
+    return structuredClone(item);
+  }
+
+  confirmDesign(id: string, revision: number, contentHash: string): Requirement {
+    const item = this.require(id);
+    if (item.designStatus === "confirmed" && item.designConfirmedRevision === revision &&
+      item.designConfirmedContentHash === contentHash && item.designArtifact?.contentHash === contentHash) {
+      return structuredClone(item);
+    }
+    if (!isRequirementConfirmed(item) || item.revision !== revision ||
+      item.designArtifact?.contentHash !== contentHash || item.designStatus !== "draft_ready") {
+      throw new Error("Design draft changed or is unavailable; review the latest Mock before confirming");
+    }
+    item.designStatus = "confirmed";
+    item.designConfirmedRevision = revision;
+    item.designConfirmedContentHash = contentHash;
+    item.designConfirmedAt = this.now();
+    item.updatedAt = item.designConfirmedAt;
+    return structuredClone(item);
+  }
+
+  requestDesignRevision(id: string, revision: number, feedback: string): Requirement {
+    const item = this.require(id);
+    if (!isRequirementConfirmed(item) || item.revision !== revision || item.designStatus !== "draft_ready") {
+      throw new Error("Design draft is unavailable for revision");
+    }
+    const normalized = feedback.trim();
+    if (normalized.length === 0) throw new Error("Design feedback is required");
+    item.designStatus = "not_started";
+    item.designFeedback = normalized;
+    delete item.designConfirmedRevision;
+    delete item.designConfirmedContentHash;
+    delete item.designConfirmedAt;
+    item.updatedAt = this.now();
     return structuredClone(item);
   }
 

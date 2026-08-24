@@ -398,6 +398,8 @@ function createHarnessEnvironment(input: {
     AGENT_OUTCOME_UNKNOWN_STATE_PATH: path.join(path.dirname(input.statePath), "outcome-unknown.json"),
     AGENT_PLANS_PATH: input.plansPath,
     AGENT_WORKSPACE: input.workspacePath,
+    // This legacy Return-window harness validates the v2 stage topology.
+    AGENT_SOFTWARE_PRODUCT_DELIVERY_WORKFLOW_VERSION: "software_product_delivery_v2",
     PROCESS_CHAOS_CLOCK_PATH: input.clockPath,
     OPENAI_API_KEY: "process-chaos-deterministic-fake-key",
     OPENAI_BASE_URL: input.baseUrl,

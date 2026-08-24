@@ -15,6 +15,7 @@ export class AgentRunStore {
     store.sequence = value.sequence;
     const fixedTeamJobIds = new Set(value.runs.filter((run) => [
       "software_team_lead", "product_role", "engineering_role", "quality_role",
+      "product_design", "mock_preview", "frontend_engineering", "backend_engineering", "integration_quality",
     ].includes(run.agentProfileId)).map((run) => "jobId" in run ? run.jobId : `job-${run.turnId}`));
     value.runs.forEach((run) => {
       const restored = structuredClone({
@@ -25,6 +26,7 @@ export class AgentRunStore {
       }) as AgentRun;
       const isWaitingTeamMember = restored.status === "queued" && [
         "software_team_lead", "product_role", "engineering_role", "quality_role",
+        "product_design", "mock_preview", "frontend_engineering", "backend_engineering", "integration_quality",
       ].includes(restored.agentProfileId) && restored.taskId === undefined;
       const isRecoverableFixedCheckpoint = fixedTeamJobIds.has(restored.jobId) &&
         ["queued", "waiting_children", "resuming"].includes(restored.status);

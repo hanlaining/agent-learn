@@ -6,6 +6,8 @@ export const FIXED_PRODUCT_STAGES = [
   "ready_first_return", "first_return_ready", "rework",
   "second_return_ready", "engineering_ready", "engineering_return_ready",
   "quality_ready", "quality_return_ready", "lead_return_ready", "completed",
+  "product_design_ready", "mock_preview_ready", "design_confirmation", "engineering_fanout",
+  "engineering_fanout_ready", "integration_review", "quality_review", "lead_acceptance",
 ] as const;
 export type FixedProductStage = typeof FIXED_PRODUCT_STAGES[number];
 

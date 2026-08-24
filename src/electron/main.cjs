@@ -18,6 +18,9 @@ const DESKTOP_CREATE_THREAD_CHANNEL = "desktop:create-thread";
 const DESKTOP_SELECT_THREAD_CHANNEL = "desktop:select-thread";
 const DESKTOP_SELECT_AGENT_THREAD_CHANNEL = "desktop:select-agent-thread";
 const DESKTOP_CONFIRM_REQUIREMENT_CHANNEL = "desktop:confirm-requirement";
+const DESKTOP_CONFIRM_DESIGN_CHANNEL = "desktop:confirm-design";
+const DESKTOP_DESIGN_FEEDBACK_CHANNEL = "desktop:design-feedback";
+const DESKTOP_ENGINEERING_REWORK_CHANNEL = "desktop:engineering-rework";
 const DESKTOP_ADVANCE_FIXED_PRODUCT_CHANNEL = "desktop:advance-fixed-product";
 const DESKTOP_OPEN_PLAN_CHANNEL = "desktop:open-plan";
 const PREVIEW_GET_STATUS_CHANNEL = "preview:get-status";
@@ -267,13 +270,25 @@ ipcMain.handle(DESKTOP_CONFIRM_REQUIREMENT_CHANNEL, () => desktopCall(
   () => desktopController?.confirmRequirement(),
   "无法确认并执行当前需求",
 ));
+ipcMain.handle(DESKTOP_CONFIRM_DESIGN_CHANNEL, () => desktopCall(
+  () => desktopController?.confirmDesign(),
+  "无法确认当前产品设计",
+));
+ipcMain.handle(DESKTOP_DESIGN_FEEDBACK_CHANNEL, (_event, feedback) => desktopCall(() => {
+  if (typeof feedback !== "string" || feedback.trim().length === 0 || feedback.length > 4000) throw new Error("Invalid design feedback");
+  return desktopController?.submitDesignFeedback(feedback);
+}, "无法提交设计修改意见"));
+ipcMain.handle(DESKTOP_ENGINEERING_REWORK_CHANNEL, (_event, taskId, reason) => desktopCall(() => {
+  if (typeof taskId !== "string" || typeof reason !== "string" || reason.length > 4000) throw new Error("Invalid engineering rework request");
+  return desktopController?.reworkEngineeringChat(taskId, reason);
+}, "无法发起单 Chat 返工"));
 ipcMain.handle(DESKTOP_ADVANCE_FIXED_PRODUCT_CHANNEL, (_event, expectedStage) => desktopCall(() => {
-  const stages = ["ready_first_return", "first_return_ready", "rework", "second_return_ready", "engineering_ready", "engineering_return_ready", "quality_ready", "quality_return_ready", "lead_return_ready", "completed"];
+  const stages = ["ready_first_return", "first_return_ready", "rework", "second_return_ready", "engineering_ready", "engineering_return_ready", "quality_ready", "quality_return_ready", "lead_return_ready", "completed", "product_design_ready", "mock_preview_ready", "design_confirmation", "engineering_fanout", "engineering_fanout_ready", "integration_review", "quality_review", "lead_acceptance"];
   if (typeof expectedStage !== "string" || !stages.includes(expectedStage)) throw new Error("Invalid fixed product stage");
   return desktopController?.advanceFixedProduct(expectedStage);
 }, "无法推进产品双轮验收"));
 ipcMain.handle(DESKTOP_OPEN_PLAN_CHANNEL, async (_event, path) => {
-  if (typeof path !== "string" || !path.toLowerCase().endsWith(".md")) throw new Error("Invalid plan path");
+  if (typeof path !== "string" || !/\.(md|html)$/i.test(path)) throw new Error("Invalid artifact path");
   const result = await shell.openPath(path);
   if (result) throw new Error("无法打开计划文档");
   return true;
