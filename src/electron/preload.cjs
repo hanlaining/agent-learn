@@ -396,6 +396,20 @@ function sanitizeCapabilities(value) {
           : [],
       )
     : [];
+  const llmAdapter = isRecord(value.llmAdapter) &&
+    typeof value.llmAdapter.id === "string" &&
+    typeof value.llmAdapter.toolCalling === "boolean" &&
+    typeof value.llmAdapter.reasoningSummary === "boolean" &&
+    typeof value.llmAdapter.hostedWebSearch === "boolean" &&
+    typeof value.llmAdapter.previousResponseId === "boolean"
+    ? {
+        id: safeText(value.llmAdapter.id, 120),
+        toolCalling: value.llmAdapter.toolCalling,
+        reasoningSummary: value.llmAdapter.reasoningSummary,
+        hostedWebSearch: value.llmAdapter.hostedWebSearch,
+        previousResponseId: value.llmAdapter.previousResponseId,
+      }
+    : undefined;
 
   return Object.freeze({
     llm: value.llm === true,
@@ -403,6 +417,7 @@ function sanitizeCapabilities(value) {
       ? { currentModel: safeText(value.currentModel, 120) }
       : {}),
     models,
+    ...(llmAdapter === undefined ? {} : { llmAdapter: Object.freeze(llmAdapter) }),
     webSearch: value.webSearch === true,
     tools,
     skills,

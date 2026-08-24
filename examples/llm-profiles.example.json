@@ -1,0 +1,49 @@
+{
+  "activeProfile": "gundam",
+  "profiles": [
+    {
+      "id": "responses",
+      "displayName": "OpenAI Responses / LovBrowser gateway",
+      "adapter": "openai-responses",
+      "model": "gpt-5.6-sol",
+      "baseUrl": "https://llmapi.lovbrowser.com/v1",
+      "apiKeyEnv": "OPENAI_API_KEY",
+      "apiKeyRequired": true,
+      "options": {
+        "reasoningSummary": "auto",
+        "reasoningEffort": "high",
+        "serviceTier": "fast",
+        "webSearch": {
+          "searchContextSize": "low"
+        }
+      }
+    },
+    {
+      "id": "gundam",
+      "displayName": "Gundam Bridge",
+      "adapter": "openai-compatible",
+      "model": "mock",
+      "baseUrl": "http://127.0.0.1:18800/v1",
+      "apiKeyEnv": "GUNDAM_BRIDGE_API_KEY",
+      "apiKeyRequired": false,
+      "models": [
+        {
+          "id": "mock",
+          "label": "Gundam Bridge Mock"
+        },
+        {
+          "id": "ollama",
+          "label": "Gundam Bridge Ollama"
+        }
+      ]
+    },
+    {
+      "id": "ollama",
+      "displayName": "Local Ollama",
+      "adapter": "openai-compatible",
+      "model": "llama3",
+      "baseUrl": "http://127.0.0.1:11434/v1",
+      "apiKeyRequired": false
+    }
+  ]
+}

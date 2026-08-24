@@ -455,6 +455,60 @@ test("CLI 完成 LLM 选择 MCP Tool、审批、调用和最终回答", async (t
   );
 });
 
+test("无 Key 的 OpenAI-compatible Profile 可贯通 CLI 完整 Turn", async (t) => {
+  const stateDirectory = await mkdtemp(
+    join(tmpdir(), "god-agent-cli-compatible-"),
+  );
+  t.after(() => rm(stateDirectory, {
+    recursive: true,
+    force: true,
+  }));
+  let requestPath = "";
+  let requestBody: Record<string, unknown> | undefined;
+  let authorization: string | undefined;
+  const server = createServer((request, response) => {
+    void readRequestBody(request).then((body) => {
+      requestPath = request.url ?? "";
+      requestBody = JSON.parse(body) as Record<string, unknown>;
+      authorization = request.headers.authorization;
+      response.writeHead(200, {
+        "content-type": "text/event-stream",
+      });
+      response.end([
+        'data: {"id":"chatcmpl-compatible-cli","choices":[{"delta":{"content":"兼容插座已接通"},"finish_reason":"stop"}]}',
+        "data: [DONE]",
+        "",
+      ].join("\n\n"));
+    });
+  });
+  const baseUrl = await listenOnRandomPort(server);
+  t.after(() => closeServer(server));
+  const cli = startCli({
+    ...createSmokeEnvironment(
+      join(stateDirectory, "state.json"),
+    ),
+    AGENT_LLM_ADAPTER: "openai-compatible",
+    AGENT_LLM_API_KEY_REQUIRED: "false",
+    OPENAI_BASE_URL: baseUrl,
+    OPENAI_MODEL: "gundam-fixture",
+  });
+
+  await waitForText(cli, "god-agent 已启动");
+  cli.child.stdin.write("验证兼容插座\n");
+  await waitForText(cli, "Assistant › 兼容插座已接通");
+  cli.child.stdin.end("/exit\n");
+  const exitCode = await cli.exit;
+
+  assert.equal(exitCode, 0, cli.stderr());
+  assert.equal(requestPath, "/v1/chat/completions");
+  assert.equal(authorization, undefined);
+  assert.equal(requestBody?.model, "gundam-fixture");
+  assert.equal(requestBody?.stream, true);
+  assert.ok(Array.isArray(requestBody?.messages));
+  assert.ok(Array.isArray(requestBody?.tools));
+  assert.match(cli.stdout(), /Assistant › 兼容插座已接通/);
+});
+
 function createSmokeEnvironment(
   statePath: string,
 ): NodeJS.ProcessEnv {

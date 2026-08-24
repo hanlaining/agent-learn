@@ -66,6 +66,8 @@ export interface AppServerDependencies {
   events?: AgentEventSink;
   runtimeCapabilities?: RuntimeCapabilities;
   selectModel?: (model: string) => RuntimeCapabilities;
+  resolveModel?: (preferredModel?: string) => string;
+  llmUnavailableReason?: string;
   saveState?: () => void | Promise<void>;
   log?: (message: string) => void;
   agentRunStore?: AgentRunStore;
@@ -101,6 +103,8 @@ export function registerAppServerHandlers(
     events = NOOP_AGENT_EVENT_SINK,
     runtimeCapabilities = EMPTY_RUNTIME_CAPABILITIES,
     selectModel,
+    resolveModel,
+    llmUnavailableReason = "set OPENAI_API_KEY",
     saveState = () => undefined,
     log = () => undefined,
     agentRunStore,
@@ -429,7 +433,7 @@ export function registerAppServerHandlers(
 
     if (agentLoop === undefined) {
       throw new Error(
-        "LLM is unavailable: set OPENAI_API_KEY",
+        `LLM is unavailable: ${llmUnavailableReason}`,
       );
     }
 
@@ -437,6 +441,17 @@ export function registerAppServerHandlers(
     const turnFact = lifecycleStore.getTurn(request.turnId);
     const turnUserInput = readTurnUserInput(lifecycleStore, request.turnId);
     const threadConfig = turnFact === undefined ? undefined : threadConfigs.get(turnFact.threadId);
+    if (
+      request.model !== undefined &&
+      runtimeCapabilities.models.length > 0 &&
+      !runtimeCapabilities.models.some((model) => model.id === request.model)
+    ) {
+      throw new Error(
+        `Model is not available in the active LLM profile: ${request.model}`,
+      );
+    }
+    const preferredModel = request.model ?? threadConfig?.model;
+    const effectiveModel = resolveModel?.(preferredModel) ?? preferredModel;
     const profile = agentRegistry?.require(threadConfig?.agentProfileId ?? "orchestrator");
     const teamConfig = threadConfig?.agentTeam ?? DEFAULT_AGENT_TEAM_CONFIG;
     const requirement = turnFact === undefined ? undefined : requirementStore?.getActive(turnFact.threadId);
@@ -528,7 +543,7 @@ export function registerAppServerHandlers(
         engineResult = await executionEngineRouter.start({ jobId: job.id, threadId: job.threadId, rootRunId: rootRun.id,
           executionKind: job.executionKind, workflowVersion: job.workflowVersion,
           ...(executionControl !== "engine" ? {} : { drive: async (driveRequest) => ({ output: await agentLoop.run(request.turnId, {
-            ...(request.model === undefined ? {} : { model: request.model }),
+            ...(effectiveModel === undefined ? {} : { model: effectiveModel }),
             ...(request.reasoningEffort === undefined ? {} : { reasoningEffort: request.reasoningEffort }),
             ...(profile === undefined ? {} : { instructions: `${buildParentAgentInstructions(
               profile.instructions, frozenJobTeamConfig.mode, undefined, executionConfirmed, requirement,
@@ -544,7 +559,7 @@ export function registerAppServerHandlers(
         : executionControl === "engine"
           ? requireTurnRunResult(engineResult?.output)
           : await agentLoop.run(request.turnId, {
-            ...(request.model === undefined ? {} : { model: request.model }),
+            ...(effectiveModel === undefined ? {} : { model: effectiveModel }),
             ...(request.reasoningEffort === undefined
               ? {}
               : { reasoningEffort: request.reasoningEffort }),
