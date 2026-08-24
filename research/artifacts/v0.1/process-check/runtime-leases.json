@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "entries": [
+    {
+      "resourceType": "job",
+      "resourceId": "job-requirement-1-v1",
+      "leaseVersion": 3,
+      "fencingToken": 2,
+      "updatedAt": "2026-08-20T04:04:32.091Z"
+    }
+  ]
+}

@@ -1,0 +1,46 @@
+{
+  "schemaVersion": "runtime-e2e-repro-v1",
+  "benchmark": "Runtime-E2E-GATE-30",
+  "fixtureSeed": 20260819,
+  "variant": "no-wal",
+  "caseId": "tool-effect-window-001",
+  "checkpoint": "result-received",
+  "observed": {
+    "caseId": "tool-effect-window-001",
+    "caseIndex": 5,
+    "scenarioSeed": 1648174197,
+    "family": "tool-effect-window",
+    "checkpoint": "result-received",
+    "variant": "no-wal",
+    "taskSuccess": false,
+    "recoveryAttempted": true,
+    "recoverySuccess": true,
+    "snapshotReloaded": true,
+    "stateFileWrites": 2,
+    "stateFileLoads": 3,
+    "modelCalls": 3,
+    "duplicateModelCalls": 1,
+    "toolEffects": 2,
+    "duplicateToolEffects": 1,
+    "unknownOutcome": true,
+    "evidenceRequired": 3,
+    "evidenceProduced": 3,
+    "evidenceCompleteness": 1,
+    "wallClockDurationMs": 52.736,
+    "recoveryResult": "tool-reexecuted-without-wal",
+    "productionClasses": [
+      "AgentLoop",
+      "JsonFileRuntimePersistence",
+      "ModelInvocationStore",
+      "ToolInvocationStore",
+      "ToolRegistry"
+    ],
+    "invariants": [
+      "exactly-one-tool-effect",
+      "exactly-one-tool-result",
+      "tool-wal-committed"
+    ],
+    "failureCodes": []
+  },
+  "rerun": "npm run benchmark:runtime-e2e:gate30 -- --variant no-wal --case tool-effect-window-001"
+}

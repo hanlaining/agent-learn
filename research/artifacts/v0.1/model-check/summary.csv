@@ -1,0 +1,5 @@
+benchmark,seed,shard,variant,cases,taskSuccess,recoverySuccess,duplicateModelCalls,duplicateToolEffects,unknownOutcomeRate,evidenceCompleteness,p50LatencyMs,p95LatencyMs,inputTokens,outputTokens,totalTokens,costEstimateUsd
+GATE-30,20260818,1/1,baseline,30,1,1,0,0,0,1,88,187,19053,8055,27108,0.102546
+GATE-30,20260818,1/1,no-wal,30,0.8,0.714286,34,6,0.2,0.9,118,208,32030,13403,45433,0.171284
+GATE-30,20260818,1/1,no-recovery,30,0.3,0,0,0,0.2,0.491667,71,170,19053,8055,27108,0.102546
+GATE-30,20260818,1/1,no-lease,30,0.9,0.857143,29,3,0,1,94,313,29897,12924,42821,0.163186

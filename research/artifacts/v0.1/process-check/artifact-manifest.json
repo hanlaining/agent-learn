@@ -1,0 +1,42 @@
+{
+  "baselineCommit": "05680a4ecf0f13f7b1b311363732d4922ad9af5b",
+  "environment": {
+    "node": "v20.19.0",
+    "os": {
+      "arch": "x64",
+      "platform": "win32",
+      "release": "10.0.26200"
+    }
+  },
+  "files": [
+    {
+      "bytes": 696,
+      "contentType": "text/markdown",
+      "path": "SCOPE.md",
+      "sha256": "3a9b16595956ffbf55c43532bf37c806cfa39a41fe270bc6b675057ccd57f90b"
+    },
+    {
+      "bytes": 3347,
+      "contentType": "application/json",
+      "path": "process-chaos-report.json",
+      "sha256": "f11862c8cfa06581658b71922234e2abaf29083d56535a426205f6e16296ca9c"
+    },
+    {
+      "bytes": 220,
+      "contentType": "application/json",
+      "path": "runtime-leases.json",
+      "sha256": "af515eb313aa45c512d720e1f5b32519d6f6c7abaeccf2c976bc57ec914bc5c6"
+    }
+  ],
+  "provider": {
+    "credentialsRead": false,
+    "kind": "deterministic-fake",
+    "realApiCalls": false
+  },
+  "run": {
+    "command": "npm exec -- tsx research/runtime-e2e-benchmarks/src/process-chaos-cli.ts --seed artifact-v0-1-05680a4 --output research/runtime-e2e-benchmarks/results",
+    "finishedAt": "2026-08-20T04:02:31.127Z",
+    "startedAt": "2026-08-20T04:02:27.683Z"
+  },
+  "schemaVersion": "research-artifact-manifest-v1"
+}

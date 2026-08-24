@@ -1,0 +1,42 @@
+{
+  "schemaVersion": "runtime-e2e-repro-v1",
+  "benchmark": "Runtime-E2E-GATE-30",
+  "fixtureSeed": 20260819,
+  "variant": "no-lease",
+  "caseId": "return-parent-feedback-002",
+  "checkpoint": "return-consume",
+  "observed": {
+    "caseId": "return-parent-feedback-002",
+    "caseIndex": 11,
+    "scenarioSeed": 3539102966,
+    "family": "return-parent-feedback",
+    "checkpoint": "return-consume",
+    "variant": "no-lease",
+    "taskSuccess": false,
+    "recoveryAttempted": true,
+    "recoverySuccess": null,
+    "snapshotReloaded": true,
+    "stateFileWrites": 2,
+    "stateFileLoads": 4,
+    "modelCalls": 0,
+    "duplicateModelCalls": 0,
+    "toolEffects": 0,
+    "duplicateToolEffects": 0,
+    "unknownOutcome": false,
+    "evidenceRequired": 3,
+    "evidenceProduced": 0,
+    "evidenceCompleteness": 0,
+    "wallClockDurationMs": 36.763,
+    "recoveryResult": "exception:snapshot_conflict:SnapshotConflict: expected generation 1, found 2; reload before retrying <case-directory>\\runtime-state.json",
+    "productionClasses": [
+      "AgentRuntimeStore",
+      "JsonFileRuntimePersistence",
+      "PersistentRuntimeLeaseStore"
+    ],
+    "invariants": [],
+    "failureCodes": [
+      "snapshot_conflict"
+    ]
+  },
+  "rerun": "npm run benchmark:runtime-e2e:gate30 -- --variant no-lease --case return-parent-feedback-002"
+}

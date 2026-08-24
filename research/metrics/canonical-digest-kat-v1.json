@@ -1,0 +1,36 @@
+{
+  "schemaVersion": "god-agent-canonical-digest-kat-v1",
+  "canonicalizationVersion": "god-agent-c14n-v1",
+  "manifestRole": "w0-canonicalization-manifest",
+  "algorithm": "sha256",
+  "digestEncoding": "lowercase-hex",
+  "operationOrder": [
+    "reject-utf8-bom",
+    "fatal-utf8-decode",
+    "unicode-nfc",
+    "crlf-then-cr-to-lf",
+    "target-extraction-or-self-reference-replacement",
+    "remove-all-trailing-lf-then-append-one-lf",
+    "sha256-lowercase-hex"
+  ],
+  "validFixture": {
+    "id": "contract-marker-nfc-line-ending-tail-lf",
+    "targetMode": "contract-marker-extraction",
+    "beginMarker": "<!-- CONTRACT-FROZEN-BEGIN -->",
+    "endMarker": "<!-- CONTRACT-FROZEN-END -->",
+    "rawBase64": "cHJlZml4LWlnbm9yZWQNCjwhLS0gQ09OVFJBQ1QtRlJPWkVOLUJFR0lOIC0tPg0KQ2FmZcyBDWxpbmUyDQoNCjwhLS0gQ09OVFJBQ1QtRlJPWkVOLUVORCAtLT4NCnN1ZmZpeC1pZ25vcmVkDQo=",
+    "normalizedTargetBase64": "Q2Fmw6kKbGluZTIK",
+    "expectedDigest": "b59a972d30958a6c376d346e05dc0a936def0cd23fc78886f394dd606edf55bc"
+  },
+  "negativeFixtures": [
+    {
+      "id": "utf8-bom-rejected-before-decode",
+      "rawBase64": "77u/eAo=",
+      "expectedResult": "reject:utf8-bom"
+    }
+  ],
+  "sopPath": "research/SOP-WORK-PACKAGE-HANDOFF.zh-CN.md",
+  "sopSelfReferenceReplacement": "<FROZEN_SOP_DIGEST_EXCLUDED>",
+  "sopSelfExcludedDigest": "ae7fb1bb893139fa6963b948bd35970fade84548951ac22f4cf71f9fc55bf6fe",
+  "referenceNodeCommand": "node -e \"const fs=require('fs'),c=require('crypto'),k=JSON.parse(fs.readFileSync('research/metrics/canonical-digest-kat-v1.json','utf8')),dec=b=>{if(b.length>=3&&b[0]===239&&b[1]===187&&b[2]===191)throw Error('BOM');return new TextDecoder('utf-8',{fatal:true}).decode(b).normalize('NFC').replace(/\\r\\n/g,'\\n').replace(/\\r/g,'\\n')},tail=s=>s.replace(/\\n+$/,'')+'\\n';let s=dec(Buffer.from(k.validFixture.rawBase64,'base64')),a=k.validFixture.beginMarker+'\\n',z=k.validFixture.endMarker+'\\n',i=s.indexOf(a),j=s.indexOf(z,i+a.length);if(i<0||j<0||s.indexOf(a,i+a.length)>=0||s.indexOf(z,j+z.length)>=0)throw Error('markers');s=tail(s.slice(i+a.length,j));let h=c.createHash('sha256').update(Buffer.from(s)).digest('hex');if(h!==k.validFixture.expectedDigest||Buffer.from(s).toString('base64')!==k.validFixture.normalizedTargetBase64)throw Error('KAT');let q=dec(fs.readFileSync(k.sopPath)),lines=q.split('\\n'),bt=String.fromCharCode(96),prefix='> '+bt+'frozenSopDigest'+bt+'：'+bt,idx=lines.map((x,i)=>x.startsWith(prefix)&&x.endsWith(bt+'  ')?i:-1).filter(i=>i>=0);if(idx.length!==1)throw Error('self-reference');lines[idx[0]]=prefix+k.sopSelfReferenceReplacement+bt+'  ';q=tail(lines.join('\\n'));h=c.createHash('sha256').update(Buffer.from(q)).digest('hex');if(h!==k.sopSelfExcludedDigest)throw Error('SOP');let rejected=false;try{dec(Buffer.from(k.negativeFixtures[0].rawBase64,'base64'))}catch{rejected=true}if(!rejected)throw Error('BOM accepted');console.log(JSON.stringify({kat:k.validFixture.expectedDigest,sop:h,bom:'rejected'}))\""
+}

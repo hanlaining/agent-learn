@@ -9,6 +9,51 @@ import {
   resolveToolPermissionRequest,
 } from "../src/electron/app-server-client.js";
 import "./electron-ipc-boundary-test.js";
+import { JsonFileRuntimePersistence } from "../src/runtime/json-file-runtime-persistence.js";
+import { PersistentRuntimeLeaseStore } from "../src/runtime/persistent-runtime-lease-store.js";
+import { DEFAULT_AGENT_TEAM_CONFIG } from "../src/agents/agent-runtime.js";
+
+test("真实 App Server 遇到已占用 Job Lease 时记录等待并继续 ready", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "god-agent-startup-lease-wait-"));
+  const statePath = join(root, "runtime-state.json");
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const persistence = new JsonFileRuntimePersistence(statePath);
+  const loaded = await persistence.load();
+  const thread = loaded.lifecycleStore.createThread();
+  const turn = loaded.lifecycleStore.createTurn(thread.id);
+  loaded.lifecycleStore.appendItem(turn.id, "user_message", { text: "recover facts only" });
+  const rootRun = loaded.agentRunStore.ensureRoot(thread.id, turn.id, "orchestrator", `job-${turn.id}`);
+  const job = loaded.agentRuntimeStore.createJob({
+    threadId: thread.id,
+    rootTurnId: turn.id,
+    rootRunId: rootRun.id,
+    configSnapshot: DEFAULT_AGENT_TEAM_CONFIG,
+    executionKind: "software_change",
+    workflowVersion: "dynamic_v1",
+  });
+  await persistence.save(loaded);
+  const leaseStore = new PersistentRuntimeLeaseStore(join(root, "runtime-leases.json"));
+  await leaseStore.acquire({
+    resource: { type: "job", id: job.id },
+    ownerId: "other-live-app",
+    ttlMs: 60_000,
+  });
+  const diagnostics: string[] = [];
+  const client = new AppServerClient({
+    command: process.execPath,
+    args: ["--import", "tsx", "src/app-server/main.ts"],
+    cwd: process.cwd(),
+    env: createTestEnvironment(statePath),
+    onDiagnostic: (message) => diagnostics.push(message),
+  });
+  t.after(() => client.close());
+
+  assert.equal((await client.start()).state, "connected");
+  assert.ok(diagnostics.some((message) =>
+    message.includes(`${job.id} waiting for active execution owner; startup recovery deferred`)));
+  assert.equal((await leaseStore.read({ type: "job", id: job.id }))?.ownerId, "other-live-app");
+  await client.close();
+});
 
 test("真实 App Server 子进程贯通文件搜索、Skill 目录、结构化发送与历史原文", async (t) => {
   const root = await mkdtemp(join(tmpdir(), "god-agent-composer-e2e-"));

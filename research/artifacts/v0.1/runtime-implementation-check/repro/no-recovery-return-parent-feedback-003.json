@@ -1,0 +1,43 @@
+{
+  "schemaVersion": "runtime-e2e-repro-v1",
+  "benchmark": "Runtime-E2E-GATE-30",
+  "fixtureSeed": 20260819,
+  "variant": "no-recovery",
+  "caseId": "return-parent-feedback-003",
+  "checkpoint": "product-feedback",
+  "observed": {
+    "caseId": "return-parent-feedback-003",
+    "caseIndex": 12,
+    "scenarioSeed": 2042311849,
+    "family": "return-parent-feedback",
+    "checkpoint": "product-feedback",
+    "variant": "no-recovery",
+    "taskSuccess": false,
+    "recoveryAttempted": true,
+    "recoverySuccess": false,
+    "snapshotReloaded": true,
+    "stateFileWrites": 4,
+    "stateFileLoads": 2,
+    "modelCalls": 1,
+    "duplicateModelCalls": 0,
+    "toolEffects": 0,
+    "duplicateToolEffects": 0,
+    "unknownOutcome": false,
+    "evidenceRequired": 3,
+    "evidenceProduced": 1,
+    "evidenceCompleteness": 0.333333,
+    "wallClockDurationMs": 54.939,
+    "recoveryResult": "workflow-resume-disabled",
+    "productionClasses": [
+      "AgentRunStore",
+      "AgentRuntimeStore",
+      "JsonFileRuntimePersistence",
+      "WorkflowTeamCoordinator"
+    ],
+    "invariants": [],
+    "failureCodes": [
+      "recovery_disabled"
+    ]
+  },
+  "rerun": "npm run benchmark:runtime-e2e:gate30 -- --variant no-recovery --case return-parent-feedback-003"
+}

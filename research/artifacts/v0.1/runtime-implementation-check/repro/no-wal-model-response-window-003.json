@@ -1,0 +1,44 @@
+{
+  "schemaVersion": "runtime-e2e-repro-v1",
+  "benchmark": "Runtime-E2E-GATE-30",
+  "fixtureSeed": 20260819,
+  "variant": "no-wal",
+  "caseId": "model-response-window-003",
+  "checkpoint": "committed-replay",
+  "observed": {
+    "caseId": "model-response-window-003",
+    "caseIndex": 2,
+    "scenarioSeed": 3180320736,
+    "family": "model-response-window",
+    "checkpoint": "committed-replay",
+    "variant": "no-wal",
+    "taskSuccess": false,
+    "recoveryAttempted": true,
+    "recoverySuccess": true,
+    "snapshotReloaded": true,
+    "stateFileWrites": 2,
+    "stateFileLoads": 3,
+    "modelCalls": 2,
+    "duplicateModelCalls": 1,
+    "toolEffects": 0,
+    "duplicateToolEffects": 0,
+    "unknownOutcome": true,
+    "evidenceRequired": 3,
+    "evidenceProduced": 3,
+    "evidenceCompleteness": 1,
+    "wallClockDurationMs": 45.196,
+    "recoveryResult": "legacy-path-reissued-provider-call",
+    "productionClasses": [
+      "AgentLoop",
+      "JsonFileRuntimePersistence",
+      "ModelInvocationStore"
+    ],
+    "invariants": [
+      "exactly-one-assistant-message",
+      "snapshot-reloaded",
+      "provider-call-count-audited"
+    ],
+    "failureCodes": []
+  },
+  "rerun": "npm run benchmark:runtime-e2e:gate30 -- --variant no-wal --case model-response-window-003"
+}

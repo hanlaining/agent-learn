@@ -13,10 +13,10 @@ npm run process-chaos:smoke -- --dry-run
 正式运行一次强制退出恢复验证：
 
 ```text
-npm run process-chaos:smoke -- --seed gate40-seed-1 --out research/runtime-e2e-benchmarks/results/process-chaos-gate40-seed-1 --timeout-ms 120000
+npm run process-chaos:smoke -- --seed gate40-seed-1 --out research/runtime-e2e-benchmarks/results --timeout-ms 120000
 ```
 
-`--seed` 必须是文件名安全的标识符；`--timeout-ms` 是整个 smoke 的有界墙钟上限，至少为 1000 毫秒。默认输出目录为 `research/runtime-e2e-benchmarks/results/process-chaos-process-chaos-smoke`，该目录已被忽略，不会进入提交。
+`--seed` 必须是文件名安全的标识符；`--timeout-ms` 是整个 smoke 的有界墙钟上限，至少为 1000 毫秒。`--out` 指定输出根目录，实际文件写入其下的 `process-chaos-<seed>`。默认输出根目录为 `research/runtime-e2e-benchmarks/results`，该目录已被忽略，不会进入提交。
 
 ## 输出与审计
 

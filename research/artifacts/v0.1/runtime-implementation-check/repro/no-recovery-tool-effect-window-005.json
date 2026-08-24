@@ -1,0 +1,44 @@
+{
+  "schemaVersion": "runtime-e2e-repro-v1",
+  "benchmark": "Runtime-E2E-GATE-30",
+  "fixtureSeed": 20260819,
+  "variant": "no-recovery",
+  "caseId": "tool-effect-window-005",
+  "checkpoint": "effect-journal",
+  "observed": {
+    "caseId": "tool-effect-window-005",
+    "caseIndex": 9,
+    "scenarioSeed": 1058626343,
+    "family": "tool-effect-window",
+    "checkpoint": "effect-journal",
+    "variant": "no-recovery",
+    "taskSuccess": false,
+    "recoveryAttempted": true,
+    "recoverySuccess": false,
+    "snapshotReloaded": true,
+    "stateFileWrites": 7,
+    "stateFileLoads": 2,
+    "modelCalls": 1,
+    "duplicateModelCalls": 0,
+    "toolEffects": 1,
+    "duplicateToolEffects": 0,
+    "unknownOutcome": false,
+    "evidenceRequired": 3,
+    "evidenceProduced": 2,
+    "evidenceCompleteness": 0.666667,
+    "wallClockDurationMs": 80.883,
+    "recoveryResult": "recovery-interface-disabled",
+    "productionClasses": [
+      "AgentLoop",
+      "JsonFileRuntimePersistence",
+      "ModelInvocationStore",
+      "ToolInvocationStore",
+      "ToolRegistry"
+    ],
+    "invariants": [],
+    "failureCodes": [
+      "recovery_disabled"
+    ]
+  },
+  "rerun": "npm run benchmark:runtime-e2e:gate30 -- --variant no-recovery --case tool-effect-window-005"
+}

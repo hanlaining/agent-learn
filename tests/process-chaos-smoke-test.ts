@@ -13,8 +13,9 @@ test("process-chaos smoke dry-run emits an auditable JSON result without spawnin
     const parsed = JSON.parse(result.stdout) as { status: string; provider: { liveCalls: boolean }; outputDirectory: string };
     assert.equal(parsed.status, "dry-run");
     assert.equal(parsed.provider.liveCalls, false);
-    assert.equal(path.resolve(parsed.outputDirectory), path.resolve(output));
-    const persisted = JSON.parse(await readFile(path.join(output, "smoke-result.json"), "utf8")) as { status: string };
+    const caseDirectory = path.join(output, "process-chaos-dry-run-1");
+    assert.equal(path.resolve(parsed.outputDirectory), path.resolve(caseDirectory));
+    const persisted = JSON.parse(await readFile(path.join(caseDirectory, "smoke-result.json"), "utf8")) as { status: string };
     assert.equal(persisted.status, "dry-run");
   } finally {
     await rm(output, { recursive: true, force: true });

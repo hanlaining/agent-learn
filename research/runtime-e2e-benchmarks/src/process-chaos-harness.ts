@@ -1,50 +1,27 @@
 import assert from "node:assert/strict";
+import { watch, type FSWatcher } from "node:fs";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { release as osRelease } from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 
 import { AppServerClient } from "../../../src/electron/app-server-client.js";
 import { STAGE_RESULT_CONTRACT_VERSION } from "../../../src/execution/stage-contract.js";
+import {
+  PROCESS_CHAOS_EXPERIMENT_ID,
+  PROCESS_CHAOS_REPORT_SCHEMA_VERSION,
+  processChaosReproCommand,
+  validateProcessChaosReport,
+  type FakeProviderRequestCounts,
+  type ProcessChaosReport,
+} from "./process-chaos-schema.js";
 
 const LEASE_TTL_MS = 120_000;
-
-interface FakeProviderRequestCounts {
-  return_god: number;
-}
-
-export interface ProcessChaosReport {
-  seed: string;
-  productionEntry: string;
-  reproCommand: string;
-  statePath: string;
-  rawReportPath: string;
-  ownerPid: number;
-  reloadPid: number;
-  recoveryPid: number;
-  pidChangedAfterReload: boolean;
-  pidChangedAfterOwnerKill: boolean;
-  windows: Array<{
-    name: "no-side-effect-after-turn-start" | "return-delivery-with-held-lease";
-    faultPointConfirmed: boolean;
-    ownerKilled: boolean;
-    publicRpcReloaded: boolean;
-    rawJsonReloaded: boolean;
-    leaseWaitObserved: boolean;
-    recovered: boolean;
-  }>;
-  evidence: {
-    threadId: string;
-    jobId: string;
-    returnId: string;
-    ownerLeaseId: string;
-    ownerLeaseDeadline: string;
-    providerRequests: number;
-    providerRequestsByStage: FakeProviderRequestCounts;
-    finalJobStatus: string;
-    finalReturnStatus: string;
-  };
-}
+const FINAL_DELIVERY_RESPONSE_TIMEOUT_MS = 30_000;
+const PERSISTED_FAULT_POINT_TIMEOUT_MS = 45_000;
+const SNAPSHOT_FALLBACK_POLL_MS = 250;
+export type { ProcessChaosReport } from "./process-chaos-schema.js";
 
 interface RuntimeSnapshot {
   version: number;
@@ -68,51 +45,57 @@ interface LeaseSnapshot {
   }>;
 }
 
-export async function runProcessChaosHarness(caseDirectory: string, seed: string): Promise<ProcessChaosReport> {
+export async function runProcessChaosHarness(outputDirectory: string, seed: string): Promise<ProcessChaosReport> {
   assert.match(seed, /^[a-zA-Z0-9._-]+$/u, "seed must be filesystem-safe");
-  await mkdir(caseDirectory, { recursive: true });
-  const statePath = path.join(caseDirectory, "runtime-state.json");
+  const runStartedAt = new Date().toISOString();
+  const caseDirectory = await prepareCaseDirectory(outputDirectory, seed);
+  const stateFilePath = path.join(caseDirectory, "runtime-state.json");
   const leasePath = path.join(caseDirectory, "runtime-leases.json");
-  const reportPath = path.join(caseDirectory, "process-chaos-report.json");
-  const clockPath = path.join(caseDirectory, "clock-offset-ms.txt");
-  const workspacePath = path.join(caseDirectory, "workspace");
-  const plansPath = path.join(caseDirectory, "plans");
-  await Promise.all([
-    mkdir(workspacePath, { recursive: true }),
-    mkdir(plansPath, { recursive: true }),
-    writeFile(clockPath, "0\n", "utf8"),
-  ]);
-
-  const provider = await FakeResponsesServer.start(seed);
+  const reportFilePath = path.join(caseDirectory, "process-chaos-report.json");
+  const transientPath = path.join(caseDirectory, ".transient");
+  const clockPath = path.join(transientPath, "clock-offset-ms.txt");
+  const workspacePath = path.join(transientPath, "workspace");
+  const plansPath = path.join(transientPath, "plans");
   const clients: AppServerClient[] = [];
-  const createClient = () => {
-    const client = new AppServerClient({
-      command: process.execPath,
-      args: [
-        "--import", "tsx",
-        "--import", pathToFileURL(path.resolve("research/runtime-e2e-benchmarks/src/process-chaos-clock.ts")).href,
-        "src/app-server/main.ts",
-      ],
-      cwd: process.cwd(),
-      env: createHarnessEnvironment({ statePath, clockPath, workspacePath, plansPath, baseUrl: provider.baseUrl }),
-      // A hard kill can leave a real Runtime state-lock claim. Production waits
-      // 30 seconds before proving the owning process dead and removing it.
-      handshakeTimeoutMs: 60_000,
-      shutdownTimeoutMs: 2_000,
-    });
-    clients.push(client);
-    return client;
-  };
+  let provider: FakeResponsesServer | undefined;
+  let operationError: unknown;
 
   try {
+    await mkdir(transientPath, { recursive: true });
+    await Promise.all([
+      mkdir(workspacePath, { recursive: true }),
+      mkdir(plansPath, { recursive: true }),
+      writeFile(clockPath, "0\n", "utf8"),
+    ]);
+    provider = await FakeResponsesServer.start(seed);
+    const activeProvider = provider;
+    const createClient = () => {
+      const client = new AppServerClient({
+        command: process.execPath,
+        args: [
+          "--import", "tsx",
+          "--import", pathToFileURL(path.resolve("research/runtime-e2e-benchmarks/src/process-chaos-clock.ts")).href,
+          "src/app-server/main.ts",
+        ],
+        cwd: process.cwd(),
+        env: createHarnessEnvironment({ statePath: stateFilePath, clockPath, workspacePath, plansPath, baseUrl: activeProvider.baseUrl }),
+        // A hard kill can leave a real Runtime state-lock claim. Production waits
+        // 30 seconds before proving the owning process dead and removing it.
+        handshakeTimeoutMs: 60_000,
+        shutdownTimeoutMs: 2_000,
+      });
+      clients.push(client);
+      return client;
+    };
+
     const owner = createClient();
     assert.equal((await owner.start()).state, "connected");
     const ownerPid = requirePid(owner);
     const thread = await owner.startThread();
     const stagedTurn = await owner.startTurn(thread.id, `seed=${seed}: persisted before any provider call`);
-    const providerRequestsBeforeFirstKill = provider.requestCount;
+    const providerRequestsBeforeFirstKill = activeProvider.requestCount;
     assert.equal(providerRequestsBeforeFirstKill, 0);
-    const beforeFirstKill = await readRuntimeSnapshot(statePath);
+    const beforeFirstKill = await readRuntimeSnapshot(stateFilePath);
     assert.ok(beforeFirstKill.lifecycle.turns.some((item) => item.id === stagedTurn.turn.id));
     await forceKill(ownerPid);
 
@@ -121,7 +104,7 @@ export async function runProcessChaosHarness(caseDirectory: string, seed: string
     const reloadPid = requirePid(reload);
     assert.notEqual(reloadPid, ownerPid);
     const publicHistory = await reload.readThreadHistory(thread.id);
-    const afterReload = await readRuntimeSnapshot(statePath);
+    const afterReload = await readRuntimeSnapshot(stateFilePath);
     assert.equal(publicHistory.messages[0]?.text, `seed=${seed}: persisted before any provider call`);
     assert.ok(afterReload.lifecycle.turns.some((item) => item.id === stagedTurn.turn.id));
 
@@ -132,11 +115,22 @@ export async function runProcessChaosHarness(caseDirectory: string, seed: string
     await reload.confirmRequirement(requirement.id, requirement.revision, requirement.planArtifact.contentHash);
 
     const executionTurn = await reload.startTurn(thread.id, `seed=${seed}: execute confirmed plan`);
-    const execution = reload.runTurn(executionTurn.turn.id);
-    await provider.waitForFinalDeliveryRequest();
-    const atReturnWindow = await waitForRuntimeSnapshot(statePath, (snapshot) =>
+    // Register the persisted-state observer before execution. On Windows the
+    // Runtime replaces the snapshot atomically, so starting after the provider
+    // request can miss the first useful rename and then repeatedly parse a
+    // multi-megabyte snapshot while the child is trying to persist the fault
+    // point itself.
+    const persistedFaultPoint = waitForRuntimeSnapshot(stateFilePath, (snapshot) =>
       snapshot.agentRuntime.returns.some((item) => item.stageId === "lead" && item.status === "delivering") &&
       snapshot.modelInvocations.invocations.some((item) => item.stageId === "return_god" && item.status === "response_received"));
+    const execution = reload.runTurn(executionTurn.turn.id);
+    const atReturnWindow = await Promise.race([
+      Promise.all([activeProvider.waitForFinalDeliveryResponse(), persistedFaultPoint]).then(([, snapshot]) => snapshot),
+      execution.then(
+        () => Promise.reject(new Error("Execution completed before the Return fault point was observed")),
+        (error: unknown) => Promise.reject(error),
+      ),
+    ]);
     const job = atReturnWindow.agentRuntime.jobs.find((item) => item.threadId === thread.id);
     assert.ok(job !== undefined);
     const returnEnvelope = atReturnWindow.agentRuntime.returns.find((item) => item.jobId === job.id && item.stageId === "lead");
@@ -147,7 +141,7 @@ export async function runProcessChaosHarness(caseDirectory: string, seed: string
       throw new Error("Return fault point has no persisted owner Lease");
     }
     assert.ok(heldLease.ownerId.includes(String(reloadPid)));
-    const finalDeliveryRequestsBeforeKill = provider.requestCountsByStage().return_god;
+    const finalDeliveryRequestsBeforeKill = activeProvider.requestCountsByStage().return_god;
     assert.equal(finalDeliveryRequestsBeforeKill, 1);
     await forceKill(reloadPid);
     await assert.rejects(execution);
@@ -157,7 +151,7 @@ export async function runProcessChaosHarness(caseDirectory: string, seed: string
     const recoveryPid = requirePid(recovery);
     assert.notEqual(recoveryPid, reloadPid);
     const recoveredRpc = asAgentRuntime(await recovery.getAgentRuntime(thread.id));
-    const recoveredRaw = await readRuntimeSnapshot(statePath);
+    const recoveredRaw = await readRuntimeSnapshot(stateFilePath);
     const recoveredReturn = recoveredRpc.returns.find((item) => item.id === returnEnvelope.id);
     assert.equal(recoveredReturn?.status, "ready");
     assert.equal(recoveredRaw.agentRuntime.returns.find((item) => item.id === returnEnvelope.id)?.status, "ready");
@@ -171,30 +165,76 @@ export async function runProcessChaosHarness(caseDirectory: string, seed: string
     assert.equal(advanced.changed, true);
     assert.equal(advanced.stage, "completed");
     const finalRpc = asAgentRuntime(await recovery.getAgentRuntime(thread.id));
-    const finalRaw = await readRuntimeSnapshot(statePath);
+    const finalRaw = await readRuntimeSnapshot(stateFilePath);
     const finalRawJob = finalRaw.agentRuntime.jobs.find((item) => item.id === job.id);
     const finalRawReturn = finalRaw.agentRuntime.returns.find((item) => item.id === returnEnvelope.id);
     assert.equal(finalRpc.job?.status, "completed");
     assert.equal(finalRpc.returns.find((item) => item.id === returnEnvelope.id)?.status, "consumed");
     assert.equal(finalRawJob?.status, "completed");
     assert.equal(finalRawReturn?.status, "consumed");
-    const providerRequestsByStage = provider.requestCountsByStage();
+    const providerRequestsByStage = activeProvider.requestCountsByStage();
     assert.equal(providerRequestsByStage.return_god, 1);
 
     const report: ProcessChaosReport = {
+      schemaVersion: PROCESS_CHAOS_REPORT_SCHEMA_VERSION,
+      experiment: {
+        id: PROCESS_CHAOS_EXPERIMENT_ID,
+        scope: "Team Workflow Return",
+        evidenceLevel: "narrow-E3",
+        formalFaultWindowCount: 1,
+        gate40CompletedWindows: 1,
+        gate40TotalWindows: 40,
+        completeE3Matrix: false,
+        completeGate40: false,
+        exactlyOnceClaimed: false,
+        productionReadyClaimed: false,
+      },
+      runStartedAt,
+      runCompletedAt: new Date().toISOString(),
+      environment: {
+        platform: process.platform,
+        arch: process.arch,
+        node: process.version,
+        osRelease: osRelease(),
+        local: true,
+        appServerProcess: "real-child-process",
+        provider: {
+          kind: "deterministic-loopback-fake",
+          realApiCalls: false,
+          credentialsRead: false,
+        },
+      },
       seed,
       productionEntry: "node --import tsx src/app-server/main.ts",
-      reproCommand: `tsx research/runtime-e2e-benchmarks/src/process-chaos-cli.ts --seed ${seed} --output <directory>`,
-      statePath,
-      rawReportPath: reportPath,
+      reproCommand: processChaosReproCommand(seed),
+      statePath: "runtime-state.json",
+      rawReportPath: "process-chaos-report.json",
       ownerPid,
       reloadPid,
       recoveryPid,
       pidChangedAfterReload: ownerPid !== reloadPid,
       pidChangedAfterOwnerKill: reloadPid !== recoveryPid,
+      pidTransitions: [
+        {
+          event: "reload-after-pre-provider-kill",
+          previousPid: ownerPid,
+          successorPid: reloadPid,
+          changed: ownerPid !== reloadPid,
+        },
+        {
+          event: "recovery-after-return-window-kill",
+          previousPid: reloadPid,
+          successorPid: recoveryPid,
+          changed: reloadPid !== recoveryPid,
+        },
+      ],
       windows: [
         {
           name: "no-side-effect-after-turn-start",
+          evidenceRole: "persistence-reload-precondition",
+          countsTowardGate40: false,
+          faultPoint: "turn-persisted-before-provider-request",
+          recoveryResult: "state-reloaded-without-provider-request",
           faultPointConfirmed: providerRequestsBeforeFirstKill === 0 && beforeFirstKill.lifecycle.turns.some((item) => item.id === stagedTurn.turn.id),
           ownerKilled: true,
           publicRpcReloaded: publicHistory.messages.some((item) => item.text.includes(seed)),
@@ -204,6 +244,10 @@ export async function runProcessChaosHarness(caseDirectory: string, seed: string
         },
         {
           name: "return-delivery-with-held-lease",
+          evidenceRole: "team-workflow-return-fault-window",
+          countsTowardGate40: true,
+          faultPoint: "return-response-received-with-job-lease-held",
+          recoveryResult: "lease-wait-then-return-consumed",
           faultPointConfirmed: returnEnvelope.status === "delivering" && heldLease.ownerId !== undefined,
           ownerKilled: true,
           publicRpcReloaded: recoveredReturn?.status === "ready",
@@ -218,17 +262,32 @@ export async function runProcessChaosHarness(caseDirectory: string, seed: string
         returnId: returnEnvelope.id,
         ownerLeaseId: heldLease.ownerId!,
         ownerLeaseDeadline: heldLease.expiresAt,
-        providerRequests: provider.requestCount,
+        providerRequests: activeProvider.requestCount,
         providerRequestsByStage,
+        fakeProvider: {
+          totalRequests: activeProvider.requestCount,
+          requestsByStage: providerRequestsByStage,
+          finalDeliveryRequestsBeforeKill,
+          finalDeliveryRequestsAfterRecovery: providerRequestsByStage.return_god,
+        },
         finalJobStatus: finalRawJob!.status,
         finalReturnStatus: finalRawReturn!.status,
       },
     };
-    await writeFile(reportPath, `${JSON.stringify(report, null, 2)}\n`, "utf8");
+    validateProcessChaosReport(report);
+    await writeFile(reportFilePath, `${JSON.stringify(report, null, 2)}\n`, "utf8");
     return report;
+  } catch (error) {
+    operationError = error;
+    throw error;
   } finally {
-    await Promise.allSettled(clients.map((client) => client.close()));
-    await provider.close();
+    const cleanupErrors = await cleanupHarnessResources(clients, provider, transientPath);
+    if (cleanupErrors.length > 0) {
+      throw new AggregateError(
+        operationError === undefined ? cleanupErrors : [operationError, ...cleanupErrors],
+        "Process Chaos cleanup failed",
+      );
+    }
   }
 }
 
@@ -236,6 +295,9 @@ class FakeResponsesServer {
   readonly baseUrl: string;
   requestCount = 0;
   private readonly stageRequestCounts: FakeProviderRequestCounts = {
+    prepare_requirement_plan: 0,
+    plan_confirmation: 0,
+    team_workflow: 0,
     return_god: 0,
   };
   private finalDeliveryResolve: (() => void) | undefined;
@@ -261,8 +323,8 @@ class FakeResponsesServer {
     return instance;
   }
 
-  waitForFinalDeliveryRequest(): Promise<void> {
-    return withProcessChaosTimeout(this.finalDelivery, 30_000, "final delivery provider request");
+  waitForFinalDeliveryResponse(): Promise<void> {
+    return withProcessChaosTimeout(this.finalDelivery, FINAL_DELIVERY_RESPONSE_TIMEOUT_MS, "final delivery provider response");
   }
 
   requestCountsByStage(): FakeProviderRequestCounts {
@@ -270,7 +332,10 @@ class FakeResponsesServer {
   }
 
   close(): Promise<void> {
-    return new Promise((resolve, reject) => this.server.close((error) => error === undefined ? resolve() : reject(error)));
+    return new Promise((resolve, reject) => {
+      this.server.close((error) => error === undefined ? resolve() : reject(error));
+      this.server.closeAllConnections();
+    });
   }
 
   private async handle(request: IncomingMessage, response: ServerResponse): Promise<void> {
@@ -289,7 +354,8 @@ class FakeResponsesServer {
       typeof item.output === "string" && item.output.includes("awaiting_user_confirmation"));
 
     if (hasPlanTool && !hasPlanOutput) {
-      respondJson(response, functionCallResponse(requestId, "prepare_requirement_plan", `${this.seed}-plan`, JSON.stringify({
+      this.stageRequestCounts.prepare_requirement_plan += 1;
+      await respondJson(response, functionCallResponse(requestId, "prepare_requirement_plan", `${this.seed}-plan`, JSON.stringify({
         executionKind: "software_product_delivery",
         title: `Process chaos ${this.seed}`,
         objective: "Prove real App Server process crash recovery",
@@ -297,24 +363,26 @@ class FakeResponsesServer {
         nonGoals: ["production protocol changes"],
         constraints: ["deterministic fake provider"],
         deliverables: ["raw process chaos report"],
-        acceptanceCriteria: ["PID changes and Return recovers exactly once"],
-        testCases: [{ id: `TC-${this.seed}`, title: "process recovery", kind: "recovery", steps: ["kill owner", "restart successor"], expected: "job completes once" }],
+        acceptanceCriteria: ["PID changes and one observed Return request is retained without an exactly-once claim"],
+        testCases: [{ id: `TC-${this.seed}`, title: "process recovery", kind: "recovery", steps: ["kill owner", "restart successor"], expected: "job completes after the held Lease expires" }],
         executionSteps: ["prepare", "confirm", "execute", "kill", "recover"],
       })));
       return;
     }
     if (hasPlanOutput) {
-      respondJson(response, textResponse(requestId, `Plan ${this.seed} is ready for confirmation.`));
+      this.stageRequestCounts.plan_confirmation += 1;
+      await respondJson(response, textResponse(requestId, `Plan ${this.seed} is ready for confirmation.`));
       return;
     }
     if (instructions.includes("Workflow 的唯一最终交付者")) {
       this.stageRequestCounts.return_god += 1;
-      this.finalDeliveryResolve?.();
       const wideningPayload = this.stageRequestCounts.return_god === 1 ? "x".repeat(2_000_000) : "";
-      respondJson(response, textResponse(requestId, `Final delivery recovered for ${this.seed}.${wideningPayload}`));
+      await respondJson(response, textResponse(requestId, `Final delivery recovered for ${this.seed}.${wideningPayload}`));
+      this.finalDeliveryResolve?.();
       return;
     }
-    respondJson(response, textResponse(requestId, stageResult()));
+    this.stageRequestCounts.team_workflow += 1;
+    await respondJson(response, textResponse(requestId, stageResult()));
   }
 }
 
@@ -331,7 +399,7 @@ function createHarnessEnvironment(input: {
     AGENT_PLANS_PATH: input.plansPath,
     AGENT_WORKSPACE: input.workspacePath,
     PROCESS_CHAOS_CLOCK_PATH: input.clockPath,
-    OPENAI_API_KEY: "process-chaos-test-key",
+    OPENAI_API_KEY: "process-chaos-deterministic-fake-key",
     OPENAI_BASE_URL: input.baseUrl,
     OPENAI_MODEL: "gpt-5.6-sol",
   };
@@ -339,6 +407,53 @@ function createHarnessEnvironment(input: {
     if (process.env[name] !== undefined) environment[name] = process.env[name];
   }
   return environment;
+}
+
+async function prepareCaseDirectory(outputDirectory: string, seed: string): Promise<string> {
+  const resolvedOutput = path.resolve(outputDirectory);
+  const caseDirectory = path.join(resolvedOutput, `process-chaos-${seed}`);
+  if (path.dirname(caseDirectory) !== resolvedOutput) {
+    throw new Error("Process Chaos output escaped its requested directory");
+  }
+  await mkdir(resolvedOutput, { recursive: true });
+  await rm(caseDirectory, { recursive: true, force: true });
+  await mkdir(caseDirectory, { recursive: false });
+  return caseDirectory;
+}
+
+async function cleanupHarnessResources(
+  clients: AppServerClient[],
+  provider: FakeResponsesServer | undefined,
+  transientPath: string,
+): Promise<unknown[]> {
+  const errors: unknown[] = [];
+  const closeResults = await Promise.allSettled(clients.map((client) => client.close()));
+  for (const result of closeResults) {
+    if (result.status === "rejected") errors.push(result.reason);
+  }
+  for (const client of clients) {
+    const pid = client.getChildPid();
+    if (pid !== undefined && isProcessAlive(pid)) {
+      try {
+        await forceKill(pid);
+      } catch (error) {
+        errors.push(error);
+      }
+    }
+  }
+  if (provider !== undefined) {
+    try {
+      await provider.close();
+    } catch (error) {
+      errors.push(error);
+    }
+  }
+  try {
+    await rm(transientPath, { recursive: true, force: true });
+  } catch (error) {
+    errors.push(error);
+  }
+  return errors;
 }
 
 async function forceKill(pid: number): Promise<void> {
@@ -369,17 +484,99 @@ async function readLeaseSnapshot(leasePath: string): Promise<LeaseSnapshot> {
 }
 
 async function waitForRuntimeSnapshot(statePath: string, predicate: (snapshot: RuntimeSnapshot) => boolean): Promise<RuntimeSnapshot> {
-  const deadline = Date.now() + 20_000;
-  while (Date.now() < deadline) {
-    try {
-      const snapshot = await readRuntimeSnapshot(statePath);
-      if (predicate(snapshot)) return snapshot;
-    } catch {
-      // Atomic rename can briefly race the directory lookup on Windows.
+  const deadline = Date.now() + PERSISTED_FAULT_POINT_TIMEOUT_MS;
+  const expectedFileName = path.basename(statePath).toLocaleLowerCase("en-US");
+  let fileEvents = 0;
+  let readAttempts = 0;
+  let eventGeneration = 0;
+  let wake: (() => void) | undefined;
+  let watcher: FSWatcher | undefined;
+  let lastSnapshot: RuntimeSnapshot | undefined;
+  let lastReadError: unknown;
+  let lastWatchError: unknown;
+
+  try {
+    watcher = watch(path.dirname(statePath), (_eventType, fileName) => {
+      if (fileName !== null && String(fileName).toLocaleLowerCase("en-US") !== expectedFileName) return;
+      fileEvents += 1;
+      eventGeneration += 1;
+      wake?.();
+      wake = undefined;
+    });
+    watcher.on("error", (error) => {
+      lastWatchError = error;
+      wake?.();
+      wake = undefined;
+    });
+
+    let observedGeneration = -1;
+    while (Date.now() < deadline) {
+      if (observedGeneration !== eventGeneration) {
+        observedGeneration = eventGeneration;
+        readAttempts += 1;
+        try {
+          const snapshot = await readRuntimeSnapshot(statePath);
+          lastSnapshot = snapshot;
+          lastReadError = undefined;
+          if (predicate(snapshot)) return snapshot;
+        } catch (error) {
+          // Atomic rename can briefly race the directory lookup on Windows.
+          // Preserve the error for timeout diagnostics and retry on the next
+          // file event or the bounded low-frequency fallback poll.
+          lastReadError = error;
+        }
+      }
+
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) break;
+      await Promise.race([
+        waitForSnapshotEvent(() => eventGeneration, observedGeneration, (resolve) => { wake = resolve; }),
+        delay(Math.min(SNAPSHOT_FALLBACK_POLL_MS, remaining)),
+      ]);
+      // The fallback poll is deliberately much slower than the old 10 ms loop:
+      // it provides resilience if fs.watch coalesces a Windows rename without
+      // competing with the Runtime's multi-megabyte atomic state writes.
+      if (observedGeneration === eventGeneration) eventGeneration += 1;
     }
-    await delay(10);
+  } catch (error) {
+    lastWatchError = error;
+  } finally {
+    watcher?.close();
   }
-  throw new Error("Timed out waiting for persisted process-chaos fault point");
+
+  throw new Error(
+    `Timed out waiting for persisted process-chaos fault point after ${PERSISTED_FAULT_POINT_TIMEOUT_MS}ms; ` +
+    `fileEvents=${fileEvents}; readAttempts=${readAttempts}; lastState=${summarizeFaultPointState(lastSnapshot)}; ` +
+    `lastReadError=${errorSummary(lastReadError)}; lastWatchError=${errorSummary(lastWatchError)}`,
+  );
+}
+
+function waitForSnapshotEvent(
+  generation: () => number,
+  observedGeneration: number,
+  register: (resolve: () => void) => void,
+): Promise<void> {
+  if (generation() !== observedGeneration) return Promise.resolve();
+  return new Promise<void>((resolve) => {
+    register(resolve);
+    // Close the small check/register race: an event between the first check
+    // and assigning the waiter must still wake this observation cycle.
+    if (generation() !== observedGeneration) resolve();
+  });
+}
+
+function summarizeFaultPointState(snapshot: RuntimeSnapshot | undefined): string {
+  if (snapshot === undefined) return "unread";
+  return JSON.stringify({
+    jobs: snapshot.agentRuntime.jobs.map((item) => ({ id: item.id, status: item.status })),
+    returns: snapshot.agentRuntime.returns.map((item) => ({ id: item.id, stageId: item.stageId, status: item.status })),
+    invocations: snapshot.modelInvocations.invocations.map((item) => ({ stageId: item.stageId, status: item.status })),
+  });
+}
+
+function errorSummary(error: unknown): string {
+  if (error === undefined) return "none";
+  return error instanceof Error ? `${error.name}:${error.message}` : String(error);
 }
 
 function asAgentRuntime(value: unknown): {
@@ -417,9 +614,15 @@ function textResponse(id: string, text: string): unknown {
   return { id, output: [{ type: "message", content: [{ type: "output_text", text }] }] };
 }
 
-function respondJson(response: ServerResponse, value: unknown): void {
-  response.writeHead(200, { "content-type": "application/json" });
-  response.end(JSON.stringify(value));
+function respondJson(response: ServerResponse, value: unknown): Promise<void> {
+  return new Promise<void>((resolve, reject) => {
+    response.once("error", reject);
+    response.writeHead(200, { "content-type": "application/json" });
+    response.end(JSON.stringify(value), () => {
+      response.removeListener("error", reject);
+      resolve();
+    });
+  });
 }
 
 async function readBody(request: IncomingMessage): Promise<string> {

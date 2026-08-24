@@ -53,6 +53,7 @@ import type { RequirementStore } from "../requirements/requirement-store.js";
 import { isRequirementConfirmed, type RequirementExecutionKind, type RequirementExecutionState } from "../requirements/requirement.js";
 import type { FixedProductStage } from "../agents/fixed-software-team-coordinator.js";
 import type { ExecutionEngineRouter } from "../execution/execution-engine-router.js";
+import type { DynamicExecutionOwnership } from "../execution/dynamic-agent-execution-engine.js";
 import type { OutcomeUnknownResolutionService } from "../runtime/outcome-unknown-resolution-service.js";
 import type {
   OutcomeUnknownActor,
@@ -77,6 +78,7 @@ export interface AppServerDependencies {
   workspaceSandbox?: Pick<WorkspaceSandbox, "searchFiles" | "validateFilePath">;
   skillNames?: readonly string[];
   executionEngineRouter?: ExecutionEngineRouter;
+  executionOwnership?: DynamicExecutionOwnership;
   outcomeUnknownResolutionService?: OutcomeUnknownResolutionService;
   resolveOutcomeUnknownActor?: () => OutcomeUnknownActor | undefined;
   refreshOutcomeUnknownFromRuntime?: () => void | Promise<void>;
@@ -111,6 +113,7 @@ export function registerAppServerHandlers(
     workspaceSandbox,
     skillNames = [],
     executionEngineRouter,
+    executionOwnership,
     outcomeUnknownResolutionService,
     resolveOutcomeUnknownActor = () => undefined,
     refreshOutcomeUnknownFromRuntime = () => undefined,
@@ -463,6 +466,10 @@ export function registerAppServerHandlers(
       (activeDynamicJob || (existingRequirementJob.status === "reviewing" && currentAttemptBlocked));
     const workflowBusyTurn = activeManagedJob && !workflowFeedbackTurn &&
       (workflowDriveActive || existingRequirementJob.rootTurnId !== request.turnId);
+    const executionJobId = executionRequested && requirement !== undefined
+      ? existingRequirementJob?.id ?? `job-${requirement.id}-v${requirement.revision}`
+      : undefined;
+    const runManagedTurn = async (): Promise<TurnRunResult> => {
     if (workflowBusyTurn) {
       const result = createWorkflowBusyResult(lifecycleStore, request.turnId);
       await saveState();
@@ -623,6 +630,10 @@ export function registerAppServerHandlers(
       // completed、failed 都是需要恢复的终态；Checkpoint 也在这里一起保存。
       await saveState();
     }
+    };
+    return executionJobId === undefined || executionOwnership === undefined
+      ? runManagedTurn()
+      : executionOwnership.withJob(executionJobId, runManagedTurn);
   });
 
   connection.onRequest("turn/cancel", async (params) => {

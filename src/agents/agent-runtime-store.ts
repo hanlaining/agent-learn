@@ -242,9 +242,10 @@ export class AgentRuntimeStore {
     return copy(task);
   }
 
-  recoverExpiredLeases(at = this.now()): AgentTask[] {
+  recoverExpiredLeases(at = this.now(), jobId?: string): AgentTask[] {
     const expired: AgentTask[] = [];
     for (const task of this.tasks.values()) {
+      if (jobId !== undefined && task.jobId !== jobId) continue;
       if (["claimed", "running"].includes(task.status) && task.leaseExpiresAt !== undefined && task.leaseExpiresAt <= at) {
         task.status = "lost"; delete task.leaseOwner; delete task.leaseExpiresAt; task.updatedAt = this.now(); expired.push(copy(task));
       }
@@ -253,8 +254,8 @@ export class AgentRuntimeStore {
     return expired;
   }
 
-  recoverInterruptedWork(at = this.now()): { lostTasks: AgentTask[]; pendingReturns: AgentReturnEnvelope[] } {
-    return { lostTasks: this.recoverExpiredLeases(at), pendingReturns: this.listReturns().filter((item) => item.status === "ready") };
+  recoverInterruptedWork(at = this.now(), jobId?: string): { lostTasks: AgentTask[]; pendingReturns: AgentReturnEnvelope[] } {
+    return { lostTasks: this.recoverExpiredLeases(at, jobId), pendingReturns: this.listReturns(jobId).filter((item) => item.status === "ready") };
   }
 
   reconcilePersistedJobs(jobId?: string): AgentJob[] {

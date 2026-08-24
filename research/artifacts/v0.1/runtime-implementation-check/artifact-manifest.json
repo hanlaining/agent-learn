@@ -1,0 +1,300 @@
+{
+  "baselineCommit": "05680a4ecf0f13f7b1b311363732d4922ad9af5b",
+  "environment": {
+    "node": "v20.19.0",
+    "os": {
+      "arch": "x64",
+      "platform": "win32",
+      "release": "10.0.26200"
+    }
+  },
+  "files": [
+    {
+      "bytes": 308,
+      "contentType": "text/markdown",
+      "path": "SCOPE.md",
+      "sha256": "257f3f3f4c82496f1355198f080178c730ab5c2049259a39930f71da41a4a81f"
+    },
+    {
+      "bytes": 23036,
+      "contentType": "text/csv",
+      "path": "cases.csv",
+      "sha256": "f53d8c3fc8b88c062806cd13ac56eadae16c8faed451115a1b93c72e6a9328f6"
+    },
+    {
+      "bytes": 127835,
+      "contentType": "application/json",
+      "path": "report.json",
+      "sha256": "8f16da17f8571458127fd346bb43e743ee610724efe6c103cc43dddc711f2563"
+    },
+    {
+      "bytes": 1195,
+      "contentType": "application/json",
+      "path": "repro/no-lease-multi-instance-lease-001.json",
+      "sha256": "5f824d9fa2c153ce1da1f7a5bfd9d251321875ad2a23abbea4408f3cacc9adf2"
+    },
+    {
+      "bytes": 1197,
+      "contentType": "application/json",
+      "path": "repro/no-lease-multi-instance-lease-002.json",
+      "sha256": "48520fa26087400e0df47e838c1d94a825f9da6a33949f71a4ea98b8b76e9306"
+    },
+    {
+      "bytes": 1220,
+      "contentType": "application/json",
+      "path": "repro/no-lease-multi-instance-lease-003.json",
+      "sha256": "202e03152ba8c8db811afb85635e3457a53306dc592a3e6db08e969b47cdf5a9"
+    },
+    {
+      "bytes": 1219,
+      "contentType": "application/json",
+      "path": "repro/no-lease-multi-instance-lease-004.json",
+      "sha256": "5fe4dc7839a765d2a81bb21437173d6882fd35d308f9e233125309984d00d510"
+    },
+    {
+      "bytes": 1215,
+      "contentType": "application/json",
+      "path": "repro/no-lease-multi-instance-lease-005.json",
+      "sha256": "da95d40228be375a5318c686b0d661692113ae4aea53016b05c9913f983506a1"
+    },
+    {
+      "bytes": 1328,
+      "contentType": "application/json",
+      "path": "repro/no-lease-return-parent-feedback-001.json",
+      "sha256": "33ec4bf9b0dddb9e755e3ed9fbb7a715429ca4fa4f48e16ab3a88a2bb511e7f1"
+    },
+    {
+      "bytes": 1332,
+      "contentType": "application/json",
+      "path": "repro/no-lease-return-parent-feedback-002.json",
+      "sha256": "9d69b1ac77b12c93de57e4cd5fbd3cc652947997f5b821c58e37ebf786aa9342"
+    },
+    {
+      "bytes": 1223,
+      "contentType": "application/json",
+      "path": "repro/no-recovery-model-response-window-001.json",
+      "sha256": "e9916b6e5795a67a425848fa6676edbde6b86116492c2b757a9671316ccfa0f8"
+    },
+    {
+      "bytes": 1239,
+      "contentType": "application/json",
+      "path": "repro/no-recovery-model-response-window-002.json",
+      "sha256": "c0965a633435c94529149a9b69d5cd8f2a336324bc8864c8e697127bb6163253"
+    },
+    {
+      "bytes": 1223,
+      "contentType": "application/json",
+      "path": "repro/no-recovery-model-response-window-003.json",
+      "sha256": "fde2944288b9b955b124e3100b935286ac50cfd94d575679f6367557e737c1f8"
+    },
+    {
+      "bytes": 1225,
+      "contentType": "application/json",
+      "path": "repro/no-recovery-model-response-window-004.json",
+      "sha256": "860d49866587f9233a51428da8f927bd68787409b723297d92ed2fa19bb3fad4"
+    },
+    {
+      "bytes": 1222,
+      "contentType": "application/json",
+      "path": "repro/no-recovery-model-response-window-005.json",
+      "sha256": "2221caf666d644bee53d067701f220dab57f993b3a175c2e6da3b2f866a0923e"
+    },
+    {
+      "bytes": 1240,
+      "contentType": "application/json",
+      "path": "repro/no-recovery-return-parent-feedback-001.json",
+      "sha256": "f5a3e1b68d06e4a3a12f10e8672cfb89820331ce4b5edc09b7d19c510760820a"
+    },
+    {
+      "bytes": 1245,
+      "contentType": "application/json",
+      "path": "repro/no-recovery-return-parent-feedback-002.json",
+      "sha256": "3f9434715828144c0121b3837960186e8636fb2e74b79ebaf4c5bcd0ce9815e4"
+    },
+    {
+      "bytes": 1259,
+      "contentType": "application/json",
+      "path": "repro/no-recovery-return-parent-feedback-003.json",
+      "sha256": "7e72b6937202ccdfc0c0cb5dd241286585a8478000fa254dd496bb61f3553231"
+    },
+    {
+      "bytes": 1265,
+      "contentType": "application/json",
+      "path": "repro/no-recovery-return-parent-feedback-004.json",
+      "sha256": "7cb345b18a5547e90d9790272c2800d5119726591329329601e896ae046ac969"
+    },
+    {
+      "bytes": 1259,
+      "contentType": "application/json",
+      "path": "repro/no-recovery-return-parent-feedback-005.json",
+      "sha256": "c693c6323cb65efd82dc21bc14bfb28217394036b1c73e2fbd0bc7eca72a5158"
+    },
+    {
+      "bytes": 1271,
+      "contentType": "application/json",
+      "path": "repro/no-recovery-snapshot-reload-001.json",
+      "sha256": "38e7075aba4afbf437beb6d2a0345a2593dea9e62f6ea1bc9940648e3031d101"
+    },
+    {
+      "bytes": 1258,
+      "contentType": "application/json",
+      "path": "repro/no-recovery-snapshot-reload-002.json",
+      "sha256": "b55f1ba53c48086c3450778adbee0f4007a657606c2276caa450808571947bcd"
+    },
+    {
+      "bytes": 1256,
+      "contentType": "application/json",
+      "path": "repro/no-recovery-snapshot-reload-003.json",
+      "sha256": "42ea7e72524496f91ed388e6c66d379394eb09b49d8de49c0511eea9536cb999"
+    },
+    {
+      "bytes": 1266,
+      "contentType": "application/json",
+      "path": "repro/no-recovery-snapshot-reload-004.json",
+      "sha256": "b4cf203db133f746daface41e27033210f4137875dc131b8e8f1fac70c3568ed"
+    },
+    {
+      "bytes": 1278,
+      "contentType": "application/json",
+      "path": "repro/no-recovery-snapshot-reload-005.json",
+      "sha256": "3969f8d8bfa251a3c3e0fcd0f5d541298a2cdda393dac4ac3b38c46200cf9b54"
+    },
+    {
+      "bytes": 1260,
+      "contentType": "application/json",
+      "path": "repro/no-recovery-tool-effect-window-001.json",
+      "sha256": "4d12ba8779a28023d1aaf547ed411a25f2607a74aa199f900354bf27f2cbf6e1"
+    },
+    {
+      "bytes": 1255,
+      "contentType": "application/json",
+      "path": "repro/no-recovery-tool-effect-window-002.json",
+      "sha256": "c6e102b36fb92dd43b462460e300bd5f38c05ce82d977125b6625187a1b37027"
+    },
+    {
+      "bytes": 1251,
+      "contentType": "application/json",
+      "path": "repro/no-recovery-tool-effect-window-003.json",
+      "sha256": "d1b670979b7a88305d87ad6b4956f0366707593ad9ee4f9340ac5fa21912906d"
+    },
+    {
+      "bytes": 1253,
+      "contentType": "application/json",
+      "path": "repro/no-recovery-tool-effect-window-004.json",
+      "sha256": "3e339ac4142bc097f3d754db97f52681c4deae82b59f8bf18861a3fe724d2cb9"
+    },
+    {
+      "bytes": 1258,
+      "contentType": "application/json",
+      "path": "repro/no-recovery-tool-effect-window-005.json",
+      "sha256": "b2fa715621ed2d68e7711ed3f751510c3bf4fe1043da64119dbb512b7aa5e6e6"
+    },
+    {
+      "bytes": 1209,
+      "contentType": "application/json",
+      "path": "repro/no-recovery-workflow-stage-001.json",
+      "sha256": "57f6eb719d5b4d2cd1bcd88d7fe3e9384037346c0c45acd74c607168d3659f18"
+    },
+    {
+      "bytes": 1217,
+      "contentType": "application/json",
+      "path": "repro/no-recovery-workflow-stage-002.json",
+      "sha256": "a3ace33e2b205f4d385ca80faff9fdc653b3ff560f3a5d3582b3fdc35677e769"
+    },
+    {
+      "bytes": 1209,
+      "contentType": "application/json",
+      "path": "repro/no-recovery-workflow-stage-003.json",
+      "sha256": "463215e13e4cf3125773db92c297ee2174829e1270d1a8078c2c7900eb955a2e"
+    },
+    {
+      "bytes": 1202,
+      "contentType": "application/json",
+      "path": "repro/no-recovery-workflow-stage-004.json",
+      "sha256": "2e77963fa4c6d51733893e7281b8a1db1c2fed817fb7a8d6d6383e64bffe0a56"
+    },
+    {
+      "bytes": 1215,
+      "contentType": "application/json",
+      "path": "repro/no-recovery-workflow-stage-005.json",
+      "sha256": "bae65116d3b333dbd26f091a7c354931fcac2ce4e67bb471c43fffbed3d647f4"
+    },
+    {
+      "bytes": 1282,
+      "contentType": "application/json",
+      "path": "repro/no-wal-model-response-window-001.json",
+      "sha256": "73b5e0e749893e72edd37399d563c8bfbb747941b42f06fbca0dcea8412083a1"
+    },
+    {
+      "bytes": 1297,
+      "contentType": "application/json",
+      "path": "repro/no-wal-model-response-window-002.json",
+      "sha256": "692bd12806b1e1d6bc3c0ce429b495e606b301a8e36de290f56b0bd0cbaa6d69"
+    },
+    {
+      "bytes": 1282,
+      "contentType": "application/json",
+      "path": "repro/no-wal-model-response-window-003.json",
+      "sha256": "8b10ed5793fd2034a73f550ff121ea5832c41dfbf8560d131c06efed7fb5dc57"
+    },
+    {
+      "bytes": 1284,
+      "contentType": "application/json",
+      "path": "repro/no-wal-model-response-window-004.json",
+      "sha256": "571362a5cb70b08730f8146081f28d664fddb5f312a3e65b4598ed91e58636f0"
+    },
+    {
+      "bytes": 1281,
+      "contentType": "application/json",
+      "path": "repro/no-wal-model-response-window-005.json",
+      "sha256": "05d024a07ccda44bfa6ed0ac2477fae663f5d18a96501ce99289ef342dab89e2"
+    },
+    {
+      "bytes": 1303,
+      "contentType": "application/json",
+      "path": "repro/no-wal-tool-effect-window-001.json",
+      "sha256": "7843601d386431692b69754e3b66260f04479dce2f2bc21e335c49e12f4c75cb"
+    },
+    {
+      "bytes": 1299,
+      "contentType": "application/json",
+      "path": "repro/no-wal-tool-effect-window-002.json",
+      "sha256": "67c88f0dfd4b31f9205eb608cce655c38a60c5b52f91c02b42d556ab8c9afec9"
+    },
+    {
+      "bytes": 1295,
+      "contentType": "application/json",
+      "path": "repro/no-wal-tool-effect-window-003.json",
+      "sha256": "c526c410d931882b59cd7cce7f361bbab78e230902e45a1f32d21daeaed9af69"
+    },
+    {
+      "bytes": 1295,
+      "contentType": "application/json",
+      "path": "repro/no-wal-tool-effect-window-004.json",
+      "sha256": "1468b5e3622e9f34618eacfc96ebcc83fd304bb50dda5f2a7b89ba13215e00e7"
+    },
+    {
+      "bytes": 1301,
+      "contentType": "application/json",
+      "path": "repro/no-wal-tool-effect-window-005.json",
+      "sha256": "4d5cd77a89b26d6c49b46dcdd4042088dc8e12660cb59d1e1a23958922b590bc"
+    },
+    {
+      "bytes": 555,
+      "contentType": "text/csv",
+      "path": "summary.csv",
+      "sha256": "a1cba804a73e9b747a74888ff0f54eb389865cfc2647785a647aeff237dcb041"
+    }
+  ],
+  "provider": {
+    "credentialsRead": false,
+    "kind": "deterministic-fake",
+    "realApiCalls": false
+  },
+  "run": {
+    "command": "npm exec -- tsx research/runtime-e2e-benchmarks/src/cli.ts --gate 30 --verify-determinism --out research/artifacts/v0.1/runtime-implementation-check",
+    "finishedAt": "2026-08-20T04:01:47.623Z",
+    "startedAt": "2026-08-20T04:01:10.948Z"
+  },
+  "schemaVersion": "research-artifact-manifest-v1"
+}

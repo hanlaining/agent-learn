@@ -51,7 +51,7 @@ export interface ProcessChaosSmokeResult {
 
 export function parseProcessChaosSmokeArgs(args: readonly string[], cwd = process.cwd()): ProcessChaosSmokeOptions {
   let seed = DEFAULT_SEED;
-  let outputDirectory = path.resolve(cwd, "research/runtime-e2e-benchmarks/results", `process-chaos-${seed}`);
+  let outputDirectory = path.resolve(cwd, "research/runtime-e2e-benchmarks/results");
   let timeoutMs = DEFAULT_TIMEOUT_MS;
   let dryRun = false;
 
@@ -60,9 +60,6 @@ export function parseProcessChaosSmokeArgs(args: readonly string[], cwd = proces
     if (arg === "--seed") {
       seed = requireValue(args, ++index, "--seed");
       if (!/^[a-zA-Z0-9._-]+$/u.test(seed)) throw new Error("--seed must contain only letters, numbers, dot, underscore, or hyphen");
-      if (outputDirectory.endsWith(`process-chaos-${DEFAULT_SEED}`)) {
-        outputDirectory = path.resolve(cwd, "research/runtime-e2e-benchmarks/results", `process-chaos-${seed}`);
-      }
     } else if (arg === "--out") {
       outputDirectory = path.resolve(cwd, requireValue(args, ++index, "--out"));
     } else if (arg === "--timeout-ms") {
@@ -82,6 +79,7 @@ export function parseProcessChaosSmokeArgs(args: readonly string[], cwd = proces
 
 export function buildDryRunResult(options: ProcessChaosSmokeOptions, now = new Date()): ProcessChaosSmokeResult {
   const timestamp = now.toISOString();
+  const caseDirectory = resolveCaseDirectory(options);
   return {
     schemaVersion: 1,
     benchmark: "process-chaos-smoke",
@@ -90,7 +88,7 @@ export function buildDryRunResult(options: ProcessChaosSmokeOptions, now = new D
     startedAt: timestamp,
     finishedAt: timestamp,
     durationMs: 0,
-    outputDirectory: options.outputDirectory,
+    outputDirectory: caseDirectory,
     provider: { kind: "deterministic-fake-responses", liveCalls: false, credentialsRead: false },
     assertions: emptyAssertions(),
     windows: [],
@@ -99,10 +97,11 @@ export function buildDryRunResult(options: ProcessChaosSmokeOptions, now = new D
 
 export async function runProcessChaosSmoke(options: ProcessChaosSmokeOptions): Promise<ProcessChaosSmokeResult> {
   const startedAt = new Date();
-  await mkdir(options.outputDirectory, { recursive: true });
+  const caseDirectory = resolveCaseDirectory(options);
+  await mkdir(caseDirectory, { recursive: true });
   if (options.dryRun) {
     const result = buildDryRunResult(options, startedAt);
-    await writeResult(options.outputDirectory, result);
+    await writeResult(caseDirectory, result);
     return result;
   }
 
@@ -116,7 +115,8 @@ export async function runProcessChaosSmoke(options: ProcessChaosSmokeOptions): P
     if (Object.values(assertions).some((value) => !value)) {
       throw new Error(`Process Chaos invariant failed: ${JSON.stringify(assertions)}`);
     }
-    const reportBytes = await readFile(report.rawReportPath);
+    const reportPath = path.join(caseDirectory, report.rawReportPath);
+    const reportBytes = await readFile(reportPath);
     const result: ProcessChaosSmokeResult = {
       schemaVersion: 1,
       benchmark: "process-chaos-smoke",
@@ -125,15 +125,15 @@ export async function runProcessChaosSmoke(options: ProcessChaosSmokeOptions): P
       startedAt: startedAt.toISOString(),
       finishedAt: new Date().toISOString(),
       durationMs: Date.now() - startedAt.getTime(),
-      outputDirectory: options.outputDirectory,
-      reportPath: report.rawReportPath,
+      outputDirectory: caseDirectory,
+      reportPath,
       reportSha256: createHash("sha256").update(reportBytes).digest("hex"),
       provider: { kind: "deterministic-fake-responses", liveCalls: false, credentialsRead: false },
       assertions,
       windows: report.windows,
       evidence: report.evidence,
     };
-    await writeResult(options.outputDirectory, result);
+    await writeResult(caseDirectory, result);
     return result;
   } catch (error) {
     const result: ProcessChaosSmokeResult = {
@@ -144,13 +144,13 @@ export async function runProcessChaosSmoke(options: ProcessChaosSmokeOptions): P
       startedAt: startedAt.toISOString(),
       finishedAt: new Date().toISOString(),
       durationMs: Date.now() - startedAt.getTime(),
-      outputDirectory: options.outputDirectory,
+      outputDirectory: caseDirectory,
       provider: { kind: "deterministic-fake-responses", liveCalls: false, credentialsRead: false },
       assertions: emptyAssertions(),
       windows: [],
       error: error instanceof Error ? error.message : String(error),
     };
-    await writeResult(options.outputDirectory, result);
+    await writeResult(caseDirectory, result);
     throw error;
   }
 }
@@ -184,6 +184,10 @@ async function writeResult(outputDirectory: string, result: ProcessChaosSmokeRes
   await writeFile(path.join(outputDirectory, "smoke-result.json"), `${JSON.stringify(result, null, 2)}\n`, "utf8");
 }
 
+function resolveCaseDirectory(options: ProcessChaosSmokeOptions): string {
+  return path.join(options.outputDirectory, `process-chaos-${options.seed}`);
+}
+
 function requireValue(args: readonly string[], index: number, flag: string): string {
   const value = args[index];
   if (value === undefined || value.startsWith("--")) throw new Error(`${flag} requires a value`);
@@ -195,7 +199,7 @@ function usage(): string {
     "Usage: npm run process-chaos:smoke -- [options]",
     "  --dry-run             validate arguments and print the audit contract without spawning a Provider/App Server",
     `  --seed <safe-id>      deterministic case id (default: ${DEFAULT_SEED})`,
-    "  --out <directory>     output directory for report JSON and smoke-result.json",
+    "  --out <directory>     output root; artifacts are written below process-chaos-<seed>",
     `  --timeout-ms <ms>     bounded wall-clock timeout (default: ${DEFAULT_TIMEOUT_MS})`,
   ].join("\n");
 }

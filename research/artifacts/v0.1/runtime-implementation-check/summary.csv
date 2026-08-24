@@ -1,0 +1,5 @@
+benchmark,seed,shard,variant,cases,taskSuccess,recoverySuccess,duplicateModelCalls,duplicateToolEffects,unknownOutcome,evidenceCompleteness,wallClockTotalMs,p50Ms,p95Ms
+Runtime-E2E-GATE-30,20260819,1/1,baseline,30,1,1,0,0,0.166667,1,2807.352,74.293,218.457
+Runtime-E2E-GATE-30,20260819,1/1,no-wal,30,0.666667,1,10,5,0.333333,1,2079.353,49.334,174.26
+Runtime-E2E-GATE-30,20260819,1/1,no-recovery,30,0.166667,0.166667,0,0,0,0.5,1575.746,52.746,87.999
+Runtime-E2E-GATE-30,20260819,1/1,no-lease,30,0.766667,0.92,0,5,0.166667,0.877778,3756.834,113.941,267.061
