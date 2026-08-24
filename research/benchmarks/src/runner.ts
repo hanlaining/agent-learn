@@ -8,13 +8,17 @@ import type { BenchmarkReport, BenchmarkVariant } from "./types.js";
 
 export interface RunOptions {
   gate: 30 | 100;
+  seed?: number;
   shardIndex?: number;
   shardTotal?: number;
   variants?: BenchmarkVariant[];
 }
 
 export async function buildReport(options: RunOptions): Promise<BenchmarkReport> {
-  const fixture = await loadFixture(options.gate);
+  const loadedFixture = await loadFixture(options.gate);
+  const fixture = options.seed === undefined
+    ? loadedFixture
+    : { ...loadedFixture, seed: normalizeSeed(options.seed) };
   const shard = normalizeShard(options.shardIndex ?? 1, options.shardTotal ?? 1);
   const variants = options.variants ?? fixture.variants;
   const scenarios = generateScenarios(fixture)
@@ -40,6 +44,13 @@ export async function buildReport(options: RunOptions): Promise<BenchmarkReport>
   };
   validateBenchmarkReport(report);
   return report;
+}
+
+function normalizeSeed(seed: number): number {
+  if (!Number.isInteger(seed) || seed < 0 || seed > 0xffff_ffff) {
+    throw new Error(`Invalid seed ${seed}; expected an unsigned 32-bit integer`);
+  }
+  return seed;
 }
 
 export function serializeReport(report: BenchmarkReport): string {

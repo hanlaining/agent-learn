@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agent-learn.local/schemas/offline-benchmark-run-record-v1.json",
+  "title": "God-Agent offline benchmark run record",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "runId", "status", "startedAt", "finishedAt", "durationMs", "suite", "seed", "configName", "deterministicVerified", "taskCount", "executionCount", "artifacts", "summaries"],
+  "properties": {
+    "schemaVersion": { "const": "offline-benchmark-run-record-v1" },
+    "runId": { "type": "string", "minLength": 1 },
+    "status": { "const": "completed" },
+    "startedAt": { "type": "string", "format": "date-time" },
+    "finishedAt": { "type": "string", "format": "date-time" },
+    "durationMs": { "type": "number", "minimum": 0 },
+    "suite": { "enum": ["gate30", "gate100"] },
+    "seed": { "type": "integer", "minimum": 0, "maximum": 4294967295 },
+    "configName": { "type": "string", "minLength": 1 },
+    "deterministicVerified": { "type": "boolean" },
+    "taskCount": { "type": "integer", "minimum": 0 },
+    "executionCount": { "type": "integer", "minimum": 0 },
+    "artifacts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["manifest", "report", "summary", "cases"],
+      "properties": {
+        "manifest": { "const": "task-manifest.json" },
+        "report": { "const": "report.json" },
+        "summary": { "const": "summary.csv" },
+        "cases": { "const": "cases.csv" }
+      }
+    },
+    "summaries": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "benchmark-result.schema.json#/$defs/summary" }
+    }
+  }
+}

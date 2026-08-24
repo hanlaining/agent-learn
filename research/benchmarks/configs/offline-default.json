@@ -1,0 +1,10 @@
+{
+  "schemaVersion": "offline-benchmark-config-v1",
+  "name": "offline-default",
+  "variants": ["baseline", "no-wal", "no-recovery", "no-lease"],
+  "verifyDeterminism": true,
+  "shard": {
+    "index": 1,
+    "total": 1
+  }
+}
