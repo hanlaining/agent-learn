@@ -95,6 +95,8 @@ test("DesktopController 恢复历史并生成确定性任务标题", async () =>
   assert.equal(snapshot.messages.length, 2);
   assert.equal(snapshot.capabilities.tools.length, 1);
   assert.equal(snapshot.capabilities.skills.length, 1);
+  assert.equal(snapshot.capabilities.llmAdapter?.id, "openai-responses");
+  assert.equal(snapshot.capabilities.llmAdapter?.reasoningSummary, true);
 });
 
 test("点击新建任务只进入草稿，第一条消息发送时才创建 Thread", async () => {
@@ -430,6 +432,13 @@ class FakeDesktopRuntime implements DesktopRuntimeClient {
       { id: "gpt-5.6-sol", label: "GPT-5.6 Sol", reasoningEfforts: ["low", "medium", "high", "xhigh"] },
       { id: "gpt-5.6-terra", label: "GPT-5.6 Terra", reasoningEfforts: ["low", "medium", "high", "xhigh"] },
     ],
+    llmAdapter: {
+      id: "openai-responses",
+      toolCalling: true,
+      reasoningSummary: true,
+      hostedWebSearch: true,
+      previousResponseId: true,
+    },
     webSearch: true,
     tools: [{
       name: "read_file",

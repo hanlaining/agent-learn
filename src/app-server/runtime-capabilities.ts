@@ -21,10 +21,19 @@ export interface RuntimeModelCapability {
   reasoningEfforts?: string[];
 }
 
+export interface RuntimeLlmAdapterCapability {
+  id: string;
+  toolCalling: boolean;
+  reasoningSummary: boolean;
+  hostedWebSearch: boolean;
+  previousResponseId: boolean;
+}
+
 export interface RuntimeCapabilities {
   llm: boolean;
   currentModel?: string;
   models: RuntimeModelCapability[];
+  llmAdapter?: RuntimeLlmAdapterCapability;
   webSearch: boolean;
   tools: RuntimeToolCapability[];
   skills: RuntimeSkillCapability[];
@@ -51,6 +60,7 @@ export function isRuntimeCapabilities(
     (value.currentModel === undefined || isNonEmptyString(value.currentModel)) &&
     Array.isArray(value.models) &&
     value.models.every(isModel) &&
+    (value.llmAdapter === undefined || isLlmAdapter(value.llmAdapter)) &&
     typeof value.webSearch === "boolean" &&
     Array.isArray(value.tools) &&
     value.tools.every(isTool) &&
@@ -72,6 +82,9 @@ export function cloneRuntimeCapabilities(
       ? {}
       : { currentModel: value.currentModel }),
     models: value.models.map((model) => ({ ...model })),
+    ...(value.llmAdapter === undefined
+      ? {}
+      : { llmAdapter: { ...value.llmAdapter } }),
     webSearch: value.webSearch,
     tools: value.tools.map((tool) => ({ ...tool })),
     skills: value.skills.map((skill) => ({ ...skill })),
@@ -79,6 +92,17 @@ export function cloneRuntimeCapabilities(
     ...(value.agents === undefined ? {} : { agents: value.agents.map((agent) => ({ ...agent })) }),
     ...(value.multiAgent === undefined ? {} : { multiAgent: { ...value.multiAgent } }),
   };
+}
+
+function isLlmAdapter(
+  value: unknown,
+): value is RuntimeLlmAdapterCapability {
+  return isRecord(value) &&
+    isNonEmptyString(value.id) &&
+    typeof value.toolCalling === "boolean" &&
+    typeof value.reasoningSummary === "boolean" &&
+    typeof value.hostedWebSearch === "boolean" &&
+    typeof value.previousResponseId === "boolean";
 }
 
 function isModel(value: unknown): value is RuntimeModelCapability {

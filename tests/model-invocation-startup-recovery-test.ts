@@ -290,10 +290,16 @@ test("同一 response_received Turn 的两个并发恢复只允许一个执行�
 });
 
 test("App 启动代码必须构造 ModelInvocation 恢复器并等待调度完成", async () => {
-  const source = await readFile(
-    new URL("../src/app-server/main.ts", import.meta.url),
-    "utf8",
-  );
+  const [source, providerBootstrap] = await Promise.all([
+    readFile(
+      new URL("../src/app-server/main.ts", import.meta.url),
+      "utf8",
+    ),
+    readFile(
+      new URL("../src/llm/provider-bootstrap.ts", import.meta.url),
+      "utf8",
+    ),
+  ]);
   assert.match(
     source,
     /new\s+ModelInvocationStartupRecovery\s*\(/,
@@ -310,10 +316,11 @@ test("App 启动代码必须构造 ModelInvocation 恢复器并等待调度完�
     "App startup must never wire ModelInvocation recovery to AgentLoop.run",
   );
   assert.match(
-    source,
+    providerBootstrap,
     /new\s+OpenAiResponsesProvider\s*\(\s*\{[\s\S]*?maxRetries\s*:\s*0/,
-    "App WAL provider must dispatch each submitted invocation only once",
+    "Registered WAL provider must dispatch each submitted invocation only once",
   );
+  assert.match(source, /loadConfiguredLlmProvider\s*\(/);
 });
 
 test("Tool 成功但 ToolResult 落盘前崩溃时启动恢复必须阻断，不能重放副作用", async () => {

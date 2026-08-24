@@ -1176,6 +1176,9 @@ function cloneCapabilities(
       ? {}
       : { currentModel: capabilities.currentModel }),
     models: capabilities.models.map((model) => ({ ...model })),
+    ...(capabilities.llmAdapter === undefined
+      ? {}
+      : { llmAdapter: { ...capabilities.llmAdapter } }),
     webSearch: capabilities.webSearch,
     tools: capabilities.tools.map((tool) => ({ ...tool })),
     skills: capabilities.skills.map((skill) => ({ ...skill })),

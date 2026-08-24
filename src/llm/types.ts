@@ -107,3 +107,14 @@ export interface LlmProvider {
     request: LlmCreateResponseRequest,
   ): Promise<LlmResponse>;
 }
+
+/**
+ * 可由 Runtime 切换模型的 Provider 插座。
+ *
+ * Agent Core 继续只依赖 LlmProvider；App Server 的装配层在需要展示或切换
+ * 当前模型时使用这个更窄的可配置契约。
+ */
+export interface ConfigurableLlmProvider extends LlmProvider {
+  getModel(): string;
+  setModel(model: string): void;
+}

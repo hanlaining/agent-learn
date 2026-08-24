@@ -11,7 +11,8 @@ god-agent CLI
   -> JSONL / 双向 JSON-RPC App Server
   -> Thread / Turn / Item Lifecycle
   -> Context Builder / o200k Token Budget / Compaction
-  -> OpenAI Responses Provider / Summary SSE / Web Search
+  -> 通用模型插座 / OpenAI Responses / OpenAI-compatible Bridge
+  -> Summary SSE / Web Search（按 Adapter 能力声明）
   -> Tool Registry / Permission / Workspace Sandbox
   -> Runtime Persistence / Cancel / Timeout / Retry
   -> Skill Catalog / read_skill 渐进披露
@@ -24,13 +25,15 @@ god-agent CLI
 - Workspace 命令只能运行预注册配方，取消时终止独立子进程树。
 - Skill 默认从 `<workspace>/skills/<name>/SKILL.md` 加载，可用 `AGENT_SKILLS_PATH` 覆盖根目录。
 - MCP Server 由 `AGENT_MCP_CONFIG` 静态配置；Tool 使用 `mcp__<server>__<tool>` 命名并默认经过 CLI 审批。
+- 模型底座使用 `Profile → Adapter Registry → LlmProvider`：内置 `openai-responses` 与 `openai-compatible`，后者可连接 Gundam/LovBrowser Bridge、Ollama 和兼容中转。
 - 当前没有进入 Electron 或 Multi-Agent。
 
 最新本地基线：
 
 ```text
 npm run check  通过
-npm test       165/165 通过
+npm test       pretest 19/19 + 主测试 510/510 通过
+npm run test:electron  74/74 通过
 ```
 
 ## 目录结构
@@ -63,7 +66,7 @@ node bin/god-agent.js --help
 node bin/god-agent.js
 ```
 
-真实模型调用由本机环境变量提供 `OPENAI_API_KEY`；可选配置包括 `OPENAI_BASE_URL`、`OPENAI_MODEL`、`AGENT_WORKSPACE`、`AGENT_SKILLS_PATH`、`AGENT_STATE_PATH` 和指向 MCP JSON 配置的 `AGENT_MCP_CONFIG`。
+真实模型调用继续兼容本机环境变量 `OPENAI_API_KEY`、`OPENAI_BASE_URL`、`OPENAI_MODEL`。需要多上游插孔时，用 `AGENT_LLM_PROFILES_PATH` 指向仓库外的 Profile JSON，并用 `AGENT_LLM_PROFILE` 选择；详见[《通用模型插座》](./docs/通用模型插座.md)。其他可选配置包括 `AGENT_WORKSPACE`、`AGENT_SKILLS_PATH`、`AGENT_STATE_PATH` 和指向 MCP JSON 配置的 `AGENT_MCP_CONFIG`。
 
 API Key、Token、本机状态文件和敏感配置不得提交到仓库。
 

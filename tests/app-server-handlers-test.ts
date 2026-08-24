@@ -70,6 +70,7 @@ function createTestAppServer(options: {
   agentLoop?: Pick<AgentLoop, "run" | "cancel">;
   runtimeCapabilities?: RuntimeCapabilities;
   selectModel?: (model: string) => RuntimeCapabilities;
+  resolveModel?: (preferredModel?: string) => string;
   threadConfigs?: Map<string, PersistedThreadConfig>;
   agentRegistry?: AgentRegistry;
   workspaceSandbox?: {
@@ -124,6 +125,9 @@ function createTestAppServer(options: {
     ...(options.selectModel === undefined
       ? {}
       : { selectModel: options.selectModel }),
+    ...(options.resolveModel === undefined
+      ? {}
+      : { resolveModel: options.resolveModel }),
     ...(options.threadConfigs === undefined
       ? {}
       : { threadConfigs: options.threadConfigs }),
@@ -1381,6 +1385,13 @@ test("runtime/capabilities 返回安全能力目录", async () => {
       llm: true,
       currentModel: "gpt-5.6-sol",
       models: [{ id: "gpt-5.6-sol", label: "GPT-5.6 Sol" }],
+      llmAdapter: {
+        id: "openai-responses",
+        toolCalling: true,
+        reasoningSummary: true,
+        hostedWebSearch: true,
+        previousResponseId: true,
+      },
       webSearch: true,
       tools: [{
         name: "read_file",
@@ -1407,6 +1418,8 @@ test("runtime/capabilities 返回安全能力目录", async () => {
   const result = await resultPromise;
 
   assert.ok(isRuntimeCapabilities(result));
+  assert.equal(result.llmAdapter?.id, "openai-responses");
+  assert.equal(result.llmAdapter?.reasoningSummary, true);
   assert.equal(result.tools.length, 1);
   assert.equal(result.skills.length, 1);
   assert.equal(result.mcpServers.length, 1);
@@ -1450,6 +1463,86 @@ test("runtime/select-model 只通过受控选择器切换模型", async () => {
   await app.flushClientRequest();
   await rejection;
   assert.deepEqual(selected, ["gpt-5.6-terra"]);
+});
+
+test("turn/run 使用当前通用插座模型并拒绝目录外显式模型", async () => {
+  let selectedModel = "gundam-default";
+  const runModels: Array<string | undefined> = [];
+  const capabilities: RuntimeCapabilities = {
+    llm: true,
+    currentModel: selectedModel,
+    models: [
+      { id: "gundam-default", label: "Gundam Default" },
+      { id: "gundam-fast", label: "Gundam Fast" },
+    ],
+    webSearch: false,
+    tools: [],
+    skills: [],
+    mcpServers: [],
+  };
+  const app = createTestAppServer({
+    runtimeCapabilities: capabilities,
+    selectModel: (model) => {
+      selectedModel = model;
+      capabilities.currentModel = model;
+      return capabilities;
+    },
+    resolveModel: (preferred) =>
+      capabilities.models.some((model) => model.id === preferred)
+        ? preferred as string
+        : selectedModel,
+    agentRegistry: new AgentRegistry(),
+    agentLoop: {
+      cancel: () => false,
+      run: async (turnId, options) => {
+        runModels.push(options?.model);
+        const turn = app.store.getTurn(turnId)!;
+        const assistantMessage = app.store.appendItem(turnId, "assistant_message", { text: "ok" });
+        app.store.completeTurn(turnId);
+        return { turn: app.store.getTurn(turnId)!, assistantMessage };
+      },
+    },
+  });
+  await completeHandshake(app);
+  const threadRequest = app.client.sendRequest("thread/start");
+  await app.flushClientRequest();
+  const thread = await threadRequest;
+  assert.ok(isThread(thread));
+
+  const createTurn = async (input: string) => {
+    const request = app.client.sendRequest("turn/start", {
+      threadId: thread.id,
+      input,
+    });
+    await app.flushClientRequest();
+    const result = await request;
+    assert.ok(isTurnStartResult(result));
+    return result;
+  };
+
+  const first = await createTurn("first");
+  const firstRun = app.client.sendRequest("turn/run", { turnId: first.turn.id });
+  await app.flushClientRequest();
+  await firstRun;
+
+  const selection = app.client.sendRequest("runtime/select-model", { model: "gundam-fast" });
+  await app.flushClientRequest();
+  await selection;
+  const second = await createTurn("second");
+  const secondRun = app.client.sendRequest("turn/run", { turnId: second.turn.id });
+  await app.flushClientRequest();
+  await secondRun;
+
+  assert.deepEqual(runModels, ["gundam-default", "gundam-fast"]);
+
+  const third = await createTurn("third");
+  const invalidRun = app.client.sendRequest("turn/run", {
+    turnId: third.turn.id,
+    model: "unlisted-model",
+  });
+  const rejection = assert.rejects(invalidRun, /not available in the active LLM profile/);
+  await app.flushClientRequest();
+  await rejection;
 });
 
 test("握手完成前拒绝 thread/start", async () => {

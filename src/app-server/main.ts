@@ -9,8 +9,8 @@ import type {
   AgentEventSink,
 } from "../agent/events.js";
 import {
-  OpenAiResponsesProvider,
-} from "../llm/openai-responses.js";
+  loadConfiguredLlmProvider,
+} from "../llm/provider-bootstrap.js";
 import {
   loadMcpServerConfigs,
 } from "../mcp/mcp-config.js";
@@ -103,7 +103,6 @@ const connection = new JsonRpcConnection((data) => {
   process.stdout.write(data);
 });
 
-const apiKey = process.env.OPENAI_API_KEY;
 const mcpConfigPath = process.env.AGENT_MCP_CONFIG;
 
 // 默认状态进入用户数据目录，不在项目仓库产生运行时文件。
@@ -181,7 +180,7 @@ const persistParentContinuationState = () => executionLeaseCoordinator.withActiv
 
 // 与当前 Codex 客户端的已验证配置对齐；仍可用 OPENAI_MODEL 覆盖。
 const defaultModel = "gpt-5.6-sol";
-const modelCatalog: RuntimeModelCapability[] = [
+const defaultModelCatalog: RuntimeModelCapability[] = [
   { id: "gpt-5.6-sol", label: "GPT-5.6 Sol", reasoningEfforts: ["low", "medium", "high", "xhigh", "max", "ultra"] },
   { id: "gpt-5.6-terra", label: "GPT-5.6 Terra", reasoningEfforts: ["low", "medium", "high", "xhigh", "max", "ultra"] },
   { id: "gpt-5.6-luna", label: "GPT-5.6 Luna", reasoningEfforts: ["low", "medium", "high", "xhigh", "max"] },
@@ -190,10 +189,6 @@ const modelCatalog: RuntimeModelCapability[] = [
   { id: "gpt-5.4-mini", label: "GPT-5.4 Mini", reasoningEfforts: ["low", "medium", "high", "xhigh"] },
   { id: "gpt-5.2", label: "GPT-5.2", reasoningEfforts: ["low", "medium", "high", "xhigh"] },
 ];
-const configuredModel = process.env.OPENAI_MODEL ?? defaultModel;
-if (!modelCatalog.some((model) => model.id === configuredModel)) {
-  modelCatalog.push({ id: configuredModel, label: configuredModel });
-}
 const defaultBaseUrl = "https://llmapi.lovbrowser.com";
 
 // Runtime 估算与 Provider 最终断言共用同一输入策略，避免无状态回放成本漂移。
@@ -204,14 +199,34 @@ const providerInputPolicy = {
   functionOutputItemCost: 2 as const,
 };
 
-const configuredBaseUrl = (
-  process.env.OPENAI_BASE_URL ?? defaultBaseUrl
-).replace(/\/+$/, "");
+const configuredProvider = await loadConfiguredLlmProvider({
+  defaultModel,
+  defaultBaseUrl,
+  defaultModels: defaultModelCatalog,
+  inputPolicy: providerInputPolicy,
+});
+const llmProvider = configuredProvider.provider;
+const configuredModel = configuredProvider.profile.model;
+const modelCatalog: RuntimeModelCapability[] =
+  configuredProvider.models.map((model) => ({
+    id: model.id,
+    label: model.label ?? model.id,
+    ...(model.reasoningEfforts === undefined
+      ? {}
+      : { reasoningEfforts: [...model.reasoningEfforts] }),
+  }));
+const resolveConfiguredModel = (preferredModel?: string): string => {
+  const normalized = preferredModel?.trim();
 
-// 用户填写站点根地址即可；这里统一补成 OpenAI 兼容的 /v1 地址。
-const apiBaseUrl = configuredBaseUrl.endsWith("/v1")
-  ? configuredBaseUrl
-  : `${configuredBaseUrl}/v1`;
+  if (
+    normalized !== undefined &&
+    modelCatalog.some((candidate) => candidate.id === normalized)
+  ) {
+    return normalized;
+  }
+
+  return llmProvider?.getModel() ?? configuredModel;
+};
 
 const workspacePath =
   process.env.AGENT_WORKSPACE ?? process.cwd();
@@ -249,7 +264,7 @@ const runtimeCoordinator = new AgentRuntimeCoordinator({
   executionLeases: executionLeaseCoordinator,
 });
 
-if (apiKey !== undefined) {
+if (llmProvider !== undefined) {
   const npmExecutable =
     process.platform === "win32" ? "npm.cmd" : "npm";
   const commandRunner = await WorkspaceCommandRunner.create(
@@ -294,7 +309,7 @@ if (apiKey !== undefined) {
 
 // MCP Server 只从用户指定的静态配置启动；没有模型时不创建无消费者的子进程。
 const mcpManager =
-  apiKey === undefined || mcpConfigPath === undefined
+  llmProvider === undefined || mcpConfigPath === undefined
     ? undefined
     : await McpManager.start(
         await loadMcpServerConfigs(mcpConfigPath),
@@ -320,24 +335,6 @@ const events: AgentEventSink = {
   },
 };
 
-// 没有 Key 时协议和 Runtime 仍可启动，只有 turn/run 会明确报错。
-const llmProvider = apiKey === undefined
-  ? undefined
-  : new OpenAiResponsesProvider({
-      apiKey,
-      model: configuredModel,
-      baseUrl: apiBaseUrl,
-      // Model Invocation WAL 以一次 submitted 对应一次远端 dispatch。
-      // 网络错误、超时、429/5xx 均进入 outcome_unknown/显式处置，Provider
-      // 不得在同一 Invocation 内隐藏第二次 POST。
-      maxRetries: 0,
-      usePreviousResponseId: providerInputPolicy.usePreviousResponseId,
-      maxInputItems: providerInputPolicy.maxInputItems,
-      webSearch: {
-        externalWebAccess: true,
-        searchContextSize: "low",
-      },
-    });
 let multiAgentScheduler: MultiAgentScheduler | undefined;
 const sharedToolRegistry = new ToolRegistry([
   financeMonthlySummaryAgentTool,
@@ -352,7 +349,7 @@ const sharedToolRegistry = new ToolRegistry([
   }),
 ]);
 const agentLoop =
-  apiKey === undefined
+  llmProvider === undefined
     ? undefined
     : new AgentLoop({
         lifecycleStore,
@@ -383,7 +380,7 @@ const agentLoop =
         modelInvocationWal: {
           store: modelInvocationStore,
           persist: persistModelInvocationState,
-          provider: "openai_responses",
+          provider: configuredProvider.invocationProvider,
           defaultModel: configuredModel,
         },
         toolInvocationWal: {
@@ -426,7 +423,7 @@ const workflowTeamCoordinator = agentLoop === undefined ? undefined : new Workfl
     if (turn === undefined) throw new Error("Workflow execution Turn is unavailable");
     if (!ownsRootTurn) lifecycleStore.appendItem(turn.id, "user_message", { text: prompt });
     const result = await agentLoop.run(turn.id, {
-      model: profile.defaultModel,
+      model: resolveConfiguredModel(profile.defaultModel),
       reasoningEffort: profile.reasoningEffort,
       instructions: ownsRootTurn
         ? `${profile.instructions}\n\n你是 Workflow 的唯一最终交付者。只根据下面已验收的负责人 Return 回答用户一次；不得重新执行、委派或调用工具。\n\n${prompt}`
@@ -472,7 +469,7 @@ const workflowTeamCoordinator = agentLoop === undefined ? undefined : new Workfl
   },
   modelInfo: (profileId) => {
     const profile = agentRegistry.require(profileId);
-    return { model: profile.defaultModel, ...(profile.reasoningEffort === undefined ? {} : { reasoningEffort: profile.reasoningEffort }) };
+    return { model: resolveConfiguredModel(profile.defaultModel), ...(profile.reasoningEffort === undefined ? {} : { reasoningEffort: profile.reasoningEffort }) };
   },
   onRunUpdated: (runId) => {
     const run = agentRunStore.get(runId); const root = run === undefined ? undefined : agentRunStore.getRoot(runId);
@@ -669,7 +666,7 @@ if (agentLoop !== undefined) {
         turnId: turn.id,
         execute: async () => {
           const result = await agentLoop.run(turn.id, {
-            model: profile.defaultModel,
+            model: resolveConfiguredModel(profile.defaultModel),
             reasoningEffort: profile.reasoningEffort,
             instructions: profile.id === "reviewer"
               ? `${profile.instructions}\n\n你是叶子审查 Agent。输入已经包含验收所需的任务、条件和 Worker 结论；不得调用任何工具，也不得创建子 Agent。只返回一个 JSON 对象：{\"verdict\":\"pass\"|\"fail\",\"severity\":null|\"P0\"|\"P1\"|\"P2\"|\"P3\",\"summary\":\"可验证的审查结论\"}。`
@@ -700,7 +697,15 @@ const runtimeCapabilities: RuntimeCapabilities = {
   llm: agentLoop !== undefined,
   ...(llmProvider === undefined ? {} : { currentModel: llmProvider.getModel() }),
   models: llmProvider === undefined ? [] : modelCatalog,
-  webSearch: agentLoop !== undefined,
+  ...(llmProvider === undefined ? {} : {
+    llmAdapter: {
+      id: configuredProvider.adapterId,
+      ...configuredProvider.capabilities,
+    },
+  }),
+  webSearch:
+    agentLoop !== undefined &&
+    configuredProvider.capabilities.hostedWebSearch,
   tools: [
     ...toToolCapabilities(
       [financeMonthlySummaryAgentTool],
@@ -759,6 +764,20 @@ registerAppServerHandlers(connection, {
   events,
   ...(agentLoop === undefined ? {} : { agentLoop }),
   runtimeCapabilities,
+  ...(llmProvider === undefined ? {} : {
+    selectModel: (model: string) => {
+      if (!modelCatalog.some((candidate) => candidate.id === model)) {
+        throw new Error(`Model is not available in the active LLM profile: ${model}`);
+      }
+      llmProvider.setModel(model);
+      runtimeCapabilities.currentModel = model;
+      return runtimeCapabilities;
+    },
+    resolveModel: resolveConfiguredModel,
+  }),
+  ...(configuredProvider.unavailableReason === undefined
+    ? {}
+    : { llmUnavailableReason: configuredProvider.unavailableReason }),
   agentRunStore,
   agentRuntimeStore,
   agentRegistry,
@@ -870,7 +889,13 @@ if (pendingDynamicReturnCount > 0) {
 
 if (agentLoop === undefined) {
   process.stderr.write(
-    "[app-server] OPENAI_API_KEY missing; turn/run disabled\n",
+    `[app-server] ${configuredProvider.unavailableReason ??
+      "LLM provider unavailable"}; turn/run disabled\n`,
+  );
+} else {
+  process.stderr.write(
+    `[app-server] LLM profile ${configuredProvider.profile.id} ready via ` +
+      `${configuredProvider.adapterId}\n`,
   );
 }
 

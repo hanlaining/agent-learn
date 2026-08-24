@@ -36,14 +36,14 @@ export const PROVIDER_CAPABILITY_MATRIX: readonly ProviderCapabilityMatrixEntry[
   },
   {
     provider: "openai-compatible",
-    protocol: "OpenAI-compatible HTTP gateway",
-    idempotencyKey: "unknown",
-    requestStatusQuery: "unknown",
-    cancellation: "unknown",
-    retrySemantics: "需按具体网关文档确认；本项目只能安全地执行受上限约束的客户端重试。",
-    clientBehavior: "复用 OpenAI Responses 适配器时，行为与 openai-responses 相同；网关差异不会被推断。",
+    protocol: "OpenAI-compatible Chat Completions HTTP",
+    idempotencyKey: "not-wired",
+    requestStatusQuery: "not-wired",
+    cancellation: "not-wired",
+    retrySemantics: "生产 Adapter 不隐藏重试；一次 WAL submitted 只发送一次 POST。Smoke 的 retry 只验证显式诊断路径。",
+    clientBehavior: "OpenAiChatCompletionsProvider 使用 AbortSignal 取消单次 /chat/completions 请求，不实现状态查询或远端取消端点。",
     exactlyOnceClaim: "not-claimed",
-    evidence: "兼容网关不是一个统一 Provider；没有针对具体 base URL 的协议证据时保持 unknown。",
+    evidence: "src/llm/openai-chat-completions.ts 只发送 POST /chat/completions，未发送 Idempotency-Key，也未实现状态查询或 Provider 取消端点。",
   },
 ] as const;
 
@@ -234,6 +234,16 @@ export function validateLiveProviderSmokeConfig(
   if (findProviderMatrix(config.provider) === undefined) {
     errors.push(`provider is not registered: ${config.provider}`);
   }
+  if (
+    config.provider === "openai-compatible" &&
+    config.operations.some(
+      (operation) => operation === "status" || operation === "cancel",
+    )
+  ) {
+    errors.push(
+      "openai-compatible does not expose status/cancel operations",
+    );
+  }
   return errors;
 }
 
@@ -386,6 +396,33 @@ function createSmokeRequest(
   };
   if (config.apiKey !== undefined && config.mode === "live") {
     headers.authorization = `Bearer ${config.apiKey}`;
+  }
+  if (config.provider === "openai-compatible") {
+    if (operation === "status" || operation === "cancel") {
+      throw new Error(
+        `openai-compatible does not support ${operation} smoke operation`,
+      );
+    }
+    return {
+      url: `${baseUrl}/chat/completions`,
+      init: {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          model: config.model,
+          messages: [
+            { role: "system", content: "Return a short smoke acknowledgement." },
+            { role: "user", content: "provider smoke" },
+          ],
+          stream: false,
+        }),
+      },
+      estimatedCostUsd:
+        config.mode === "live"
+          ? config.maxRequestCostUsd ?? 0
+          : 0,
+      operation,
+    };
   }
   if (operation === "status") {
     return { url: `${baseUrl}/responses/${encodeURIComponent(responseId)}`, init: { method: "GET", headers }, estimatedCostUsd: 0, operation };
