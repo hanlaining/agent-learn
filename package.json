@@ -16,6 +16,8 @@
     "test:team-live": "tsx scripts/team-runtime-live-baseline.ts",
     "test:benchmarks": "tsx --test research/benchmarks/tests/gate-benchmark-test.ts",
     "test:runtime-e2e": "tsx --test tests/runtime-e2e-gate-test.ts",
+    "test:process-chaos": "tsx --test tests/process-chaos-smoke-test.ts",
+    "process-chaos:smoke": "tsx scripts/process-chaos-smoke.ts",
     "test:capacity": "tsx --test tests/capacity/runtime-capacity-test.ts tests/capacity/runtime-duration-capacity-test.ts",
     "capacity:runtime": "tsx scripts/bench/runtime-capacity.ts",
     "capacity:runtime:smoke": "tsx scripts/bench/runtime-capacity.ts --levels 20,100 --label s0-s1-smoke",
