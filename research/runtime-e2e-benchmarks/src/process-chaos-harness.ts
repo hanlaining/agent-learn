@@ -61,6 +61,7 @@ export async function runProcessChaosHarness(outputDirectory: string, seed: stri
   let operationError: unknown;
 
   try {
+    await mkdir(transientPath, { recursive: true });
     await Promise.all([
       mkdir(workspacePath, { recursive: true }),
       mkdir(plansPath, { recursive: true }),
