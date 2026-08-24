@@ -1,0 +1,60 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agent-learn.local/schemas/offline-benchmark-task-manifest-v1.json",
+  "title": "God-Agent offline benchmark task manifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "suite", "benchmark", "seed", "generatorVersion", "config", "taskCount", "executionCount", "tasks"],
+  "properties": {
+    "schemaVersion": { "const": "offline-benchmark-task-manifest-v1" },
+    "suite": { "enum": ["gate30", "gate100"] },
+    "benchmark": { "enum": ["GATE-30", "GATE-100"] },
+    "seed": { "type": "integer", "minimum": 0, "maximum": 4294967295 },
+    "generatorVersion": { "const": "gate-generator-v1" },
+    "config": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "variants", "shard"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "variants": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "$ref": "#/$defs/variant" } },
+        "shard": { "$ref": "#/$defs/shard" }
+      }
+    },
+    "taskCount": { "type": "integer", "minimum": 0 },
+    "executionCount": { "type": "integer", "minimum": 0 },
+    "tasks": { "type": "array", "items": { "$ref": "#/$defs/task" } }
+  },
+  "$defs": {
+    "variant": { "enum": ["baseline", "no-wal", "no-recovery", "no-lease"] },
+    "shard": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["index", "total"],
+      "properties": {
+        "index": { "type": "integer", "minimum": 1 },
+        "total": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "task": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["caseId", "caseIndex", "seed", "category", "crashPoint", "childCount", "duplicateDeliveries", "contended", "sideEffectful", "evidenceRequired", "inputTokensPerModelCall", "outputTokensPerModelCall", "baseLatencyMs"],
+      "properties": {
+        "caseId": { "type": "string", "minLength": 1 },
+        "caseIndex": { "type": "integer", "minimum": 0 },
+        "seed": { "type": "integer", "minimum": 0, "maximum": 4294967295 },
+        "category": { "enum": ["crash-recovery", "parent-child", "duplicate-delivery", "side-effect-safety", "completion-quality"] },
+        "crashPoint": { "enum": ["none", "after-model", "after-tool", "parent-waiting"] },
+        "childCount": { "type": "integer", "minimum": 0 },
+        "duplicateDeliveries": { "type": "integer", "minimum": 0 },
+        "contended": { "type": "boolean" },
+        "sideEffectful": { "type": "boolean" },
+        "evidenceRequired": { "type": "integer", "minimum": 0 },
+        "inputTokensPerModelCall": { "type": "integer", "minimum": 0 },
+        "outputTokensPerModelCall": { "type": "integer", "minimum": 0 },
+        "baseLatencyMs": { "type": "integer", "minimum": 0 }
+      }
+    }
+  }
+}

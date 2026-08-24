@@ -38,7 +38,7 @@
 - `p50/p95 latency`：确定性逻辑延迟的 nearest-rank 分位数，单位毫秒。
 - `tokens/cost estimate`：包含重复调用在内的输入/输出 token 总数，以及 fixture 固定费率估算。
 
-JSON 报告由 `schema/benchmark-result.schema.json` 描述，并在写盘前通过同版本运行时校验器。CSV 同时输出逐配置摘要和逐 case 数据。
+JSON 报告由 `schema/benchmark-result.schema.json` 描述；任务清单和运行记录分别由 `schema/task-manifest.schema.json` 与 `schema/run-record.schema.json` 描述。三类 JSON 均在写盘前通过同版本运行时校验器。CSV 同时输出逐配置摘要和逐 case 数据。
 
 ## 4. 运行方法
 
@@ -48,6 +48,15 @@ JSON 报告由 `schema/benchmark-result.schema.json` 描述，并在写盘前通
 npm run benchmark:gate30
 npm run benchmark:gate100
 ```
+
+科研闭环统一入口支持显式 suite、配置、seed、dry-run 与输出目录：
+
+```powershell
+npm run benchmark:offline -- --suite gate30 --dry-run
+npm run benchmark:offline -- --suite gate30 --config research/benchmarks/configs/offline-default.json --seed 20260824 --output research/benchmarks/results/offline-gate30
+```
+
+`--config` 指向通过校验的 JSON 配置；未提供时使用 `configs/offline-default.json`。dry-run 只生成并校验内存中的任务 manifest，不执行场景、不写文件。正式运行除原有报告外，还生成 `task-manifest.json` 与 `run-record.json`，分别固定本次任务集和记录执行状态/产物索引。
 
 两个命令默认先做字节级确定性复跑，再写入 `research/benchmarks/results/gate-*-seed-*`。GATE-100 可分片：
 
@@ -79,6 +88,8 @@ npm run check
 - `summary.csv`：每个配置一行，适合论文主表。
 - `cases.csv`：每个配置 × case 一行，适合置信区间、配对检验和误差分析。
 - `repro/*.json`：所有失败样本的最小复现包。
+- `task-manifest.json`：suite、seed、配置、分片和逐任务输入的可复现清单。
+- `run-record.json`：执行时间、确定性校验状态、任务/执行数和产物索引。
 
 比较消融时应使用配对分析，因为所有配置共享同一 case。当前 runner 给出描述统计，不自动宣称显著性；论文阶段可对 `cases.csv` 做 bootstrap 置信区间或 McNemar 配对检验，并记录脚本版本。
 
