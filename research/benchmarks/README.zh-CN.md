@@ -42,6 +42,29 @@ JSON 报告由 `schema/benchmark-result.schema.json` 描述，并在写盘前通
 
 ## 4. 运行方法
 
+### 4.1 统一离线入口
+
+科研脚本统一通过 `scripts/run-offline-benchmark.ts` 调度。GATE-30 的任务清单固定在
+`task-manifest.json`，每次运行会在输出目录写入 `run-record.json`，记录 suite、seed、配置、
+任务清单版本和报告位置。运行记录的结构由 `schema/run-record.schema.json` 描述。
+
+```powershell
+# 只检查计划，不创建文件
+npm run benchmark:offline -- --suite gate30 --dry-run
+
+# 跑完整 GATE-30，并指定可复现 seed 和输出目录
+npm run benchmark:offline -- --suite gate30 --config all --seed 20260818 --output .tmp/gate30
+
+# 只跑一个配置
+npm run benchmark:offline -- --suite gate30 --config baseline --output .tmp/gate30-baseline
+```
+
+`--config` 支持 `baseline`、`no-wal`、`no-recovery`、`no-lease` 的逗号分隔组合，或使用
+`all`。`--seed` 只替换 fixture 的随机种子，不改变任务数量、类别分配和比较费率。
+`--dry-run` 不执行场景，也不会写入输出目录；正常运行会复用下方既有报告格式，并额外生成
+`run-record.json`。输出目录建议使用 `.tmp/` 或 `research/benchmarks/results/` 下的目录，后者
+已由仓库规则排除生成结果。
+
 在仓库根目录执行：
 
 ```powershell

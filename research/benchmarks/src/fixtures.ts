@@ -12,11 +12,15 @@ import {
 
 const BENCHMARK_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
-export async function loadFixture(gate: 30 | 100): Promise<GateFixture> {
+export async function loadFixture(gate: 30 | 100, seedOverride?: number): Promise<GateFixture> {
   const filename = path.join(BENCHMARK_ROOT, "fixtures", `gate-${gate}.json`);
   const value: unknown = JSON.parse(await readFile(filename, "utf8"));
   assertFixture(value, gate);
-  return value;
+  if (seedOverride === undefined) return value;
+  if (!Number.isInteger(seedOverride) || seedOverride < 0) {
+    throw new Error("Fixture seed override must be a non-negative integer");
+  }
+  return { ...value, seed: seedOverride };
 }
 
 export function generateScenarios(fixture: GateFixture): BenchmarkScenario[] {

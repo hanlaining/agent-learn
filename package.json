@@ -14,6 +14,7 @@
     "test:electron": "tsx --test tests/electron-app-server-client-test.ts tests/electron-desktop-controller-test.ts tests/electron-runtime-ui-test.ts tests/electron-preview-server-test.ts tests/electron-browser-manager-test.ts",
     "test:team-live": "tsx scripts/team-runtime-live-baseline.ts",
     "test:benchmarks": "tsx --test research/benchmarks/tests/gate-benchmark-test.ts",
+    "benchmark:offline": "tsx scripts/run-offline-benchmark.ts",
     "benchmark:gate30": "tsx research/benchmarks/src/cli.ts --gate 30 --verify-determinism",
     "benchmark:gate100": "tsx research/benchmarks/src/cli.ts --gate 100 --verify-determinism",
     "dev": "tsx src/cli/main.ts",

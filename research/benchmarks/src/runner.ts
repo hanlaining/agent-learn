@@ -8,13 +8,14 @@ import type { BenchmarkReport, BenchmarkVariant } from "./types.js";
 
 export interface RunOptions {
   gate: 30 | 100;
+  seed?: number;
   shardIndex?: number;
   shardTotal?: number;
   variants?: BenchmarkVariant[];
 }
 
 export async function buildReport(options: RunOptions): Promise<BenchmarkReport> {
-  const fixture = await loadFixture(options.gate);
+  const fixture = await loadFixture(options.gate, options.seed);
   const shard = normalizeShard(options.shardIndex ?? 1, options.shardTotal ?? 1);
   const variants = options.variants ?? fixture.variants;
   const scenarios = generateScenarios(fixture)

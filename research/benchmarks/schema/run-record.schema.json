@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agent-learn.local/schemas/offline-run-record-v1.json",
+  "title": "God-Agent offline benchmark run record",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "runId", "suite", "benchmark", "seed", "configs", "dryRun", "taskManifest", "startedAt", "completedAt", "reportPath", "summaries"],
+  "properties": {
+    "schemaVersion": { "const": "offline-run-record-v1" },
+    "runId": { "type": "string", "minLength": 1 },
+    "suite": { "type": "string", "minLength": 1 },
+    "benchmark": { "enum": ["GATE-30", "GATE-100"] },
+    "seed": { "type": "integer", "minimum": 0 },
+    "configs": { "type": "array", "items": { "enum": ["baseline", "no-wal", "no-recovery", "no-lease"] }, "minItems": 1, "uniqueItems": true },
+    "dryRun": { "type": "boolean" },
+    "taskManifest": { "type": "string", "minLength": 1 },
+    "startedAt": { "type": "string", "format": "date-time" },
+    "completedAt": { "type": "string", "format": "date-time" },
+    "reportPath": { "type": ["string", "null"] },
+    "summaries": { "type": "array", "items": { "type": "object" } }
+  }
+}
