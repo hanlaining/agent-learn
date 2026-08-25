@@ -140,10 +140,30 @@ button { color: inherit; }
 .brand-mark, .empty-logo {
   display: grid;
   place-items: center;
-  color: #fff;
-  background: #20201e;
+  color: #27343b;
+  background: transparent;
   font-weight: 700;
 }
+
+.sidebar-brand {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+  padding: 13px 11px 5px;
+  color: var(--main-text);
+}
+
+.sidebar-brand .brand-mark {
+  width: 27px;
+  height: 27px;
+  flex: 0 0 auto;
+  border: 0;
+  border-radius: 50%;
+}
+
+.sidebar-brand .brand-mark svg { width: 27px; height: 27px; display: block; }
+.sidebar-brand strong { font-size: 12px; letter-spacing: -.01em; }
 
 .desktop-layout {
   display: grid;
@@ -1043,7 +1063,8 @@ button { color: inherit; }
 .center-state strong { color: var(--main-text); font-size: 16px; }
 .center-state p { margin: 0; font-size: 11px; }
 
-.empty-logo { width: 34px; height: 34px; border-radius: 10px; }
+.empty-logo { width: 46px; height: 46px; border-radius: 50%; }
+.empty-logo svg { width: 46px; height: 46px; display: block; }
 
 .composer-area {
   min-width: 0;

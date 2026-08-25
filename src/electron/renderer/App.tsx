@@ -691,6 +691,11 @@ export function App() {
               if (event.key === "Home") resetThreePaneWidths();
             }}
           />
+          <div className="sidebar-brand" aria-label="GodAgent">
+            <span className="brand-mark" aria-hidden="true"><GodAgentMark /></span>
+            <strong>GodAgent</strong>
+          </div>
+
           <div className="sidebar-actions">
             <button
               className="new-task-button"
@@ -2065,8 +2070,19 @@ function RuntimeEmptyState({ status }: { status: RuntimeStatus }) {
   return <div className="center-state"><CircleDashed /><strong>{status.message}</strong><p>App Server 完成安全握手后会恢复任务历史。</p></div>;
 }
 
+function GodAgentMark() {
+  return (
+    <svg className="godagent-mark" viewBox="0 0 32 32" role="img" aria-label="GodAgent" fill="none">
+      <circle cx="16" cy="16" r="15" fill="#27343b" />
+      <path d="M22.4 10.3A9.1 9.1 0 1 0 23.6 20" stroke="#e3eded" strokeWidth="2.1" strokeLinecap="round" />
+      <path d="M16 16h7.2v5.6" stroke="#e3eded" strokeWidth="2.1" strokeLinecap="round" strokeLinejoin="round" />
+      <circle cx="9.8" cy="10.4" r="1.35" fill="#91d7ad" />
+    </svg>
+  );
+}
+
 function EmptyConversation() {
-  return <div className="center-state"><span className="empty-logo">g</span><strong>今天想构建什么？</strong><p>在下方输入任务，或者从左侧选择历史记录。</p></div>;
+  return <div className="center-state"><span className="empty-logo"><GodAgentMark /></span><strong>今天想构建什么？</strong><p>在下方输入任务，或者从左侧选择历史记录。</p></div>;
 }
 
 function useStoredBoolean(key: string, fallback: boolean) {
