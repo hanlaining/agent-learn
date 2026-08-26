@@ -13,6 +13,7 @@ import type {
   DesktopReasoningEffort,
   DesktopWorkspaceSearchResult,
   DesktopResolveOutcomeUnknownInput,
+  DesktopKnowledgeDistillResult,
 } from "../desktop-types.js";
 
 declare module "*.css";
@@ -54,6 +55,8 @@ declare global {
         reworkEngineeringChat(taskId: string, reason: string): Promise<DesktopSnapshot>;
         advanceFixedProduct(expectedStage: import("../../agents/fixed-software-team-coordinator.js").FixedProductStage): Promise<DesktopSnapshot>;
         openPlan(path: string): Promise<boolean>;
+        distillThreadToKnowledge(kind: "skill" | "sop"): Promise<DesktopKnowledgeDistillResult>;
+        openGeneratedPath(path: string): Promise<boolean>;
         sendMessage(input: DesktopMessageInput): Promise<DesktopSendResult>;
         searchWorkspaceFiles(query: string): Promise<DesktopWorkspaceSearchResult>;
         cancelTurn(): Promise<boolean>;

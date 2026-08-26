@@ -244,6 +244,24 @@ export interface DesktopSendResult {
   turnId: string;
 }
 
+export interface DesktopKnowledgeDistillResult {
+  kind: "skill" | "sop";
+  status: "created" | "already_exists";
+  name: string;
+  description: string;
+  path: string;
+  capabilities: RuntimeCapabilities;
+}
+
+export function isDesktopKnowledgeDistillResult(value: unknown): value is DesktopKnowledgeDistillResult {
+  return isRecord(value) &&
+    (value.kind === "skill" || value.kind === "sop") &&
+    (value.status === "created" || value.status === "already_exists") &&
+    typeof value.name === "string" && /^[a-z0-9]+(?:-[a-z0-9]+)*$/u.test(value.name) && value.name.length <= 64 &&
+    typeof value.description === "string" && typeof value.path === "string" && value.path.length <= 600 &&
+    isRuntimeCapabilitiesLike(value.capabilities);
+}
+
 export interface DesktopPermissionRequest {
   turnId: string;
   threadId?: string;

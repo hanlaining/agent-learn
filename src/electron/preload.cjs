@@ -17,6 +17,8 @@ const DESKTOP_DESIGN_FEEDBACK_CHANNEL = "desktop:design-feedback";
 const DESKTOP_ENGINEERING_REWORK_CHANNEL = "desktop:engineering-rework";
 const DESKTOP_ADVANCE_FIXED_PRODUCT_CHANNEL = "desktop:advance-fixed-product";
 const DESKTOP_OPEN_PLAN_CHANNEL = "desktop:open-plan";
+const DESKTOP_DISTILL_THREAD_KNOWLEDGE_CHANNEL = "desktop:distill-thread-knowledge";
+const DESKTOP_OPEN_GENERATED_PATH_CHANNEL = "desktop:open-generated-path";
 const PREVIEW_GET_STATUS_CHANNEL = "preview:get-status";
 const PREVIEW_START_CHANNEL = "preview:start";
 const PREVIEW_STOP_CHANNEL = "preview:stop";
@@ -437,6 +439,16 @@ function sanitizeCapabilities(value) {
   });
 }
 
+function sanitizeKnowledgeDistillResult(value) {
+  if (!isRecord(value) || (value.kind !== "skill" && value.kind !== "sop") ||
+    (value.status !== "created" && value.status !== "already_exists") ||
+    typeof value.name !== "string" || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(value.name) || value.name.length > 64 ||
+    typeof value.description !== "string" || typeof value.path !== "string" || value.path.length > 600) {
+    throw new Error("沉淀操作返回无效结果");
+  }
+  return Object.freeze({ kind: value.kind, status: value.status, name: safeText(value.name, 64), description: safeText(value.description, 500), path: safeText(value.path, 600), capabilities: sanitizeCapabilities(value.capabilities) });
+}
+
 function sanitizeDesktopEvent(value) {
   if (!isRecord(value) || typeof value.type !== "string") {
     return undefined;
@@ -836,6 +848,14 @@ contextBridge.exposeInMainWorld("godAgent", {
     openPlan: async (path) => {
       if (typeof path !== "string") throw new TypeError("Plan path must be a string");
       return Boolean(await invoke(DESKTOP_OPEN_PLAN_CHANNEL, path));
+    },
+    distillThreadToKnowledge: async (kind) => {
+      if (kind !== "skill" && kind !== "sop") throw new TypeError("Knowledge kind must be skill or sop");
+      return sanitizeKnowledgeDistillResult(await invoke(DESKTOP_DISTILL_THREAD_KNOWLEDGE_CHANNEL, kind));
+    },
+    openGeneratedPath: async (path) => {
+      if (typeof path !== "string" || path.length === 0 || path.length > 600) throw new TypeError("Generated path must be a string");
+      return Boolean(await invoke(DESKTOP_OPEN_GENERATED_PATH_CHANNEL, path));
     },
     sendMessage: async (input) => {
       const safeInput = sanitizeMessageInput(input);

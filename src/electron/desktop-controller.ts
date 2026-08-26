@@ -42,6 +42,7 @@ import type {
   DesktopThreadSummary,
   DesktopTurnState,
   DesktopWorkspaceSearchResult,
+  DesktopKnowledgeDistillResult,
 } from "./desktop-types.js";
 import { DEFAULT_AGENT_TEAM_CONFIG, normalizeAgentTeamConfig, type AgentTeamConfig } from "../agents/agent-runtime.js";
 
@@ -61,6 +62,7 @@ export interface DesktopRuntimeClient {
   reworkEngineeringChat?(threadId: string, taskId: string, reason: string): Promise<unknown>;
   readThreadHistory(threadId: string): Promise<ThreadHistoryResult>;
   getCapabilities(): Promise<RuntimeCapabilities>;
+  distillThreadKnowledge?(threadId: string, kind: "skill" | "sop"): Promise<DesktopKnowledgeDistillResult>;
   searchWorkspaceFiles?(query: string): Promise<DesktopWorkspaceSearchResult>;
   selectModel(model: string): Promise<RuntimeCapabilities>;
   startTurn(threadId: string, input: string, context?: Omit<DesktopMessageInput, "text">): Promise<TurnStartResult>;
@@ -115,6 +117,7 @@ export class DesktopController {
   private capabilitiesLoaded = false;
   private persistentStateLoaded = false;
   private readonly removeAgentListener: () => void;
+  private readonly knowledgeDistillations = new Map<string, Promise<DesktopKnowledgeDistillResult>>();
 
   constructor(private readonly runtime: DesktopRuntimeClient) {
     this.removeAgentListener = runtime.onAgentEvent((event) => {
@@ -327,6 +330,19 @@ export class DesktopController {
     active.agentTeam = normalizeAgentTeamConfig({ ...(active.agentTeam ?? DEFAULT_AGENT_TEAM_CONFIG), ...config });
     await this.persistActiveConfig(active);
     return this.getSnapshot();
+  }
+
+  async distillActiveThreadToKnowledge(kind: "skill" | "sop"): Promise<DesktopKnowledgeDistillResult> {
+    const threadId = this.activeThreadId;
+    if (threadId === undefined || this.newThreadDraft) throw new Error("当前没有可沉淀的 Chat");
+    if (isRunningState(this.runsByThread.get(threadId)?.state ?? "idle")) throw new Error("当前 Job 正在运行，暂时不能沉淀");
+    if (this.runtime.distillThreadKnowledge === undefined) throw new Error("当前 Runtime 不支持 SOP / Skill 沉淀");
+    const key = `${threadId}:${kind}`;
+    const existing = this.knowledgeDistillations.get(key);
+    if (existing !== undefined) return existing;
+    const request = this.runtime.distillThreadKnowledge(threadId, kind);
+    this.knowledgeDistillations.set(key, request);
+    try { return await request; } finally { if (this.knowledgeDistillations.get(key) === request) this.knowledgeDistillations.delete(key); }
   }
 
   async renameThread(threadId: string, title: string): Promise<DesktopSnapshot> {

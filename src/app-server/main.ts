@@ -45,9 +45,7 @@ import {
 import {
   WorkspaceCommandRunner,
 } from "../sandbox/workspace-command-runner.js";
-import {
-  SkillLoader,
-} from "../skills/skill-loader.js";
+import { SkillRuntime } from "../skills/skill-runtime.js";
 import {
   financeMonthlySummaryAgentTool,
 } from "../tools/finance-monthly-summary-tool.js";
@@ -240,16 +238,19 @@ const configuredSkillRoots =
     // 默认发现当前用户已有的个人 Skills；项目同名项优先。
     join(homedir(), ".codex", "skills"),
   ];
-const skillLoader = await SkillLoader.create({
+const skillRuntime = await SkillRuntime.create({
   roots: configuredSkillRoots,
+  writableRoot: configuredSkillRoots[0] ?? join(workspacePath, "skills"),
+  sopWritableRoot: join(workspacePath, "docs", "generated-sops"),
   allowMissingRoots: true,
-  duplicatePolicy: "keep_first",
-  // 个人目录可能遗留旧编码或 Codex 专用 Skill；单个坏文件不能让 God 启动失败。
-  tolerateInvalidRoots: [join(homedir(), ".codex", "skills")],
-  legacyEncodingRoots: [join(homedir(), ".codex", "skills")],
+  loaderOptions: {
+    duplicatePolicy: "keep_first",
+    tolerateInvalidRoots: [join(homedir(), ".codex", "skills")],
+    legacyEncodingRoots: [join(homedir(), ".codex", "skills")],
+  },
 });
-const skillCatalogInstructions =
-  skillLoader.createCatalogInstructions();
+const skillLoader = skillRuntime.getLoader();
+const skillCatalogInstructions = skillRuntime.createCatalogInstructions();
 const workspaceSandbox = await WorkspaceSandbox.create(workspacePath);
 const workspaceTools: AgentTool[] = [];
 const agentRegistry = new AgentRegistry(
@@ -801,6 +802,13 @@ registerAppServerHandlers(connection, {
   },
   workspaceSandbox,
   skillNames: skillLoader.list().map((skill) => skill.name),
+  ...(llmProvider === undefined ? {} : {
+    distillThreadKnowledge: async (messages: readonly import("../skills/chat-skill-distiller.js").DistillableChatMessage[], kind: import("../skills/skill-runtime.js").KnowledgeOutputKind) => {
+      const result = await skillRuntime.distillThreadKnowledge(llmProvider, messages, kind);
+      runtimeCapabilities.skills = skillRuntime.list();
+      return { ...result, capabilities: runtimeCapabilities };
+    },
+  }),
   waitForStartupRecovery: () => startupRecoveryPromise,
   ...(executionEngineRouter === undefined ? {} : { executionEngineRouter }),
   softwareProductDeliveryWorkflowVersion: process.env.AGENT_SOFTWARE_PRODUCT_DELIVERY_WORKFLOW_VERSION === "software_product_delivery_v2"
