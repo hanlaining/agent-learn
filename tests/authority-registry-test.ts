@@ -92,3 +92,14 @@ test("C01 createAuthorityRegistry 返回不受输入后续 mutation 影响的深
   assert.equal(Object.isFrozen(stable[0]), true);
   assert.equal(Object.isFrozen(stable[0]!.permittedWriters), true);
 });
+
+test("C01 Authority 注册项的 kind、Store、恢复源和 Completion Proof 状态逐项 fail closed", () => {
+  const mutate = (kind: string, changes: Record<string, unknown>) => AUTHORITY_REGISTRY.map((entry) =>
+    entry.kind === kind ? { ...entry, ...changes } : entry) as readonly AuthorityRegistration[];
+  assert.throws(() => assertAuthorityRegistry(mutate("job", { kind: "unknown" })), /Invalid authority kind/);
+  assert.throws(() => assertAuthorityRegistry(mutate("job", { authoritativeStore: "UnknownStore" })), /Invalid authoritative store/);
+  assert.throws(() => assertAuthorityRegistry(mutate("job", { recoverySource: "" })), /Authority recovery source is empty/);
+  assert.throws(() => assertAuthorityRegistry(mutate("completion_proof", { permittedWriters: ["AgentRuntimeStore"] })), /writer does not own completion_proof/);
+  assert.throws(() => assertAuthorityRegistry(mutate("completion_proof", { persistenceDomain: "runtime" })), /cannot have persistence/);
+  assert.throws(() => assertAuthorityWriteAllowed("unknown" as never, "AgentRuntimeStore"), /not registered/);
+});

@@ -11,9 +11,66 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
+import { CliAgentEventRenderer, extractReasoningHeader, formatReasoningSummary } from "../src/cli/main.js";
+import type { AgentEvent } from "../src/agent/events.js";
+
+test("CLI Renderer 覆盖公开事件、摘要、Citation 去重和终态清理", () => {
+  const writes: string[] = [];
+  const originalWrite = process.stdout.write;
+  const originalLog = console.log;
+  process.stdout.write = ((chunk: string | Uint8Array) => { writes.push(String(chunk)); return true; }) as typeof process.stdout.write;
+  console.log = (...args: unknown[]) => { writes.push(args.map(String).join(" ")); };
+  try {
+    const renderer = new CliAgentEventRenderer(false);
+    renderer.beginTurn();
+    const events: AgentEvent[] = [
+      { type: "turn/started", threadId: "thread-1", turnId: "turn-1" },
+      { type: "model/started", turnId: "turn-1", round: 0 },
+      { type: "reasoning/summary_part_added", turnId: "turn-1", round: 0, summaryIndex: 0 },
+      { type: "reasoning/summary_delta", turnId: "turn-1", round: 0, summaryIndex: 0, delta: "**检查**\n正文" },
+      { type: "reasoning/summary_completed", turnId: "turn-1", round: 0 },
+      { type: "web_search/started", turnId: "turn-1", callId: "search" },
+      { type: "web_search/searching", turnId: "turn-1", callId: "search" },
+      { type: "web_search/completed", turnId: "turn-1", callId: "search" },
+      { type: "citation/url_added", turnId: "turn-1", title: "Docs", url: "https://example.test", startIndex: 0, endIndex: 1 },
+      { type: "citation/url_added", turnId: "turn-1", title: "Duplicate", url: "https://example.test", startIndex: 0, endIndex: 1 },
+      { type: "model/output_text_delta", turnId: "turn-1", round: 0, delta: "答案" },
+      { type: "model/output_text_completed", turnId: "turn-1", round: 0, classification: "assistant", text: "答案" },
+      { type: "model/completed", turnId: "turn-1", round: 0, functionCallCount: 0 },
+      { type: "permission/requested", turnId: "turn-1", callId: "call", toolName: "read_file" },
+      { type: "permission/decided", turnId: "turn-1", callId: "call", toolName: "read_file", decision: "allow" },
+      { type: "tool/started", turnId: "turn-1", callId: "call", toolName: "read_file" },
+      { type: "tool/completed", turnId: "turn-1", callId: "call", toolName: "read_file" },
+      { type: "context/compacted", turnId: "turn-1", beforeTokens: 10, afterTokens: 5 },
+      { type: "turn/completed", turnId: "turn-1" },
+      { type: "turn/interrupted", turnId: "turn-1", message: "cancelled" },
+      { type: "turn/timed_out", turnId: "turn-1", message: "timeout" },
+      { type: "turn/failed", turnId: "turn-1", message: "failed" },
+    ];
+    for (const event of events) renderer.render(event);
+    assert.equal(renderer.receivedAssistantDelta, true);
+    assert.match(writes.join("\n"), /Sources:/);
+
+    const debugRenderer = new CliAgentEventRenderer(true);
+    debugRenderer.render({ type: "model/started", turnId: "turn-1", round: 1 });
+    debugRenderer.render({ type: "reasoning/summary_delta", turnId: "turn-1", round: 1, summaryIndex: 0, delta: "debug" });
+    debugRenderer.render({ type: "model/output_text_delta", turnId: "turn-1", round: 1, delta: "debug-answer" });
+    debugRenderer.render({ type: "model/completed", turnId: "turn-1", round: 1, functionCallCount: 2 });
+    debugRenderer.render({ type: "web_search/completed", turnId: "turn-1", callId: "search", query: "q" });
+    debugRenderer.render({ type: "turn/failed", turnId: "turn-1", message: "safe" });
+    assert.match(writes.join("\n"), /\[Model\] round 2 started/);
+  } finally {
+    process.stdout.write = originalWrite;
+    console.log = originalLog;
+  }
+  assert.equal(extractReasoningHeader("** Header ** body"), "Header");
+  assert.equal(extractReasoningHeader("no header"), undefined);
+  assert.equal(formatReasoningSummary("** Header **\nbody"), "• body");
+  assert.equal(formatReasoningSummary(""), undefined);
+});
 
 test("god-agent 可执行入口直接输出版本", async () => {
   const result = await runProcess(
@@ -460,6 +517,7 @@ function createSmokeEnvironment(
 ): NodeJS.ProcessEnv {
   const environment: NodeJS.ProcessEnv = {
     AGENT_STATE_PATH: statePath,
+    AGENT_SKILLS_PATH: join(dirname(statePath), "skills"),
   };
 
   // 只继承 Node/tsx 启动所需的系统变量，明确不继承任何 Provider Key。

@@ -1,5 +1,6 @@
 import { homedir } from "node:os";
-import { delimiter, dirname, join } from "node:path";
+import { delimiter, dirname, isAbsolute, join } from "node:path";
+import { access, writeFile } from "node:fs/promises";
 
 import { JsonRpcConnection } from "../protocol/connection.js";
 import {
@@ -56,6 +57,13 @@ import {
   type AgentTool,
 } from "../tools/tool-registry.js";
 import {
+  PROCESS_CHAOS_LOCAL_EFFECT_TOOL_NAME,
+  createProcessChaosLocalEffectTool,
+  effectToolExecution,
+  queryProcessChaosEffect,
+  type ProcessChaosEffectRecord,
+} from "../tools/process-chaos-local-effect-tool.js";
+import {
   createRunCommandTool,
 } from "../tools/run-command-tool.js";
 import {
@@ -63,7 +71,6 @@ import {
 } from "../tools/read-skill-tool.js";
 import {
   createWorkspaceTools,
-  assertWorkspacePathWithinTaskScope,
 } from "../tools/workspace-tools.js";
 import {
   applyAgentModeToTools,
@@ -71,6 +78,8 @@ import {
   buildParentAgentInstructions,
   registerAppServerHandlers,
   routeTeamConfigForExecutionKind,
+  intersectCapabilities,
+  replaceArrayContents,
 } from "./handlers.js";
 import { DEFAULT_AGENT_TEAM_CONFIG } from "../agents/agent-runtime.js";
 import { AgentRegistry } from "../agents/agent-registry.js";
@@ -92,6 +101,7 @@ import { RequirementPlanWriter } from "../requirements/requirement-plan-writer.j
 import { RequirementDesignWriter } from "../requirements/requirement-design-writer.js";
 import { isDesignConfirmed, isRequirementConfirmed } from "../requirements/requirement.js";
 import { V3ProductDeliveryCoordinator } from "../execution/v3-product-delivery-coordinator.js";
+import { createWriteAuthorization } from "./write-authorization.js";
 import type {
   RuntimeCapabilities,
   RuntimeModelCapability,
@@ -170,10 +180,18 @@ const persistToolInvocationState = () => executionLeaseCoordinator.withActiveFen
   "tool_commit",
   () => persistRuntimeStateUnfenced(),
 );
-const persistWorkflowState = () => executionLeaseCoordinator.withActiveFencedCommit(
-  "workflow_stage",
-  () => persistRuntimeStateUnfenced(),
-);
+let processChaosLeadReturnPauseObserved = false;
+let processChaosModelResponsePauseObserved = false;
+let processChaosWorkflowStagePauseObserved = false;
+let processChaosExternalEffectPauseObserved = false;
+let processChaosReceiptOrProofPauseObserved = false;
+const persistWorkflowState = async () => {
+  await executionLeaseCoordinator.withActiveFencedCommit(
+    "workflow_stage",
+    () => persistRuntimeStateUnfenced(),
+  );
+  await pauseAtProcessChaosLeadReturnBoundary();
+};
 const persistParentContinuationState = () => executionLeaseCoordinator.withActiveFencedCommit(
   "parent_continuation",
   () => persistRuntimeStateUnfenced(),
@@ -272,17 +290,11 @@ if (apiKey !== undefined) {
 
   workspaceTools.push(
     ...createWorkspaceTools(workspaceSandbox, {
-      authorizeWrite: ({ turnId, path }) => {
-        if (turnId === undefined) return;
-        const run = agentRunStore.getByTurn(turnId);
-        const task = run?.taskId === undefined ? undefined : agentRuntimeStore.getTask(run.taskId);
-        const job = run === undefined ? undefined : agentRuntimeStore.getJob(run.jobId);
-        if (job?.workflowVersion !== "software_product_delivery_v3") return;
-        const requirement = job.requirementId === undefined ? undefined : requirementStore.get(job.requirementId);
-        if (!isDesignConfirmed(requirement)) throw new Error("Design confirmation is required before write_file");
-        if (task === undefined) throw new Error("V3 write_file requires a bound Task");
-        assertWorkspacePathWithinTaskScope(path, task.scope);
-      },
+      authorizeWrite: createWriteAuthorization({
+        runStore: agentRunStore,
+        runtimeStore: agentRuntimeStore,
+        requirementStore,
+      }),
     }),
     createRunCommandTool(commandRunner),
   );
@@ -339,8 +351,10 @@ const llmProvider = apiKey === undefined
       },
     });
 let multiAgentScheduler: MultiAgentScheduler | undefined;
+const processChaosLocalEffectTool = createConfiguredProcessChaosLocalEffectTool();
 const sharedToolRegistry = new ToolRegistry([
   financeMonthlySummaryAgentTool,
+  ...(processChaosLocalEffectTool === undefined ? [] : [processChaosLocalEffectTool]),
   ...workspaceTools,
   ...mcpTools,
   ...createSharedBoardTools(agentRuntimeStore, agentRunStore),
@@ -386,6 +400,8 @@ const agentLoop =
           provider: "openai_responses",
           defaultModel: configuredModel,
         },
+        afterModelResponsePersisted: pauseAtProcessChaosModelResponseBoundary,
+        afterToolResultPersisted: pauseAtProcessChaosReceiptOrProofBoundary,
         toolInvocationWal: {
           store: toolInvocationStore,
           persist: persistToolInvocationState,
@@ -470,6 +486,7 @@ const workflowTeamCoordinator = agentLoop === undefined ? undefined : new Workfl
   commitRecoveredModelExecution: (invocationId, targetCommitKey) => {
     modelInvocationStore.markCommitted(invocationId, targetCommitKey);
   },
+  beforeStageResultCommit: pauseAtProcessChaosWorkflowStageBoundary,
   modelInfo: (profileId) => {
     const profile = agentRegistry.require(profileId);
     return { model: profile.defaultModel, ...(profile.reasoningEffort === undefined ? {} : { reasoningEffort: profile.reasoningEffort }) };
@@ -721,6 +738,7 @@ const runtimeCapabilities: RuntimeCapabilities = {
   }),
 };
 
+await reconcileProcessChaosLocalEffectOutcome();
 const modelInvocationStartupRecovery = new ModelInvocationStartupRecovery({
   lifecycleStore,
   modelInvocationStore,
@@ -934,13 +952,6 @@ process.stdin.on("end", () => {
 
 process.stderr.write("[app-server] ready\n");
 
-function intersectCapabilities(left: readonly string[], right: readonly string[] | undefined): string[] {
-  const actualRight = right ?? ["*"];
-  if (left.includes("*")) return [...actualRight];
-  if (actualRight.includes("*")) return [...left];
-  return left.filter((item) => actualRight.includes(item));
-}
-
 function collectToolReceipts(itemIds: readonly string[]): Array<{ name: string; ok: boolean; exitCode?: number }> {
   return itemIds.flatMap((itemId) => {
     const item = lifecycleStore.getItem(itemId);
@@ -957,6 +968,248 @@ function collectToolReceipts(itemIds: readonly string[]): Array<{ name: string; 
   });
 }
 
-function replaceArrayContents<T>(target: T[], source: readonly T[]): void {
-  target.splice(0, target.length, ...source);
+function createConfiguredProcessChaosLocalEffectTool(): AgentTool | undefined {
+  if (process.env.NODE_ENV !== "test") return undefined;
+  const helperBaseUrl = process.env.PROCESS_CHAOS_TEST_ONLY_EFFECT_HELPER_URL;
+  const experimentDirectory = process.env.PROCESS_CHAOS_TEST_ONLY_EXPERIMENT_DIRECTORY;
+  if (helperBaseUrl === undefined && experimentDirectory === undefined) return undefined;
+  if (helperBaseUrl === undefined || experimentDirectory === undefined) {
+    throw new Error("Process Chaos local effect Tool requires helper URL and experiment directory");
+  }
+  return createProcessChaosLocalEffectTool({
+    helperBaseUrl,
+    experimentDirectory,
+    afterEffectObserved: pauseAtProcessChaosExternalEffectBoundary,
+  });
+}
+
+async function reconcileProcessChaosLocalEffectOutcome(): Promise<void> {
+  if (processChaosLocalEffectTool === undefined) return;
+  let changed = false;
+  for (const invocation of toolInvocationStore.list().filter((item) =>
+    item.toolName === PROCESS_CHAOS_LOCAL_EFFECT_TOOL_NAME && item.status === "executing")) {
+    const parent = modelInvocationStore.get(invocation.modelInvocationId);
+    const call = parent?.normalizedResult?.functionCalls.find((item) => item.callId === invocation.callId &&
+      item.name === PROCESS_CHAOS_LOCAL_EFFECT_TOOL_NAME);
+    if (call === undefined) throw new Error("Process Chaos executing Tool has no persisted parent call");
+    const input = JSON.parse(call.arguments) as unknown;
+    if (typeof input !== "object" || input === null || Array.isArray(input) ||
+      (input as Record<string, unknown>).action !== "create_effect" ||
+      typeof (input as Record<string, unknown>).operationId !== "string") {
+      throw new Error("Process Chaos executing Tool cannot be reconciled from persisted arguments");
+    }
+    const record = await queryProcessChaosEffect(
+      process.env.PROCESS_CHAOS_TEST_ONLY_EFFECT_HELPER_URL!,
+      String((input as Record<string, unknown>).operationId),
+    );
+    const execution = effectToolExecution("effect_created", record);
+    toolInvocationStore.recordResult(invocation.toolInvocationId, {
+      result: execution.result,
+      output: JSON.stringify(execution.modelOutput),
+    });
+    changed = true;
+  }
+  if (changed) await persistToolInvocationState();
+}
+
+async function pauseAtProcessChaosExternalEffectBoundary(record: ProcessChaosEffectRecord): Promise<void> {
+  if (processChaosExternalEffectPauseObserved || process.env.NODE_ENV !== "test" ||
+    process.env.PROCESS_CHAOS_TEST_ONLY_FAULT_WINDOW !== "FW-TOOL-EFFECT-RECEIPT") return;
+  const invocation = toolInvocationStore.list().find((item) =>
+    item.toolName === PROCESS_CHAOS_LOCAL_EFFECT_TOOL_NAME && item.status === "executing");
+  if (invocation === undefined) return;
+  processChaosExternalEffectPauseObserved = true;
+  await pauseAtProcessChaosControlBoundary({
+    windowId: "FW-TOOL-EFFECT-RECEIPT",
+    marker: {
+      toolInvocationId: invocation.toolInvocationId,
+      toolInvocationStatus: invocation.status,
+      operationId: record.operationId,
+      effectId: record.effectId,
+      effectDigest: record.effectDigest,
+      receiptId: record.receipt.receiptId,
+      receiptDigest: record.receipt.receiptDigest,
+      proofId: record.proof.proofId,
+      proofDigest: record.proof.proofDigest,
+    },
+  });
+}
+
+async function pauseAtProcessChaosReceiptOrProofBoundary(input: {
+  turnId: string;
+  modelInvocationId: string;
+  toolInvocationId: string;
+  toolName: string;
+  callId: string;
+  result: unknown;
+}): Promise<void> {
+  if (processChaosReceiptOrProofPauseObserved || process.env.NODE_ENV !== "test" ||
+    input.toolName !== PROCESS_CHAOS_LOCAL_EFFECT_TOOL_NAME || typeof input.result !== "object" ||
+    input.result === null || Array.isArray(input.result)) return;
+  const action = (input.result as Record<string, unknown>).action;
+  const windowId = process.env.PROCESS_CHAOS_TEST_ONLY_FAULT_WINDOW;
+  if (windowId === "FW-RECEIPT-COMMIT" && action !== "effect_created" ||
+    windowId === "FW-PROOF-COMMIT" && action !== "proof_verified" ||
+    windowId !== "FW-RECEIPT-COMMIT" && windowId !== "FW-PROOF-COMMIT") return;
+  const invocation = toolInvocationStore.get(input.toolInvocationId);
+  if (invocation?.status !== "result_received") return;
+  const result = input.result as Record<string, unknown>;
+  const receipt = result.receipt as Record<string, unknown> | undefined;
+  const proof = result.proof as Record<string, unknown> | undefined;
+  processChaosReceiptOrProofPauseObserved = true;
+  await pauseAtProcessChaosControlBoundary({
+    windowId,
+    marker: {
+      turnId: input.turnId,
+      modelInvocationId: input.modelInvocationId,
+      toolInvocationId: input.toolInvocationId,
+      toolInvocationStatus: invocation.status,
+      action,
+      operationId: result.operationId,
+      effectId: result.effectId,
+      receiptId: receipt?.receiptId,
+      receiptDigest: receipt?.receiptDigest,
+      proofId: proof?.proofId,
+      proofDigest: proof?.proofDigest,
+    },
+  });
+}
+
+async function pauseAtProcessChaosModelResponseBoundary(input: {
+  threadId: string;
+  turnId: string;
+  invocationId: string;
+  purpose: string;
+}): Promise<void> {
+  if (processChaosModelResponsePauseObserved || process.env.NODE_ENV !== "test" ||
+    process.env.PROCESS_CHAOS_TEST_ONLY_FAULT_WINDOW !== "FW-MODEL-RESPONSE-COMMIT") return;
+  const invocation = modelInvocationStore.get(input.invocationId);
+  if (invocation?.status !== "response_received" || invocation.turnId !== input.turnId ||
+    invocation.threadId !== input.threadId) return;
+  processChaosModelResponsePauseObserved = true;
+  await pauseAtProcessChaosControlBoundary({
+    windowId: "FW-MODEL-RESPONSE-COMMIT",
+    marker: {
+      turnId: input.turnId,
+      threadId: input.threadId,
+      invocationId: input.invocationId,
+      invocationStatus: invocation.status,
+      purpose: input.purpose,
+    },
+  });
+}
+
+async function pauseAtProcessChaosWorkflowStageBoundary(input: {
+  jobId: string;
+  runId: string;
+  stageId: "product" | "engineering" | "quality";
+  stageAttempt: number;
+}): Promise<void> {
+  if (processChaosWorkflowStagePauseObserved || process.env.NODE_ENV !== "test" ||
+    process.env.PROCESS_CHAOS_TEST_ONLY_FAULT_WINDOW !== "FW-WORKFLOW-STAGE-COMMIT" ||
+    input.stageId !== "product" || input.stageAttempt !== 1) return;
+  const invocation = modelInvocationStore.list().find((item) =>
+    item.jobId === input.jobId && item.stageId === input.stageId &&
+    item.stageAttempt === input.stageAttempt && item.status === "committed");
+  const checkpoint = agentRuntimeStore.listStageCheckpoints(input.jobId).find((item) =>
+    item.stageId === input.stageId && item.stageAttempt === input.stageAttempt);
+  if (invocation === undefined || checkpoint?.status !== "running") return;
+  processChaosWorkflowStagePauseObserved = true;
+  await pauseAtProcessChaosControlBoundary({
+    windowId: "FW-WORKFLOW-STAGE-COMMIT",
+    marker: {
+      jobId: input.jobId,
+      runId: input.runId,
+      stageId: input.stageId,
+      stageAttempt: input.stageAttempt,
+      invocationId: invocation.invocationId,
+      invocationStatus: invocation.status,
+      checkpointStatus: checkpoint.status,
+      checkpointKey: checkpoint.idempotencyKey,
+    },
+  });
+}
+
+async function pauseAtProcessChaosControlBoundary(input: {
+  windowId:
+    | "FW-MODEL-RESPONSE-COMMIT"
+    | "FW-TOOL-EFFECT-RECEIPT"
+    | "FW-WORKFLOW-STAGE-COMMIT"
+    | "FW-RECEIPT-COMMIT"
+    | "FW-PROOF-COMMIT";
+  marker: Record<string, unknown>;
+}): Promise<void> {
+  const controlDirectory = process.env.PROCESS_CHAOS_TEST_ONLY_CONTROL_DIRECTORY;
+  if (controlDirectory === undefined || !isAbsolute(controlDirectory)) {
+    throw new Error("Process Chaos test-only control directory must be absolute");
+  }
+  const role = process.env.PROCESS_CHAOS_TEST_ONLY_ROLE ?? "original-owner";
+  if (role !== "original-owner") {
+    throw new Error(`Unsupported Process Chaos test-only role for ${input.windowId}: ${role}`);
+  }
+  await writeFile(join(controlDirectory, "fault-point.json"), `${JSON.stringify({
+    schemaVersion: "process-chaos-test-only-fault-point-v1",
+    windowId: input.windowId,
+    role,
+    pid: process.pid,
+    ...input.marker,
+  }, null, 2)}\n`, { encoding: "utf8", flag: "wx" });
+  const releasePath = join(controlDirectory, "release");
+  while (true) {
+    try {
+      await access(releasePath);
+      return;
+    } catch {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+  }
+}
+
+async function pauseAtProcessChaosLeadReturnBoundary(): Promise<void> {
+  if (processChaosLeadReturnPauseObserved || process.env.NODE_ENV !== "test" ||
+    process.env.PROCESS_CHAOS_TEST_ONLY_FAULT_WINDOW !== "FW-RETURN-PERSISTED-CONSUME" &&
+    process.env.PROCESS_CHAOS_TEST_ONLY_FAULT_WINDOW !== "FW-LEASE-FENCED-COMMIT") return;
+  const controlDirectory = process.env.PROCESS_CHAOS_TEST_ONLY_CONTROL_DIRECTORY;
+  if (controlDirectory === undefined || !isAbsolute(controlDirectory)) {
+    throw new Error("Process Chaos test-only control directory must be absolute");
+  }
+  const role = process.env.PROCESS_CHAOS_TEST_ONLY_ROLE ?? "original-owner";
+  const leadReturn = agentRuntimeStore.listReturns().find((item) => item.stageId === "lead" &&
+    (role === "successor-terminal"
+      ? item.status === "consumed" && item.attempts === 1
+      : item.status === "ready" && item.attempts === 0));
+  if (leadReturn === undefined) return;
+  const job = agentRuntimeStore.getJob(leadReturn.jobId);
+  const qualityReturn = agentRuntimeStore.listReturns(leadReturn.jobId).find((item) =>
+    item.stageId === "quality" && item.status === "delivering");
+  const lease = executionLeaseCoordinator.currentContext();
+  if (job === undefined) return;
+  const atRequestedBoundary = role === "successor-terminal"
+    ? job.status === "completed"
+    : job.status === "waiting_returns" && qualityReturn !== undefined;
+  if (!atRequestedBoundary || lease === undefined) return;
+
+  processChaosLeadReturnPauseObserved = true;
+  await writeFile(join(controlDirectory, "fault-point.json"), `${JSON.stringify({
+    schemaVersion: "process-chaos-test-only-fault-point-v1",
+    windowId: process.env.PROCESS_CHAOS_TEST_ONLY_FAULT_WINDOW,
+    role,
+    pid: process.pid,
+    jobId: job.id,
+    returnId: leadReturn.id,
+    returnStatus: leadReturn.status,
+    returnAttempts: leadReturn.attempts,
+    ownerId: lease.ownerId,
+    leaseVersion: lease.leaseVersion,
+    fencingToken: lease.fencingToken,
+  }, null, 2)}\n`, { encoding: "utf8", flag: "wx" });
+  const releasePath = join(controlDirectory, "release");
+  while (true) {
+    try {
+      await access(releasePath);
+      return;
+    } catch {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+  }
 }

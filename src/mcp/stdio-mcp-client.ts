@@ -38,6 +38,7 @@ import {
 } from "./mcp-protocol.js";
 
 const DEFAULT_REQUEST_TIMEOUT_MS = 10_000;
+const DEFAULT_DISCOVERY_TIMEOUT_MS = 10_000;
 const CLOSE_TIMEOUT_MS = 1_000;
 
 export interface McpStdioClientOptions {
@@ -47,6 +48,8 @@ export interface McpStdioClientOptions {
   clientInfo?: McpImplementation;
   protocolVersion?: string;
   requestTimeoutMs?: number;
+  /** Startup discovery/legacy initialize may have a separate budget from tool calls. */
+  discoveryTimeoutMs?: number;
 }
 
 type ClientState = "open" | "closing" | "closed";
@@ -72,6 +75,7 @@ export class McpStdioClient {
     private readonly preferredProtocolVersion: string,
     private readonly clientInfo: McpImplementation,
     private readonly requestTimeoutMs: number,
+    private readonly discoveryTimeoutMs: number,
   ) {
     this.activeProtocolVersion = preferredProtocolVersion;
     child.stdout.setEncoding("utf8");
@@ -120,6 +124,8 @@ export class McpStdioClient {
     };
     const requestTimeoutMs =
       options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
+    const discoveryTimeoutMs =
+      options.discoveryTimeoutMs ?? DEFAULT_DISCOVERY_TIMEOUT_MS;
     const child = spawn(
       options.command,
       [...(options.args ?? [])],
@@ -138,6 +144,7 @@ export class McpStdioClient {
       protocolVersion,
       clientInfo,
       requestTimeoutMs,
+      discoveryTimeoutMs,
     );
 
     try {
@@ -272,6 +279,8 @@ export class McpStdioClient {
       const result = await this.sendRequest(
         "server/discover",
         {},
+        undefined,
+        this.discoveryTimeoutMs,
       );
       const discovery = parseMcpDiscovery(result);
 
@@ -308,7 +317,7 @@ export class McpStdioClient {
       protocolVersion: MCP_LEGACY_PROTOCOL_VERSION,
       capabilities: {},
       clientInfo: { ...this.clientInfo },
-    });
+    }, undefined, this.discoveryTimeoutMs);
     const discovery = parseLegacyMcpInitializeResult(result);
 
     if (
@@ -332,6 +341,7 @@ export class McpStdioClient {
     method: string,
     params: Record<string, unknown>,
     signal?: AbortSignal,
+    timeoutMs = this.requestTimeoutMs,
   ): Promise<unknown> {
     this.assertOpen();
     if (signal?.aborted === true) {
@@ -363,7 +373,7 @@ export class McpStdioClient {
         id,
         new Error(`MCP request timed out: ${method}`),
       );
-    }, this.requestTimeoutMs);
+    }, timeoutMs);
 
     const handleAbort = () => {
       this.cancelPendingRequest(
@@ -518,6 +528,13 @@ function validateOptions(options: McpStdioClientOptions): void {
   if (!Number.isInteger(timeout) || timeout <= 0) {
     throw new Error(
       "MCP requestTimeoutMs must be a positive integer",
+    );
+  }
+  const discoveryTimeout =
+    options.discoveryTimeoutMs ?? DEFAULT_DISCOVERY_TIMEOUT_MS;
+  if (!Number.isInteger(discoveryTimeout) || discoveryTimeout <= 0) {
+    throw new Error(
+      "MCP discoveryTimeoutMs must be a positive integer",
     );
   }
 }

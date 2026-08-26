@@ -1,0 +1,61 @@
+{
+  "schemaVersion": "rt95-independent-reproduction-report-v1",
+  "reproductionId": "REPRO-REPLACE",
+  "status": "NotVerified",
+  "executorId": "non-author-executor-handle",
+  "producerId": "author-producer-handle",
+  "reviewerId": "non-author-reviewer-handle",
+  "independence": {
+    "executorDiffersFromProducer": true,
+    "reviewerDiffersFromProducer": true,
+    "executionMode": "blind-independent",
+    "authorAssistance": "none-or-recorded",
+    "resultDirectoryStartedEmpty": true
+  },
+  "candidateBinding": {
+    "commit": "REPLACE_WITH_NONZERO_40_HEX_COMMIT",
+    "sourceTreeSha256": "REPLACE_WITH_64_HEX_SHA256",
+    "preregistrationSha256": "REPLACE_WITH_64_HEX_SHA256",
+    "casePlanSha256": "REPLACE_WITH_64_HEX_SHA256"
+  },
+  "environment": {
+    "machineOrVmId": "REPLACE_WITH_NON_SECRET_HANDLE",
+    "osAndVersion": "REPLACE_WITH_OS_VERSION",
+    "runtimeVersions": "REPLACE_WITH_NODE_NPM_AND_TOOL_VERSIONS",
+    "dependencyLockSha256": "REPLACE_WITH_64_HEX_SHA256",
+    "environmentManifestPath": "reproduction/environment.json",
+    "environmentManifestSha256": "REPLACE_WITH_64_HEX_SHA256"
+  },
+  "execution": {
+    "sopPath": "REPLACE_WITH_FROZEN_SOP_PATH",
+    "sopSha256": "REPLACE_WITH_64_HEX_SHA256",
+    "commandLogPath": "reproduction/command-log.txt",
+    "commandLogSha256": "REPLACE_WITH_64_HEX_SHA256",
+    "startedAt": "YYYY-MM-DDTHH:MM:SSZ",
+    "finishedAt": "YYYY-MM-DDTHH:MM:SSZ",
+    "plannedCaseCount": 0,
+    "terminalCaseCount": 0
+  },
+  "outputs": {
+    "rawPath": "reproduction/raw.json",
+    "rawSha256": "REPLACE_WITH_64_HEX_SHA256",
+    "statisticsPath": "reproduction/statistics.json",
+    "statisticsSha256": "REPLACE_WITH_64_HEX_SHA256",
+    "failureLedgerPath": "reproduction/failure-ledger.json",
+    "failureLedgerSha256": "REPLACE_WITH_64_HEX_SHA256"
+  },
+  "comparison": {
+    "caseSetMatches": false,
+    "digestMatches": false,
+    "failureRetentionChecked": false,
+    "differences": [],
+    "resolution": "pending-independent-review"
+  },
+  "signoff": {
+    "executorSignedAt": null,
+    "reviewerSignedAt": null,
+    "reviewEvidencePath": "reproduction/reviewer-report.json",
+    "reviewEvidenceSha256": "REPLACE_WITH_64_HEX_SHA256"
+  },
+  "notes": "The author may answer procedural questions but must not run commands, edit outputs, delete failures, or replace the executor. Guided runs are not blind-independent and must be labeled guided."
+}

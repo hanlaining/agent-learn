@@ -1,0 +1,76 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/hanlaining/god-agent/research/runtime-e2e-benchmarks/schema/process-chaos-gate40-manifest.schema.json",
+  "title": "God Agent Process Chaos GATE-40 candidate pilot manifest",
+  "description": "Fail-closed local-pilot inventory. The eight-window preregistration is not frozen, so this schema forbids completeGate40 or formally verified cases.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion", "gateId", "lifecycle", "preregistration", "claimBoundary", "plannedCaseCount",
+    "runnableCaseCount", "localPassedCaseCount", "localFailedCaseCount", "blockedCaseCount",
+    "formallyVerifiedCaseCount", "completeGate40", "independentReview", "cases"
+  ],
+  "properties": {
+    "schemaVersion": { "const": "process-chaos-gate40-pilot-v1" },
+    "gateId": { "const": "EXP-RT95-032" },
+    "lifecycle": { "const": "candidate-not-frozen" },
+    "preregistration": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "observedStatus", "frozenDigest", "eightWindowListFrozen"],
+      "properties": {
+        "path": { "const": "research/rt95-closure/preregistration.draft.example.json" },
+        "observedStatus": { "const": "draft" },
+        "frozenDigest": { "type": "null" },
+        "eightWindowListFrozen": { "const": false }
+      }
+    },
+    "claimBoundary": { "const": "local-pilot-only-not-gate40" },
+    "plannedCaseCount": { "const": 40 },
+    "runnableCaseCount": { "const": 40 },
+    "localPassedCaseCount": { "type": "integer", "minimum": 0, "maximum": 40 },
+    "localFailedCaseCount": { "type": "integer", "minimum": 0, "maximum": 40 },
+    "blockedCaseCount": { "const": 0 },
+    "formallyVerifiedCaseCount": { "const": 0 },
+    "completeGate40": { "const": false },
+    "independentReview": { "const": "NotReviewed" },
+    "cases": {
+      "type": "array",
+      "minItems": 40,
+      "maxItems": 40,
+      "items": { "$ref": "#/$defs/case" }
+    }
+  },
+  "$defs": {
+    "case": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "caseId", "windowId", "seed", "oracleId", "reproCommand", "status", "oracleSatisfied",
+        "rawCasePath", "rawReportPath", "failureReportPath", "blockedReason"
+      ],
+      "properties": {
+        "caseId": { "type": "string", "pattern": "^G40-W0[1-8]-S0[1-5]$" },
+        "windowId": {
+          "enum": [
+            "FW-MODEL-RESPONSE-COMMIT", "FW-TOOL-EFFECT-RECEIPT", "FW-RETURN-RESPONSE-LEASE",
+            "FW-RETURN-PERSISTED-CONSUME", "FW-LEASE-FENCED-COMMIT", "FW-WORKFLOW-STAGE-COMMIT",
+            "FW-RECEIPT-COMMIT", "FW-PROOF-COMMIT"
+          ]
+        },
+        "seed": { "enum": ["469816031", "3443330994", "4121183031", "3314624278", "3472974415"] },
+        "oracleId": { "type": "string", "pattern": "^ORACLE-[A-Z0-9-]+-V1$" },
+        "reproCommand": {
+          "type": "string",
+          "pattern": "^npm exec -- tsx research/runtime-e2e-benchmarks/src/process-chaos-cli\\.ts --window FW-[A-Z0-9-]+ --seed [0-9]+ --output <directory>$"
+        },
+        "status": { "enum": ["not-run", "blocked", "passed-local-pilot", "failed-local-pilot"] },
+        "oracleSatisfied": { "type": ["boolean", "null"] },
+        "rawCasePath": { "type": ["string", "null"] },
+        "rawReportPath": { "type": ["string", "null"] },
+        "failureReportPath": { "type": ["string", "null"] },
+        "blockedReason": { "type": ["string", "null"] }
+      }
+    }
+  }
+}

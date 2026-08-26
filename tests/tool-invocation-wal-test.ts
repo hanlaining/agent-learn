@@ -196,6 +196,34 @@ test("toolInvocationId 稳定来自 modelInvocationId、callId、toolName、argu
   );
 });
 
+test("Tool 执行抛错时先持久化 outcome_unknown，禁止继续调用模型", async () => {
+  const { lifecycleStore, turn } = createTurn();
+  const modelInvocationStore = new ModelInvocationStore();
+  const toolInvocationStore = new ToolInvocationStore(() => "2026-08-18T17:00:00.000Z");
+  const provider = new FakeProvider([toolCallResponse()]);
+  const failingTool: AgentTool = {
+    requiresPermission: false,
+    definition: {
+      name: "durable_tool",
+      description: "会失败的本地工具",
+      parameters: { type: "object" },
+    },
+    execute: () => { throw new Error("tool transport failed"); },
+  };
+  const loop = createLoop({
+    lifecycleStore,
+    modelInvocationStore,
+    toolInvocationStore,
+    provider,
+    persist: async () => undefined,
+    toolRegistry: new ToolRegistry([failingTool]),
+  });
+
+  await assert.rejects(() => loop.run(turn.id), /outcome_unknown|outcome unknown/i);
+  assert.equal(provider.requests.length, 1);
+  assert.equal(toolInvocationStore.list()[0]?.status, "outcome_unknown");
+});
+
 test("ToolInvocationStore 主路径、重复 prepare 与重复 commit 均保持幂等", async () => {
   const store = new ToolInvocationStore(
     () => "2026-08-18T17:00:00.000Z",
@@ -389,6 +417,34 @@ test("result_received snapshot 重启零 Tool 调用重放，committed snapshot 
       "committed",
     );
   }
+});
+
+test("result_received 快照缺少结果或模型输出时恢复解析 fail closed", async () => {
+  const { lifecycleStore, turn } = createTurn();
+  const modelInvocationStore = new ModelInvocationStore();
+  const toolInvocationStore = new ToolInvocationStore();
+  let durable: DurableSnapshot | undefined;
+  const firstLoop = createLoop({
+    lifecycleStore,
+    modelInvocationStore,
+    toolInvocationStore,
+    provider: new FakeProvider([toolCallResponse(), finalResponse()]),
+    toolRegistry: new ToolRegistry([createTool(() => undefined)]),
+    persist: async () => {
+      if (durable !== undefined || toolInvocationStore.list().at(-1)?.status !== "result_received") return;
+      durable = capture(lifecycleStore, modelInvocationStore, toolInvocationStore);
+      const invocation = durable.toolInvocations.invocations[0];
+      assert.ok(invocation);
+      delete invocation.result;
+      delete invocation.output;
+      throw new SimulatedCrash("incomplete result_received");
+    },
+  });
+
+  await assert.rejects(() => firstLoop.run(turn.id, { model: FAKE_MODEL }), SimulatedCrash);
+  assert.ok(durable);
+  const snapshot = durable;
+  assert.throws(() => restore(snapshot), /Tool invocation snapshot result is incomplete/u);
 });
 
 test("executing 与 outcome_unknown snapshot 重启必须明确阻断且禁止重执行", async () => {

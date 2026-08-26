@@ -1,0 +1,59 @@
+{
+  "$schema": "./CLAIM-AUDIT-RECORD.schema.json",
+  "schemaVersion": "rt95-paper-claim-audit-record-v1",
+  "status": "NotVerified",
+  "claimId": "CLAIM-TODO-001",
+  "claimText": "TODO",
+  "claimType": "result",
+  "manuscriptLocator": {
+    "path": "MANUSCRIPT-DRAFT.zh-CN.md",
+    "section": "TODO",
+    "lineOrTable": "TODO"
+  },
+  "claimBoundary": {
+    "allowedClaim": "TODO",
+    "forbiddenClaim": "TODO"
+  },
+  "candidate": {
+    "candidateLabel": "TODO",
+    "preregistrationPayloadSha256": "TODO",
+    "preregistrationSourceSha256": "TODO",
+    "evidenceManifestSha256": "TODO",
+    "sampledAt": "NotRun"
+  },
+  "evidenceItems": [
+    {
+      "kind": "raw",
+      "path": "TODO",
+      "sha256": "TODO",
+      "generatedBy": "TODO",
+      "locator": "TODO",
+      "verified": false
+    }
+  ],
+  "analysis": {
+    "method": "TODO",
+    "direction": "TODO",
+    "alpha": "TODO",
+    "multiplicityFamily": "TODO",
+    "denominatorAndMissingRule": "TODO",
+    "negativeNullFailurePolicy": "TODO"
+  },
+  "review": {
+    "round": "R0",
+    "reviewerNameOrOrg": "NotAssigned",
+    "nonAuthor": false,
+    "conflictOfInterest": "TODO",
+    "scope": ["method", "statistics", "citations", "ethics", "full-manuscript"],
+    "reviewedAt": "NotRun",
+    "decision": "NotReviewed",
+    "issues": []
+  },
+  "closure": {
+    "p0Open": "TODO",
+    "p1Open": "TODO",
+    "artifactAndFigureConsistency": "NotRun",
+    "authorApproval": "NotRun"
+  },
+  "notes": "模板不能作为证据；任何 TODO/NotRun/NotVerified 必须在正式记录中被真实证据替换。状态只能按 NotVerified -> Collected -> Reviewed -> Verified 升级；CodeVerified 不能直接升级为 Verified。"
+}

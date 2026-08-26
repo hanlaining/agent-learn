@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import { once } from "node:events";
 import { createInterface } from "node:readline/promises";
 import { fileURLToPath } from "node:url";
+import { resolve } from "node:path";
 
 import {
   isAgentEvent,
@@ -256,8 +257,11 @@ async function main(options: CliOptions): Promise<void> {
         } else if (command.kind === "matched" && command.action.id === "app.exit") {
           exitRequested = true;
           messageQueue.clear();
-          await requestTurnCancel(connection, activeTurn);
-          await activeTurn.completion.catch(() => undefined);
+          // Cancel may finish the turn immediately and clear activeTurn in the
+          // completion handler. Keep the selected turn stable across the await.
+          const turnToCancel = activeTurn;
+          await requestTurnCancel(connection, turnToCancel);
+          await turnToCancel.completion.catch(() => undefined);
           break;
         } else if (command.kind !== "not-command") {
           console.log(
@@ -337,10 +341,12 @@ async function main(options: CliOptions): Promise<void> {
     inputRouter.close();
 
     if (activeTurn !== undefined) {
-      await requestTurnCancel(connection, activeTurn).catch(
+      // The cancellation acknowledgement can race with completion.finally.
+      const turnToCancel = activeTurn;
+      await requestTurnCancel(connection, turnToCancel).catch(
         () => undefined,
       );
-      await activeTurn.completion.catch(() => undefined);
+      await turnToCancel.completion.catch(() => undefined);
     }
 
     inputReader.close();
@@ -582,7 +588,7 @@ function readItemText(content: unknown): string {
   return content.text;
 }
 
-class CliAgentEventRenderer {
+export class CliAgentEventRenderer {
   receivedAssistantDelta = false;
 
   private reasoningBuffer = "";
@@ -867,7 +873,7 @@ class CliAgentEventRenderer {
   }
 }
 
-function extractReasoningHeader(
+export function extractReasoningHeader(
   value: string,
 ): string | undefined {
   const match = /\*\*([^*\n]+)\*\*/.exec(value);
@@ -878,7 +884,7 @@ function extractReasoningHeader(
     : header;
 }
 
-function formatReasoningSummary(
+export function formatReasoningSummary(
   value: string,
 ): string | undefined {
   const trimmed = value.trim();
@@ -924,7 +930,9 @@ async function runCliEntry(): Promise<void> {
   await main(options);
 }
 
-void runCliEntry().catch((error: unknown) => {
-  console.error(error);
-  process.exitCode = 1;
-});
+if (process.argv[1] !== undefined && resolve(process.argv[1]) === resolve(fileURLToPath(import.meta.url))) {
+  void runCliEntry().catch((error: unknown) => {
+    console.error(error);
+    process.exitCode = 1;
+  });
+}

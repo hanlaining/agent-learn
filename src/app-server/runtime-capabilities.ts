@@ -58,8 +58,9 @@ export function isRuntimeCapabilities(
     value.skills.every(isSkill) &&
     Array.isArray(value.mcpServers) &&
     value.mcpServers.every(isMcpServer) &&
-    (value.agents === undefined || Array.isArray(value.agents)) &&
-    (value.multiAgent === undefined || isRecord(value.multiAgent))
+    (value.agents === undefined ||
+      (Array.isArray(value.agents) && value.agents.every(isAgent))) &&
+    (value.multiAgent === undefined || isMultiAgent(value.multiAgent))
   );
 }
 
@@ -71,7 +72,12 @@ export function cloneRuntimeCapabilities(
     ...(value.currentModel === undefined
       ? {}
       : { currentModel: value.currentModel }),
-    models: value.models.map((model) => ({ ...model })),
+    models: value.models.map((model) => ({
+      ...model,
+      ...(model.reasoningEfforts === undefined
+        ? {}
+        : { reasoningEfforts: [...model.reasoningEfforts] }),
+    })),
     webSearch: value.webSearch,
     tools: value.tools.map((tool) => ({ ...tool })),
     skills: value.skills.map((skill) => ({ ...skill })),
@@ -117,6 +123,24 @@ function isMcpServer(value: unknown): value is RuntimeMcpCapability {
     Number.isInteger(value.toolCount) &&
     (value.toolCount as number) >= 0
   );
+}
+
+function isAgent(value: unknown): value is { id: string; name: string; description: string } {
+  return isRecord(value) &&
+    isNonEmptyString(value.id) &&
+    isNonEmptyString(value.name) &&
+    typeof value.description === "string";
+}
+
+function isMultiAgent(value: unknown): value is NonNullable<RuntimeCapabilities["multiAgent"]> {
+  return isRecord(value) &&
+    isNonNegativeSafeInteger(value.maxConcurrentRuns) &&
+    isNonNegativeSafeInteger(value.maxDepth) &&
+    isNonNegativeSafeInteger(value.maxChildrenPerRun);
+}
+
+function isNonNegativeSafeInteger(value: unknown): value is number {
+  return Number.isSafeInteger(value) && (value as number) >= 0;
 }
 
 function isNonEmptyString(value: unknown): value is string {

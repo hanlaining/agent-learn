@@ -1,0 +1,197 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://god-agent.local/schemas/rt95-statistics-v1.json",
+  "title": "God-Agent RT95 Raw results and descriptive statistics",
+  "oneOf": [
+    { "$ref": "#/$defs/rawResults" },
+    { "$ref": "#/$defs/statisticsReport" }
+  ],
+  "$defs": {
+    "machineId": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$" },
+    "rate": { "type": "number", "minimum": 0, "maximum": 1 },
+    "rawRecord": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["runId", "armId", "seed", "faultWindowId", "outcome", "latencyMs"],
+      "properties": {
+        "runId": { "$ref": "#/$defs/machineId" },
+        "armId": { "$ref": "#/$defs/machineId" },
+        "seed": { "type": "integer", "minimum": 0, "maximum": 4294967295 },
+        "faultWindowId": { "$ref": "#/$defs/machineId" },
+        "outcome": { "enum": ["success", "failure"] },
+        "latencyMs": { "type": "number", "minimum": 0 }
+      }
+    },
+    "rawResults": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schemaVersion", "experimentId", "baselineArmId", "records"],
+      "properties": {
+        "schemaVersion": { "const": "rt95-raw-results-v1" },
+        "experimentId": { "$ref": "#/$defs/machineId" },
+        "baselineArmId": { "$ref": "#/$defs/machineId" },
+        "records": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/rawRecord" } }
+      }
+    },
+    "wilson": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["method", "confidenceLevel", "successes", "total", "estimate", "lower", "upper"],
+      "properties": {
+        "method": { "const": "wilson-score" },
+        "confidenceLevel": { "const": 0.95 },
+        "successes": { "type": "integer", "minimum": 0 },
+        "total": { "type": "integer", "minimum": 1 },
+        "estimate": { "$ref": "#/$defs/rate" },
+        "lower": { "$ref": "#/$defs/rate" },
+        "upper": { "$ref": "#/$defs/rate" }
+      }
+    },
+    "zeroFailure": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["method", "confidenceLevel", "failures", "total", "upper"],
+      "properties": {
+        "method": { "const": "exact-one-sided-zero-event" },
+        "confidenceLevel": { "const": 0.95 },
+        "failures": { "const": 0 },
+        "total": { "type": "integer", "minimum": 1 },
+        "upper": { "$ref": "#/$defs/rate" }
+      }
+    },
+    "latency": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["median", "p95"],
+      "properties": {
+        "median": { "type": "number", "minimum": 0 },
+        "p95": { "type": "number", "minimum": 0 }
+      }
+    },
+    "armSummary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["armId", "successes", "failures", "total", "successRate", "zeroFailureUpper95", "latencyMs"],
+      "properties": {
+        "armId": { "$ref": "#/$defs/machineId" },
+        "successes": { "type": "integer", "minimum": 0 },
+        "failures": { "type": "integer", "minimum": 0 },
+        "total": { "type": "integer", "minimum": 1 },
+        "successRate": { "$ref": "#/$defs/wilson" },
+        "zeroFailureUpper95": { "oneOf": [{ "$ref": "#/$defs/zeroFailure" }, { "type": "null" }] },
+        "latencyMs": { "$ref": "#/$defs/latency" }
+      }
+    },
+    "paired": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["method", "totalPairs", "bothSuccess", "baselineOnlySuccess", "comparatorOnlySuccess", "bothFailure", "absoluteRateDifference", "discordantOddsRatio"],
+      "properties": {
+        "method": { "const": "paired-binary-descriptive" },
+        "totalPairs": { "type": "integer", "minimum": 1 },
+        "bothSuccess": { "type": "integer", "minimum": 0 },
+        "baselineOnlySuccess": { "type": "integer", "minimum": 0 },
+        "comparatorOnlySuccess": { "type": "integer", "minimum": 0 },
+        "bothFailure": { "type": "integer", "minimum": 0 },
+        "absoluteRateDifference": { "type": "number", "minimum": -1, "maximum": 1 },
+        "discordantOddsRatio": { "type": ["number", "null"], "minimum": 0 }
+      }
+    },
+    "rateRatio": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["method", "baselineRate", "comparatorRate", "estimate", "status"],
+      "properties": {
+        "method": { "const": "rate-ratio" },
+        "baselineRate": { "$ref": "#/$defs/rate" },
+        "comparatorRate": { "$ref": "#/$defs/rate" },
+        "estimate": { "type": ["number", "null"], "minimum": 0 },
+        "status": { "enum": ["finite", "positive-over-zero", "undefined-both-zero"] }
+      }
+    },
+    "pairedBootstrap": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["method", "confidenceLevel", "descriptiveOnly", "seed", "iterations", "estimate", "lower", "upper"],
+      "properties": {
+        "method": { "const": "paired-bootstrap-percentile" },
+        "confidenceLevel": { "const": 0.95 },
+        "descriptiveOnly": { "const": true },
+        "seed": { "type": "integer", "minimum": 1, "maximum": 4294967295 },
+        "iterations": { "type": "integer", "minimum": 100, "maximum": 1000000 },
+        "estimate": { "type": "number", "minimum": -1, "maximum": 1 },
+        "lower": { "type": "number", "minimum": -1, "maximum": 1 },
+        "upper": { "type": "number", "minimum": -1, "maximum": 1 }
+      }
+    },
+    "comparison": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["baselineArmId", "comparatorArmId", "baselineSuccessRate", "comparatorSuccessRate", "absoluteRateDifference", "rateRatio", "paired", "pairedBootstrap95"],
+      "properties": {
+        "baselineArmId": { "$ref": "#/$defs/machineId" },
+        "comparatorArmId": { "$ref": "#/$defs/machineId" },
+        "baselineSuccessRate": { "$ref": "#/$defs/rate" },
+        "comparatorSuccessRate": { "$ref": "#/$defs/rate" },
+        "absoluteRateDifference": { "type": "number", "minimum": -1, "maximum": 1 },
+        "rateRatio": { "$ref": "#/$defs/rateRatio" },
+        "paired": { "$ref": "#/$defs/paired" },
+        "pairedBootstrap95": { "$ref": "#/$defs/pairedBootstrap" }
+      }
+    },
+    "methodology": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["significanceClaimed", "wilson95", "zeroFailure95", "median", "p95", "pairedEffect", "pairedBootstrap95", "rateRatio", "holmBonferroni"],
+      "properties": {
+        "significanceClaimed": { "const": false },
+        "wilson95": { "const": "two-sided Wilson score interval with z=1.959963984540054" },
+        "zeroFailure95": { "const": "one-sided exact upper bound 1 - 0.05^(1/n)" },
+        "median": { "const": "sorted middle value; even n uses arithmetic mean of the two middle values" },
+        "p95": { "const": "nearest-rank: sorted[ceil(0.95*n)-1]" },
+        "pairedEffect": { "const": "baseline minus comparator on identical seed+faultWindow pairs; descriptive only" },
+        "pairedBootstrap95": { "const": "deterministic paired percentile bootstrap with xorshift32-v1; descriptive only" },
+        "rateRatio": { "const": "baseline success rate divided by comparator success rate; zero denominator is explicit" },
+        "holmBonferroni": { "const": "implemented for preregistered p-value families; not applied because Raw v1 accepts no p-values" }
+      }
+    },
+    "multiplicity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["method", "applied", "significanceClaimed", "adjustedPValues", "reason"],
+      "properties": {
+        "method": { "const": "holm-bonferroni" },
+        "applied": { "const": false },
+        "significanceClaimed": { "const": false },
+        "adjustedPValues": { "type": "array", "maxItems": 0 },
+        "reason": { "const": "Raw v1 contains no preregistered p-values; adjustment function is available but not auto-applied" }
+      }
+    },
+    "rawQa": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "recordCount", "armIds", "pairCount"],
+      "properties": {
+        "status": { "const": "passed" },
+        "recordCount": { "type": "integer", "minimum": 2 },
+        "armIds": { "type": "array", "minItems": 2, "uniqueItems": true, "items": { "$ref": "#/$defs/machineId" } },
+        "pairCount": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "statisticsReport": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schemaVersion", "experimentId", "baselineArmId", "methodology", "rawQa", "arms", "comparisons", "multiplicity"],
+      "properties": {
+        "schemaVersion": { "const": "rt95-statistics-report-v1" },
+        "experimentId": { "$ref": "#/$defs/machineId" },
+        "baselineArmId": { "$ref": "#/$defs/machineId" },
+        "methodology": { "$ref": "#/$defs/methodology" },
+        "rawQa": { "$ref": "#/$defs/rawQa" },
+        "arms": { "type": "array", "minItems": 2, "items": { "$ref": "#/$defs/armSummary" } },
+        "comparisons": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/comparison" } },
+        "multiplicity": { "$ref": "#/$defs/multiplicity" }
+      }
+    }
+  }
+}

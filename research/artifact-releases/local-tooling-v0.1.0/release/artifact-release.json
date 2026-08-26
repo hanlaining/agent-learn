@@ -1,0 +1,99 @@
+{
+  "candidateCommit": "f3320cb9eb241e7717433a54e7b88d327e754821",
+  "claimBoundary": "local-tooling-only-not-formal-or-external",
+  "claims": {
+    "claimTablePath": "claims/CLAIM-TABLE.json",
+    "includedClaimIds": [
+      "CLAIM-PIPELINE-ARTIFACT-RELEASE-001"
+    ],
+    "includedEvidenceState": "CodeVerified"
+  },
+  "evidenceState": {
+    "externalReproduction": "NotVerified",
+    "formalExperiment": "NotRun",
+    "formalRaw": "NotIncluded",
+    "preregistration": "Draft",
+    "publicationReview": "NotReviewed"
+  },
+  "files": [
+    {
+      "bytes": 753,
+      "contentType": "application/octet-stream",
+      "path": "LICENSE",
+      "role": "license",
+      "sha256": "e11b067820c9e9b9a60f72f0941f55e53f60cef42a92eb72026fdb711eced265"
+    },
+    {
+      "bytes": 8593,
+      "contentType": "application/json",
+      "path": "claims/CLAIM-TABLE.json",
+      "role": "claim-table",
+      "sha256": "1476f965f4775d6ba0421dc2842296704ed9c49ed6781e4075bfaeb9f5c4e555"
+    },
+    {
+      "bytes": 34975,
+      "contentType": "application/json",
+      "path": "dictionary/metric-dictionary-v2.json",
+      "role": "data-dictionary",
+      "sha256": "a2cec2efbe49d32c88e7cd4e2d12e7f68eeddb2b9f82cd7cd7d45ba2533eeeea"
+    },
+    {
+      "bytes": 7849,
+      "contentType": "application/json",
+      "path": "manifest/artifact-manifest.json",
+      "role": "artifact-manifest",
+      "sha256": "1c2556036f61f30bedb76c5a67b21fe78a0eff1ca873159c367d08f61c534e0a"
+    },
+    {
+      "bytes": 15594,
+      "contentType": "application/json",
+      "path": "preregistration/preregistration.draft.example.json",
+      "role": "preregistration",
+      "sha256": "441b62c72c5bf041a55c877b598fff3ba26f69f33e484b71b084faf8a868c201"
+    },
+    {
+      "bytes": 1183,
+      "contentType": "application/json",
+      "path": "raw/publishable-derivation-receipt.json",
+      "role": "raw-public-derivation-receipt",
+      "sha256": "4d2090dae969d198543fb6a2bcff0c118c5c8be2e2e80ed83aa0f7c3d59edfbe"
+    },
+    {
+      "bytes": 7849,
+      "contentType": "application/json",
+      "path": "raw/statistics.json",
+      "role": "statistics",
+      "sha256": "1c2556036f61f30bedb76c5a67b21fe78a0eff1ca873159c367d08f61c534e0a"
+    },
+    {
+      "bytes": 579,
+      "contentType": "text/csv",
+      "path": "raw/summary.csv",
+      "role": "table",
+      "sha256": "bc18f8f7af63002762a5ddd96c90786f539adc954a56ddb15908255b956a74ed"
+    },
+    {
+      "bytes": 22479,
+      "contentType": "text/plain",
+      "path": "src/artifact-release.ts.txt",
+      "role": "source-snapshot",
+      "sha256": "24e7a93cb3159b21f3ba74946581e76d6a37df563533becba6a71b25528a0bd2"
+    }
+  ],
+  "previousReleaseVersion": null,
+  "rawEvidence": {
+    "mode": "publishable-derivation-receipt",
+    "privateSourceTreeSha256": "7e7d6c303fc2fce2218e20b565354cdfb11b76a5306f8562b37128b953e4db8e",
+    "publicDerivationTreeSha256": "a36df4d22d83a9d51a6f1ceb996e2a08984965413a9b840dde6eaa419d1ef127",
+    "receiptClaimBoundary": "sanitized-local-derivation-only-not-formal-or-external",
+    "receiptPath": "raw/publishable-derivation-receipt.json"
+  },
+  "releaseSha256": "e9b8cf5a82c4dabca512819dd68368693513cf48df8e71a9c2e0f1ebee88329c",
+  "releaseVersion": "0.1.0",
+  "review": {
+    "formalEvidenceReviewed": false,
+    "independentReview": false,
+    "status": "local-tooling-reviewed"
+  },
+  "schemaVersion": "versioned-research-artifact-release-v1"
+}

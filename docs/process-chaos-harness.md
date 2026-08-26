@@ -44,3 +44,22 @@ npm run check                # TypeScript 类型检查
 ```
 
 这项验证证明的是当前本机、确定性 Fake Provider 下的进程恢复不变量；它不等价于真实 Provider 的 exactly-once，也不覆盖网络、主机故障或外部工具的幂等能力。
+
+## GATE-40 候选 Pilot
+
+当前可运行窗口为：
+
+- W01 `FW-MODEL-RESPONSE-COMMIT`：响应写入 Model WAL 后强杀；继任进程补交一次 Assistant，Provider 请求保持一次。
+- W03 `FW-RETURN-RESPONSE-LEASE`：Return response 与 Job Lease 窗口。
+- W04 `FW-RETURN-PERSISTED-CONSUME`：持久化 Return 由继任进程消费一次。
+- W05 `FW-LEASE-FENCED-COMMIT`：旧 fencing token 的提交被拒绝。
+- W06 `FW-WORKFLOW-STAGE-COMMIT`：product Stage Result 生成后、Stage commit 前强杀；继任进程复用已持久化 Model Result，Checkpoint、Stage Evidence 与 Return 各提交一次。
+
+单 case 可用严格白名单 CLI 复现：
+
+```text
+npm exec -- tsx research/runtime-e2e-benchmarks/src/process-chaos-cli.ts --window FW-MODEL-RESPONSE-COMMIT --seed 469816031 --output .tmp/process-chaos
+npm exec -- tsx research/runtime-e2e-benchmarks/src/process-chaos-cli.ts --window FW-WORKFLOW-STAGE-COMMIT --seed 469816031 --output .tmp/process-chaos
+```
+
+2026-08-24 本机 Pilot 结果为 candidate 40、runnable 25、passed 25、failed 0、blocked 15、formal Verified 0。所有 Raw 均来自真实 App Server 子进程，Provider 为确定性 loopback Fake，真实调用为 0；测试结束后的残留 App Server 子进程为 0。该结果保持 `candidate-not-frozen`、`NotVerified` 和 `completeGate40=false`。

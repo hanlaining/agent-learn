@@ -194,6 +194,55 @@ test("恢复调度从 response_received snapshot 零 Provider 重放，并保持
   );
 });
 
+test("response_received 缺少 Provider 响应事实时启动恢复 fail closed", async () => {
+  const durable = await crashAtStatus("response_received");
+  const corrupted = structuredClone(durable.snapshot);
+  delete corrupted.modelInvocations.invocations[0]!.providerResponseId;
+  delete corrupted.modelInvocations.invocations[0]!.normalizedResult;
+  const restarted = restoreForStartup(corrupted);
+  const recovery = new ModelInvocationStartupRecovery({ ...restarted, persist: async () => undefined });
+  const result = await recovery.recoverTurn(durable.turnId);
+  assert.equal(result.action, "blocked");
+  assert.equal(result.diagnosticCode, "response_received_incomplete");
+  assert.equal(durable.provider.requests.length, 1);
+});
+
+test("response_received 在非 interrupted Turn 上拒绝迟到 Assistant 结果", async () => {
+  const durable = await crashAtStatus("response_received");
+  const restarted = restore(durable.snapshot);
+  restarted.lifecycleStore.completeTurn(durable.turnId);
+  const recovery = new ModelInvocationStartupRecovery({ ...restarted, persist: async () => undefined });
+  const result = await recovery.recoverTurn(durable.turnId);
+  assert.equal(result.action, "blocked");
+  assert.equal(result.diagnosticCode, "turn_status_completed");
+  assert.equal(restarted.lifecycleStore.getItemsForTurn(durable.turnId).filter((item) => item.type === "assistant_message").length, 0);
+});
+
+test("committed Invocation 绑定错误时不伪造已完成 Turn", async () => {
+  const durable = await crashAtStatus("committed");
+  const corrupted = structuredClone(durable.snapshot);
+  corrupted.modelInvocations.invocations[0]!.targetCommitKey = "turn:other:assistant";
+  const restarted = restore(corrupted);
+  const recovery = new ModelInvocationStartupRecovery({ ...restarted, persist: async () => undefined });
+  const result = await recovery.recoverTurn(durable.turnId);
+  assert.equal(result.action, "blocked");
+  assert.equal(result.diagnosticCode, "explicit_resume_required");
+});
+
+test("committed Invocation 缺少 Assistant Item 时拒绝补交终态", async () => {
+  const durable = await crashAtStatus("committed");
+  const corrupted = structuredClone(durable.snapshot);
+  const removed = new Set(corrupted.lifecycle.items.filter((item) => item.type === "assistant_message").map((item) => item.id));
+  corrupted.lifecycle.items = corrupted.lifecycle.items.filter((item) => !removed.has(item.id));
+  const turn = corrupted.lifecycle.turns.find((item) => item.id === durable.turnId);
+  if (turn !== undefined) turn.itemIds = turn.itemIds.filter((itemId) => !removed.has(itemId));
+  const restarted = restore(corrupted);
+  const recovery = new ModelInvocationStartupRecovery({ ...restarted, persist: async () => undefined });
+  const result = await recovery.recoverTurn(durable.turnId);
+  assert.equal(result.action, "blocked");
+  assert.equal(result.diagnosticCode, "committed_assistant_item_missing");
+});
+
 test("恢复调度遇到 committed snapshot 直接跳过且不重复 Assistant", async () => {
   const durable = await crashAtStatus("committed");
   const restarted = restore(durable.snapshot);

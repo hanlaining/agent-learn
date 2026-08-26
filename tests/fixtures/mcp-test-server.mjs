@@ -200,7 +200,7 @@ for await (const line of lines) {
     }
 
     if (message.method === "server/discover") {
-      sendResult(
+      const respond = () => sendResult(
         message.id,
         {
           supportedVersions:
@@ -212,6 +212,8 @@ for await (const line of lines) {
         },
         mode !== "missing-jsonrpc",
       );
+      if (mode === "slow-discover") setTimeout(respond, 120);
+      else respond();
       continue;
     }
   }

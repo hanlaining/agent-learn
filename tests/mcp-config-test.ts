@@ -48,6 +48,35 @@ test("读取 MCP JSON 配置并相对配置文件解析 cwd", async (context) =>
   );
 });
 
+test("MCP 配置保留独立 discoveryTimeoutMs，并兼容未配置旧条目", async (context) => {
+  const directory = await mkdtemp(join(tmpdir(), "god-agent-mcp-config-timeout-"));
+  const configPath = join(directory, "mcp.json");
+  context.after(() => rm(directory, { recursive: true, force: true }));
+
+  await writeFile(configPath, JSON.stringify({
+    mcpServers: {
+      slowStartup: { command: "node", requestTimeoutMs: 250, discoveryTimeoutMs: 2_500 },
+      legacyConfig: { command: "node", requestTimeoutMs: 250 },
+    },
+  }), "utf8");
+
+  assert.deepEqual(await loadMcpServerConfigs(configPath), [
+    { name: "slowStartup", command: "node", args: [], requestTimeoutMs: 250, discoveryTimeoutMs: 2_500 },
+    { name: "legacyConfig", command: "node", args: [], requestTimeoutMs: 250 },
+  ]);
+});
+
+test("MCP 配置拒绝非正 discoveryTimeoutMs", async (context) => {
+  const directory = await mkdtemp(join(tmpdir(), "god-agent-mcp-config-timeout-invalid-"));
+  const configPath = join(directory, "mcp.json");
+  context.after(() => rm(directory, { recursive: true, force: true }));
+
+  for (const discoveryTimeoutMs of [0, -1, 1.5]) {
+    await writeFile(configPath, JSON.stringify({ mcpServers: { bad: { command: "node", discoveryTimeoutMs } } }), "utf8");
+    await assert.rejects(() => loadMcpServerConfigs(configPath), /Invalid MCP Server discoveryTimeoutMs: bad/);
+  }
+});
+
 test("MCP 配置拒绝 env 和其他未支持字段", async (context) => {
   const directory = await mkdtemp(
     join(tmpdir(), "god-agent-mcp-config-"),

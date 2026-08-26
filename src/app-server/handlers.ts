@@ -775,7 +775,7 @@ function appendExplicitContext(
   ].join("\n");
 }
 
-function intersectCapabilities(left: readonly string[], right: readonly string[] | undefined): string[] {
+export function intersectCapabilities(left: readonly string[], right: readonly string[] | undefined): string[] {
   const actualRight = right ?? ["*"];
   if (left.includes("*")) return [...actualRight];
   if (actualRight.includes("*")) return [...left];
@@ -902,7 +902,7 @@ function readCompletedTurnResult(lifecycleStore: LifecycleStore, turnId: string)
   return { turn, assistantMessage };
 }
 
-function resolveWorkflowTurnResult(
+export function resolveWorkflowTurnResult(
   lifecycleStore: LifecycleStore,
   runtimeStore: AgentRuntimeStore | undefined,
   jobId: string | undefined,
@@ -1029,4 +1029,7 @@ function hasOnlyKeys(value: Record<string, unknown>, allowed: readonly string[])
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+export function replaceArrayContents<T>(target: T[], source: readonly T[]): void {
+  target.splice(0, target.length, ...source);
 }

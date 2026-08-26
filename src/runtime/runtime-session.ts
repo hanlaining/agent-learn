@@ -7,6 +7,7 @@ export type RuntimeSessionStatus =
   | "completed"
   | "failed"
   | "cancelled"
+  | "interrupted"
   | "timed_out";
 
 interface RuntimeItemBase {
@@ -116,7 +117,7 @@ export function isRuntimeSession(value: unknown): value is RuntimeSession {
   return (
     isRecord(value) &&
     typeof value.turnId === "string" &&
-    ["running", "completed", "failed", "cancelled", "timed_out"]
+    ["running", "completed", "failed", "cancelled", "interrupted", "timed_out"]
       .includes(String(value.status)) &&
     typeof value.startedAt === "string" &&
     (value.completedAt === undefined ||

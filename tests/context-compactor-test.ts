@@ -341,3 +341,27 @@ test("Item 上限配置必须为正整数", () => {
     /maxRetainedUserMessages must be a positive integer/,
   );
 });
+
+test("压缩预算配置在构造期和提示装载期统一 fail closed", async () => {
+  const llm = new ScriptedLlmProvider([]);
+  assert.throws(() => new ContextCompactor({
+    llm,
+    maxSummaryInputTokens: 10,
+    maxMessageTokens: 11,
+  }), /maxMessageTokens must not exceed maxSummaryInputTokens/);
+
+  const characterCounter: TokenCounter = {
+    countText: (text) => [...text].length,
+    countMessages: (messages) => messages.reduce((sum, message) => sum + [...message.text].length, 0),
+  };
+  const promptTooLarge = new ContextCompactor({
+    llm,
+    tokenCounter: characterCounter,
+    maxSummaryInputTokens: 1,
+    maxMessageTokens: 1,
+  });
+  await assert.rejects(
+    () => promptTooLarge.compact([{ role: "user", text: "事实" }]),
+    /maxSummaryInputTokens cannot fit the compaction prompt/,
+  );
+});

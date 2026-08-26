@@ -16,6 +16,50 @@ import type {
   DesktopOutcomeUnknownResolution,
   DesktopResolveOutcomeUnknownInput,
 } from "../src/electron/desktop-types.js";
+import type { RuntimeSession } from "../src/runtime/runtime-session.js";
+
+test("DesktopController 启动恢复把遗留 running 会话标为等待恢复而非已取消", async () => {
+  const runtime = new FakeDesktopRuntime();
+  runtime.persistedSessions.push({
+    threadId: "thread-1",
+    turnState: "thinking",
+    session: {
+      turnId: "turn-recovered",
+      status: "running",
+      startedAt: "2026-08-25T00:00:00.000Z",
+      items: [],
+    },
+  });
+  const controller = new DesktopController(runtime);
+
+  const snapshot = await controller.getSnapshot();
+
+  assert.equal(snapshot.turnState, "idle");
+  assert.equal(snapshot.runtimeSession?.status, "interrupted");
+  assert.equal(runtime.normalizedSessions[0]?.session.status, "interrupted");
+  assert.equal(runtime.normalizedSessions[0]?.turnState, "idle");
+});
+
+test("DesktopController 取消竞态读取持久终态，不把自然完成留在 cancelling", async () => {
+  const runtime = new FakeDesktopRuntime();
+  runtime.cancelFails = true;
+  runtime.persistedSessions.push({
+    threadId: "thread-1",
+    turnState: "completed",
+    session: {
+      turnId: "turn-2",
+      status: "completed",
+      startedAt: "2026-08-25T00:00:00.000Z",
+      completedAt: "2026-08-25T00:00:01.000Z",
+      items: [],
+    },
+  });
+  const controller = new DesktopController(runtime);
+  await controller.getSnapshot();
+
+  assert.equal(await controller.cancelTurn(), false);
+  assert.equal((await controller.getSnapshot()).turnState, "completed");
+});
 
 test("DesktopController 仅转发目录中存在的显式 Skill 与去重文件", async () => {
   const runtime = new FakeDesktopRuntime();
@@ -409,6 +453,17 @@ test("取消和超时都会保留过程并结束全部运行状态", async () =>
 
 class FakeDesktopRuntime implements DesktopRuntimeClient {
   startThreadCount = 0;
+  cancelFails = false;
+  readonly persistedSessions: Array<{
+    threadId: string;
+    turnState: import("../src/electron/desktop-types.js").DesktopTurnState;
+    session: RuntimeSession;
+  }> = [];
+  readonly normalizedSessions: Array<{
+    threadId: string;
+    turnState: import("../src/electron/desktop-types.js").DesktopTurnState;
+    session: RuntimeSession;
+  }> = [];
   readonly savedConfigs: import("../src/electron/desktop-types.js").DesktopAgentConfig[] = [];
   lastStartContext: Omit<DesktopMessageInput, "text"> | undefined;
   lastWorkspaceQuery: string | undefined;
@@ -491,8 +546,14 @@ class FakeDesktopRuntime implements DesktopRuntimeClient {
   ) {
     this.savedConfigs.push(structuredClone(config));
   }
-  async listRuntimeSessions() { return []; }
-  async setRuntimeSession() {}
+  async listRuntimeSessions() { return structuredClone(this.persistedSessions); }
+  async setRuntimeSession(
+    threadId: string,
+    turnState: import("../src/electron/desktop-types.js").DesktopTurnState,
+    session: RuntimeSession,
+  ) {
+    this.normalizedSessions.push({ threadId, turnState, session: structuredClone(session) });
+  }
   async listOutcomeUnknown(threadId?: string): Promise<DesktopOutcomeUnknownResolution[]> {
     this.lastOutcomeUnknownThreadId = threadId;
     return [outcomeUnknownRecord()];
@@ -580,6 +641,7 @@ class FakeDesktopRuntime implements DesktopRuntimeClient {
   }
 
   async cancelTurn(turnId: string) {
+    if (this.cancelFails) throw new Error("natural completion race");
     return { turnId, cancelled: true as const };
   }
 

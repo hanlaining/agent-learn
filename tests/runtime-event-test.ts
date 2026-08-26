@@ -331,3 +331,50 @@ test("C03 Stage、Context 与多态 Runtime Lease 使用精确归属规则", () 
     /exact resource correlation/,
   );
 });
+
+test("C03 Runtime Event 工厂与 Envelope 的剩余 fail-closed 分支", () => {
+  assert.throws(() => createAggregateGeneration(-1), /aggregate-local generation/);
+  assert.throws(() => createAggregateGeneration(Number.NaN), /aggregate-local generation/);
+  assert.throws(() => createAggregateGeneration(Number.MAX_SAFE_INTEGER + 1), /aggregate-local generation/);
+
+  const root = validTaskEvent();
+  assert.throws(
+    () => createRuntimeEvent({ ...root, eventId: "event-task-no-predecessor", causationId: "missing" }),
+    /requires its predecessor/,
+  );
+  assert.throws(
+    () => assertRuntimeEventEnvelope({ ...root, aggregateType: "not-an-authority" }),
+    /Invalid Runtime Event aggregateType/,
+  );
+  assert.throws(
+    () => assertRuntimeEventEnvelope({ ...root, authorityWriter: 42 }),
+    /Invalid Runtime Event authorityWriter/,
+  );
+  assert.throws(
+    () => assertRuntimeEventEnvelope({ ...root, schemaVersion: 2 }),
+    /Unsupported Runtime Event Envelope version/,
+  );
+  assert.throws(
+    () => assertRuntimeEventEnvelope({ ...root, occurredAt: 123 }),
+    /Invalid Runtime Event occurredAt/,
+  );
+
+  const item = {
+    ...root,
+    eventId: "event-item-1",
+    eventType: "item.created",
+    aggregateType: "item" as const,
+    aggregateId: "item-1",
+    authorityWriter: "LifecycleStore",
+    correlation: createRuntimeCorrelation({ threadId: "thread-1", jobId: "job-1", jobAttempt: 1 }),
+  };
+  assert.throws(
+    () => assertRuntimeEventEnvelope(item),
+    /item requires Turn correlation/,
+  );
+
+  const invalidPrototype = JSON.parse(JSON.stringify(root)) as Record<string, unknown>;
+  invalidPrototype.payload = Object.create({ inherited: true });
+  (invalidPrototype.payload as Record<string, unknown>).status = "running";
+  assert.throws(() => parseRuntimeEventEnvelope(invalidPrototype), /plain records/);
+});

@@ -1,0 +1,49 @@
+{
+  "schemaVersion": "rt95-provider-authorization-redacted-v1",
+  "authorizationId": "AUTH-REPLACE",
+  "status": "authorized-not-called",
+  "authorizedAt": "YYYY-MM-DDTHH:MM:SSZ",
+  "expiresAt": "YYYY-MM-DDTHH:MM:SSZ",
+  "authorizerId": "provider-owner-handle",
+  "executorId": "research-executor-handle",
+  "candidate": {
+    "commit": "REPLACE_WITH_NONZERO_40_HEX_COMMIT",
+    "sourceTreeSha256": "REPLACE_WITH_64_HEX_SHA256",
+    "preregistrationSha256": "REPLACE_WITH_64_HEX_SHA256",
+    "casePlanSha256": "REPLACE_WITH_64_HEX_SHA256",
+    "configSha256": "REPLACE_WITH_64_HEX_SHA256"
+  },
+  "provider": {
+    "providerName": "REPLACE_WITH_PROVIDER_NAME",
+    "apiFamily": "REPLACE_WITH_API_FAMILY",
+    "modelId": "REPLACE_WITH_MODEL_ID",
+    "modelVersion": "REPLACE_WITH_MODEL_VERSION_OR_UNKNOWN",
+    "region": "REPLACE_WITH_REGION",
+    "credentialHandle": "secret-manager-reference-only"
+  },
+  "limits": {
+    "maxRequests": 0,
+    "maxTotalCostUsd": 0,
+    "perRequestTimeoutMs": 0,
+    "maxWallClockMs": 0,
+    "maxRetries": 0
+  },
+  "stopConditions": [
+    "budget-near-limit",
+    "provider-policy-error",
+    "repeated-outcome-unknown",
+    "case-plan-or-digest-drift"
+  ],
+  "dataHandling": {
+    "retentionClass": "REPLACE_WITH_APPROVED_CLASS",
+    "redactionProcedure": "REPLACE_WITH_SOP_ID",
+    "rawMayContainSecrets": false,
+    "logsMayContainSecrets": false
+  },
+  "approval": {
+    "approvedScope": "frozen-case-plan-only",
+    "approvalEvidencePath": "provider/approval-receipt.json",
+    "approvalEvidenceSha256": "REPLACE_WITH_64_HEX_SHA256"
+  },
+  "notes": "Do not place keys, tokens, authorization headers, private prompts, or environment values in this file. Keep status authorized-not-called until a real receipt and append-only ledger are reviewed."
+}

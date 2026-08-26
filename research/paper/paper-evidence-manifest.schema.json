@@ -1,0 +1,102 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://god-agent.local/schemas/rt95-paper-evidence-bundle-v1.json",
+  "title": "God-Agent RT95 paper evidence bundle manifest v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "claimBoundary",
+    "experimentId",
+    "preregistration",
+    "raw",
+    "analysis",
+    "artifacts"
+  ],
+  "properties": {
+    "schemaVersion": { "const": "rt95-paper-evidence-bundle-v1" },
+    "claimBoundary": { "const": "local-analysis-bundle-not-formal-not-external" },
+    "experimentId": { "$ref": "#/$defs/id" },
+    "preregistration": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["lifecycle", "payloadSha256", "sourceSha256"],
+      "properties": {
+        "lifecycle": { "const": "frozen" },
+        "payloadSha256": { "$ref": "#/$defs/sha256" },
+        "sourceSha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "raw": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "sourceSha256",
+        "recordCount",
+        "successCount",
+        "failureCount",
+        "armIds",
+        "pairsPerArm",
+        "exactFrozenPlanCoverage",
+        "allOutcomesIndexed",
+        "failureRecordsRetained"
+      ],
+      "properties": {
+        "sourceSha256": { "$ref": "#/$defs/sha256" },
+        "recordCount": { "type": "integer", "minimum": 1 },
+        "successCount": { "type": "integer", "minimum": 0 },
+        "failureCount": { "type": "integer", "minimum": 0 },
+        "armIds": {
+          "type": "array",
+          "minItems": 2,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/id" }
+        },
+        "pairsPerArm": { "type": "integer", "minimum": 1 },
+        "exactFrozenPlanCoverage": { "const": true },
+        "allOutcomesIndexed": { "const": true },
+        "failureRecordsRetained": { "const": true }
+      }
+    },
+    "analysis": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["significanceClaimed", "fairnessReviewStatus", "externalBaselineArmCount"],
+      "properties": {
+        "significanceClaimed": { "const": false },
+        "fairnessReviewStatus": { "const": "NotReviewed" },
+        "externalBaselineArmCount": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "artifacts": {
+      "type": "array",
+      "minItems": 8,
+      "maxItems": 8,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["path", "bytes", "sha256"],
+        "properties": {
+          "path": {
+            "enum": [
+              "preregistration.frozen.json",
+              "raw-results.json",
+              "statistics-report.json",
+              "results.md",
+              "arms.csv",
+              "comparisons.csv",
+              "raw-index.csv",
+              "failure-records.csv"
+            ]
+          },
+          "bytes": { "type": "integer", "minimum": 1 },
+          "sha256": { "$ref": "#/$defs/sha256" }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "id": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$" },
+    "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+  }
+}

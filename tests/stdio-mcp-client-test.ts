@@ -70,6 +70,54 @@ test("拒绝不支持 MCP 2026-07-28 的 Server", async () => {
   );
 });
 
+test("启动发现使用独立 timeout，不受短 Tool request timeout 影响", async (context) => {
+  const client = await McpStdioClient.start({
+    ...createOptions("slow-discover"),
+    requestTimeoutMs: 20,
+    discoveryTimeoutMs: 2_000,
+  });
+  context.after(() => client.close());
+  assert.equal(client.discovery.instructions, "Deterministic MCP test server");
+  await assert.rejects(
+    () => client.callTool("echo", { text: "slow" }),
+    /MCP request timed out: tools\/call/,
+  );
+});
+
+test("并发启动多个 MCP Client 时 discovery 预算与短调用预算仍隔离", async (context) => {
+  const clients = await Promise.all(
+    Array.from({ length: 3 }, () => McpStdioClient.start({
+      ...createOptions("slow-discover"),
+      requestTimeoutMs: 20,
+      discoveryTimeoutMs: 2_000,
+    })),
+  );
+  context.after(async () => {
+    await Promise.all(clients.map((client) => client.close()));
+  });
+
+  assert.deepEqual(clients.map((client) => client.discovery.instructions), [
+    "Deterministic MCP test server",
+    "Deterministic MCP test server",
+    "Deterministic MCP test server",
+  ]);
+  await Promise.all(clients.map(async (client) => {
+    await assert.rejects(
+      () => client.callTool("echo", { text: "slow" }),
+      /MCP request timed out: tools\/call/,
+    );
+  }));
+});
+
+test("拒绝非正 discovery timeout 配置", async () => {
+  for (const discoveryTimeoutMs of [0, -1, 1.5]) {
+    await assert.rejects(
+      () => McpStdioClient.start({ ...createOptions("happy"), discoveryTimeoutMs }),
+      /MCP discoveryTimeoutMs must be a positive integer/,
+    );
+  }
+});
+
 test("拒绝缺少 jsonrpc 2.0 的 MCP 消息", async () => {
   await assert.rejects(
     () => McpStdioClient.start(

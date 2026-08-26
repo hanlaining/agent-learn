@@ -1,0 +1,44 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "schemaVersion": "rt95-paper-audit-index-v1",
+  "status": "NotVerified",
+  "candidate": {
+    "label": "TODO",
+    "sourceDigest": "TODO",
+    "preregistrationDigest": "TODO",
+    "evidenceBundleDigest": "NotIncluded"
+  },
+  "claimRecords": [
+    {
+      "claimId": "CLAIM-TODO-001",
+      "recordPath": "TODO",
+      "status": "NotVerified",
+      "p0Open": "TODO",
+      "p1Open": "TODO"
+    }
+  ],
+  "reviewRounds": [
+    {
+      "round": "R0",
+      "recordPath": "TODO",
+      "decision": "NotReviewed",
+      "nonAuthor": false,
+      "reviewedAt": "NotRun"
+    }
+  ],
+  "gates": {
+    "formalRaw": "NotVerified",
+    "externalBaseline": "NotVerified",
+    "independentReproduction": "NotVerified",
+    "firstPartyCitations": "NotVerified",
+    "ethicsAndDataGovernance": "NotVerified",
+    "artifactFigureConsistency": "NotRun",
+    "authorApproval": "NotRun"
+  },
+  "scoreRequest": {
+    "requestedAt": "NotRun",
+    "requestedBy": "NotAssigned",
+    "decision": "No-Go",
+    "reason": "Template has no evidentiary value; replace every TODO/NotRun/NotIncluded with verified records before requesting 90+ review."
+  }
+}

@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import {
+  writeFile,
   mkdtemp,
   rm,
 } from "node:fs/promises";
@@ -126,4 +127,52 @@ test("Runtime 取消时终止命令子进程", async (t) => {
     resultPromise,
     (error: unknown) => error === reason,
   );
+});
+
+test("Runner 拒绝文件 Workspace 与非法资源上限", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "agent-command-invalid-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const file = join(root, "not-a-workspace.txt");
+  await writeFile(file, "not a directory", "utf8");
+  await assert.rejects(
+    () => WorkspaceCommandRunner.create(file, { recipes: {} }),
+    /Workspace must be a directory/,
+  );
+  await assert.rejects(
+    () => WorkspaceCommandRunner.create(root, { recipes: {}, timeoutMs: 0 }),
+    /timeoutMs must be a positive integer/,
+  );
+  await assert.rejects(
+    () => WorkspaceCommandRunner.create(root, { recipes: {}, maxOutputBytes: -1 }),
+    /maxOutputBytes must be a positive integer/,
+  );
+});
+
+test("Runner 目录和展示名称只暴露预注册配方", async (t) => {
+  const workspace = await mkdtemp(join(tmpdir(), "agent-command-catalog-"));
+  t.after(() => rm(workspace, { recursive: true, force: true }));
+  const runner = await WorkspaceCommandRunner.create(workspace, { recipes: {
+    zeta: { executable: process.execPath, arguments: ["--version"] },
+    alpha: { executable: process.execPath, arguments: ["--version"], display: "Node version" },
+  } });
+  assert.deepEqual(runner.listCommands(), ["alpha", "zeta"]);
+  assert.equal(runner.getCommandDisplay("alpha"), "Node version");
+  assert.equal(runner.getCommandDisplay("zeta"), `${process.execPath} --version`);
+  assert.equal(runner.getCommandDisplay("unknown"), undefined);
+});
+
+test("Runner 收敛子进程启动错误、非零退出和 stderr", async (t) => {
+  const workspace = await mkdtemp(join(tmpdir(), "agent-command-errors-"));
+  t.after(() => rm(workspace, { recursive: true, force: true }));
+  const runner = await WorkspaceCommandRunner.create(workspace, {
+    recipes: {
+      missing: { executable: "definitely-not-a-real-command", arguments: [] },
+      failed: { executable: process.execPath, arguments: ["-e", "process.stderr.write('bad'); process.exit(3)"] },
+    },
+  });
+  await assert.rejects(() => runner.run("missing", new AbortController().signal));
+  const result = await runner.run("failed", new AbortController().signal);
+  assert.equal(result.exitCode, 3);
+  assert.equal(result.stdout, "");
+  assert.equal(result.stderr, "bad");
 });

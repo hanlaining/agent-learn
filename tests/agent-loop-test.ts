@@ -15,6 +15,9 @@ import {
 import type {
   AgentEvent,
 } from "../src/agent/events.js";
+import type { ExecutionLeaseCoordinator } from "../src/runtime/execution-lease-coordinator.js";
+import { ModelInvocationStore } from "../src/runtime/model-invocation-store.js";
+import { ToolInvocationStore } from "../src/runtime/tool-invocation-store.js";
 import type {
   LlmCreateResponseRequest,
 } from "../src/llm/types.js";
@@ -814,6 +817,255 @@ test("达到 Item 阈值且 Token 未达阈值时仍先压缩", async () => {
   ]);
 });
 
+test("启用 Model WAL 时压缩请求也会持久化并提交", async () => {
+  const counter: TokenCounter = {
+    countText: () => 1,
+    countMessages: (messages) => messages.length,
+  };
+  const store = new LifecycleStore();
+  const thread = store.createThread();
+  const previous = store.createTurn(thread.id);
+  store.appendItem(previous.id, "user_message", { text: "历史问题" });
+  store.appendItem(previous.id, "assistant_message", { text: "历史回答" });
+  store.completeTurn(previous.id);
+  const turn = store.createTurn(thread.id);
+  store.appendItem(turn.id, "user_message", { text: "当前问题" });
+  const llm = new ScriptedLlmProvider([
+    { id: "wal-compaction", text: "WAL 摘要", functionCalls: [] },
+    { id: "wal-final", text: "压缩后完成", functionCalls: [] },
+  ]);
+  const modelStore = new ModelInvocationStore();
+  let persistCount = 0;
+  const loop = new AgentLoop({
+    lifecycleStore: store,
+    llm,
+    tokenBudget: new TokenBudget({
+      maxContextTokens: 20,
+      compactThresholdTokens: 1,
+      tokenCounter: counter,
+    }),
+    contextCompactor: new ContextCompactor({
+      llm,
+      retainedUserMessageTokens: 1,
+      tokenCounter: counter,
+    }),
+    modelInvocationWal: {
+      store: modelStore,
+      persist: async () => { persistCount += 1; },
+      provider: "test-provider",
+      defaultModel: "test-model",
+    },
+  });
+
+  const result = await loop.run(turn.id);
+  assert.equal(result.turn.status, "completed");
+  assert.equal(llm.requests.length, 2);
+  assert.equal(modelStore.list("committed").length, 2);
+  assert.ok(modelStore.list("committed").some((item) => item.purpose === "compaction"));
+  assert.ok(persistCount >= 6);
+});
+
+test("Model WAL 恢复遇到缺失响应事实时拒绝继续伪造回答", async () => {
+  const first = createTurnWithUserMessage();
+  const firstLlm = new ScriptedLlmProvider([
+    { id: "captured-response", text: "暂存回答", functionCalls: [] },
+  ]);
+  const firstModelStore = new ModelInvocationStore();
+  let lifecycleSnapshot: ReturnType<LifecycleStore["exportSnapshot"]> | undefined;
+  let modelSnapshot: ReturnType<ModelInvocationStore["exportSnapshot"]> | undefined;
+  const firstLoop = new AgentLoop({
+    lifecycleStore: first.store,
+    llm: firstLlm,
+    modelInvocationWal: {
+      store: firstModelStore,
+      persist: async () => undefined,
+      provider: "test-provider",
+      defaultModel: "test-model",
+    },
+    afterModelResponsePersisted: () => {
+      lifecycleSnapshot = first.store.exportSnapshot();
+      modelSnapshot = firstModelStore.exportSnapshot();
+    },
+  });
+  await firstLoop.run(first.turn.id);
+  assert.ok(lifecycleSnapshot);
+  assert.ok(modelSnapshot);
+  const malformed = structuredClone(modelSnapshot);
+  const invocation = malformed.invocations[0];
+  assert.ok(invocation);
+  delete invocation.providerResponseId;
+  delete invocation.normalizedResult;
+
+  const restoredStore = LifecycleStore.fromSnapshot(lifecycleSnapshot);
+  const restoredModelStore = ModelInvocationStore.fromSnapshot(malformed);
+  const replayLoop = new AgentLoop({
+    lifecycleStore: restoredStore,
+    llm: new ScriptedLlmProvider([]),
+    modelInvocationWal: {
+      store: restoredModelStore,
+      persist: async () => undefined,
+      provider: "test-provider",
+      defaultModel: "test-model",
+    },
+  });
+  await assert.rejects(
+    () => replayLoop.run(first.turn.id),
+    /Model invocation response is incomplete/u,
+  );
+  assert.equal(restoredStore.getTurn(first.turn.id)?.status, "failed");
+});
+
+test("Tool WAL 恢复遇到不完整结果时 fail closed 且不重复执行副作用", async () => {
+  const first = createTurnWithUserMessage();
+  let executions = 0;
+  const tool: AgentTool = {
+    requiresPermission: false,
+    definition: {
+      name: "durable_side_effect",
+      description: "持久化副作用",
+      parameters: { type: "object" },
+    },
+    execute: () => {
+      executions += 1;
+      return { result: { ok: true }, modelOutput: { ok: true } };
+    },
+  };
+  const modelStore = new ModelInvocationStore();
+  const toolStore = new ToolInvocationStore();
+  let lifecycleSnapshot: ReturnType<LifecycleStore["exportSnapshot"]> | undefined;
+  let modelSnapshot: ReturnType<ModelInvocationStore["exportSnapshot"]> | undefined;
+  let toolSnapshot: ReturnType<ToolInvocationStore["exportSnapshot"]> | undefined;
+  const firstLoop = new AgentLoop({
+    lifecycleStore: first.store,
+    llm: new ScriptedLlmProvider([
+      {
+        id: "tool-wal-call",
+        text: "",
+        functionCalls: [{
+          callId: "durable-call",
+          name: "durable_side_effect",
+          arguments: "{}",
+        }],
+      },
+      { id: "tool-wal-final", text: "副作用完成", functionCalls: [] },
+    ]),
+    toolRegistry: new ToolRegistry([tool]),
+    modelInvocationWal: {
+      store: modelStore,
+      persist: async () => undefined,
+      provider: "test-provider",
+      defaultModel: "test-model",
+    },
+    toolInvocationWal: {
+      store: toolStore,
+      persist: async () => undefined,
+    },
+    afterToolResultPersisted: () => {
+      lifecycleSnapshot = first.store.exportSnapshot();
+      modelSnapshot = modelStore.exportSnapshot();
+      toolSnapshot = toolStore.exportSnapshot();
+    },
+  });
+  await firstLoop.run(first.turn.id);
+  assert.equal(executions, 1);
+  assert.ok(lifecycleSnapshot);
+  assert.ok(modelSnapshot);
+  assert.ok(toolSnapshot);
+
+  const restoredStore = LifecycleStore.fromSnapshot(lifecycleSnapshot);
+  const restoredModelStore = ModelInvocationStore.fromSnapshot(modelSnapshot);
+  const restoredToolStore = ToolInvocationStore.fromSnapshot(toolSnapshot);
+  const invocationMap = (restoredToolStore as unknown as {
+    invocations: Map<string, { output?: string; result?: unknown }>;
+  }).invocations;
+  const corruptedInvocation = [...invocationMap.values()][0];
+  assert.ok(corruptedInvocation);
+  delete corruptedInvocation.output;
+  delete corruptedInvocation.result;
+
+  const replayLoop = new AgentLoop({
+    lifecycleStore: restoredStore,
+    llm: new ScriptedLlmProvider([]),
+    toolRegistry: new ToolRegistry([tool]),
+    modelInvocationWal: {
+      store: restoredModelStore,
+      persist: async () => undefined,
+      provider: "test-provider",
+      defaultModel: "test-model",
+    },
+    toolInvocationWal: {
+      store: restoredToolStore,
+      persist: async () => undefined,
+    },
+  });
+  await assert.rejects(
+    () => replayLoop.run(first.turn.id),
+    /Tool invocation result is incomplete/u,
+  );
+  assert.equal(executions, 1);
+  assert.equal(restoredStore.getTurn(first.turn.id)?.status, "failed");
+});
+
+test("Tool 结果持久化后 Turn 已失活时不发布迟到结果也不请求续轮", async () => {
+  const { store, turn } = createTurnWithUserMessage();
+  let executions = 0;
+  const modelStore = new ModelInvocationStore();
+  const toolStore = new ToolInvocationStore();
+  const llm = new ScriptedLlmProvider([
+    {
+      id: "late-tool-call",
+      text: "",
+      functionCalls: [{
+        callId: "late-call",
+        name: "late_result_tool",
+        arguments: "{}",
+      }],
+    },
+  ]);
+  const loop = new AgentLoop({
+    lifecycleStore: store,
+    llm,
+    toolRegistry: new ToolRegistry([{
+      requiresPermission: false,
+      definition: {
+        name: "late_result_tool",
+        description: "迟到结果工具",
+        parameters: { type: "object" },
+      },
+      execute: () => {
+        executions += 1;
+        return { result: { late: true }, modelOutput: { late: true } };
+      },
+    }]),
+    modelInvocationWal: {
+      store: modelStore,
+      persist: async () => undefined,
+      provider: "test-provider",
+      defaultModel: "test-model",
+    },
+    toolInvocationWal: {
+      store: toolStore,
+      persist: async () => undefined,
+    },
+    afterToolResultPersisted: () => {
+      store.failTurn(turn.id);
+    },
+  });
+
+  await assert.rejects(
+    () => loop.run(turn.id),
+    /Turn is no longer active/u,
+  );
+  assert.equal(executions, 1);
+  assert.equal(llm.requests.length, 1);
+  assert.deepEqual(
+    store.getItemsForTurn(turn.id).map((item) => item.type),
+    ["user_message", "tool_call"],
+  );
+  assert.equal(toolStore.list("result_received").length, 1);
+  assert.equal(store.getTurn(turn.id)?.status, "failed");
+});
+
 test("压缩后的替换历史仍超硬上限时不请求业务模型", async () => {
   const store = new LifecycleStore();
   const thread = store.createThread();
@@ -1003,6 +1255,148 @@ test("LLM 失败时 Turn 进入 failed", async () => {
   );
 });
 
+test("Agent Loop 在 Job Lease waiting 时 fail closed 且不触发模型", async () => {
+  const { store, turn } = createTurnWithUserMessage();
+  const llm = new ScriptedLlmProvider([{ id: "must-not-dispatch", text: "unexpected", functionCalls: [] }]);
+  const executionLeases = {
+    runWithJobLease: async () => ({ status: "waiting" as const }),
+  } as unknown as ExecutionLeaseCoordinator;
+  const loop = new AgentLoop({
+    lifecycleStore: store,
+    llm,
+    executionLeases,
+    resolveExecutionContext: () => ({ jobId: "job-waiting" }),
+  });
+  await assert.rejects(() => loop.run(turn.id), /waiting for its active execution owner/u);
+  assert.equal(llm.requests.length, 0);
+  assert.equal(store.getTurn(turn.id)?.status, "in_progress");
+});
+
+test("Permission 等待期间取消会中止挂起审批并收敛 Turn", async () => {
+  const { store, turn } = createTurnWithUserMessage();
+  let requested!: () => void;
+  const permissionRequested = new Promise<void>((resolve) => { requested = resolve; });
+  const llm = new ScriptedLlmProvider([{
+    id: "response-permission-pending",
+    text: "",
+    functionCalls: [{ callId: "call-permission-pending", name: "protected_tool", arguments: "{}" }],
+  }]);
+  const agentLoop = new AgentLoop({
+    lifecycleStore: store,
+    llm,
+    toolRegistry: new ToolRegistry([{
+      definition: { name: "protected_tool", description: "审批工具", parameters: { type: "object" } },
+      execute: () => ({ result: { ok: true }, modelOutput: { ok: true } }),
+    }]),
+    permissionGate: {
+      request: async () => {
+        requested();
+        await new Promise<void>(() => undefined);
+        return { decision: "allow" as const };
+      },
+    },
+  });
+
+  const running = agentLoop.run(turn.id);
+  await permissionRequested;
+  assert.equal(agentLoop.cancel(turn.id), true);
+  await assert.rejects(running, (error: unknown) => error instanceof TurnCancelledError);
+  assert.equal(store.getTurn(turn.id)?.status, "interrupted");
+});
+
+test("Permission 已完成时 waitForAbortable 清理监听器并继续执行 Tool", async () => {
+  const { store, turn } = createTurnWithUserMessage();
+  const llm = new ScriptedLlmProvider([
+    { id: "response-permission-allow", text: "", functionCalls: [{ callId: "call-permission-allow", name: "protected_tool", arguments: "{}" }] },
+    { id: "response-permission-final", text: "已执行", functionCalls: [] },
+  ]);
+  const agentLoop = new AgentLoop({
+    lifecycleStore: store,
+    llm,
+    toolRegistry: new ToolRegistry([{
+      definition: { name: "protected_tool", description: "审批工具", parameters: { type: "object" } },
+      execute: () => ({ result: { ok: true }, modelOutput: { ok: true } }),
+    }]),
+    permissionGate: { request: async () => ({ decision: "allow" as const }) },
+  });
+  const result = await agentLoop.run(turn.id);
+  assert.equal(result.turn.status, "completed");
+  assert.deepEqual(result.assistantMessage.content, { text: "已执行" });
+});
+
+test("Permission Provider 拒绝时 waitForAbortable 清理监听器并让 Turn 失败", async () => {
+  const { store, turn } = createTurnWithUserMessage();
+  const llm = new ScriptedLlmProvider([{
+    id: "response-permission-error",
+    text: "",
+    functionCalls: [{ callId: "call-permission-error", name: "protected_tool", arguments: "{}" }],
+  }]);
+  const agentLoop = new AgentLoop({
+    lifecycleStore: store,
+    llm,
+    toolRegistry: new ToolRegistry([{
+      definition: { name: "protected_tool", description: "审批工具", parameters: { type: "object" } },
+      execute: () => ({ result: { ok: true }, modelOutput: { ok: true } }),
+    }]),
+    permissionGate: { request: async () => { throw new Error("permission transport failed"); } },
+  });
+  await assert.rejects(agentLoop.run(turn.id), /permission transport failed/);
+  assert.equal(store.getTurn(turn.id)?.status, "failed");
+});
+
+test("Provider 自己抛出 AbortError 但没有 Runtime 取消信号时仍进入 failed", async () => {
+  const { store, turn } = createTurnWithUserMessage();
+  const events: AgentEvent[] = [];
+  const providerAbort = new Error("provider transport aborted");
+  providerAbort.name = "AbortError";
+  const abortingLlm = {
+    async createResponse(): Promise<never> {
+      throw providerAbort;
+    },
+  };
+
+  const agentLoop = new AgentLoop({
+    lifecycleStore: store,
+    llm: abortingLlm,
+    events: { emit: (event) => events.push(event) },
+  });
+
+  await assert.rejects(
+    () => agentLoop.run(turn.id),
+    (error: unknown) => error === providerAbort,
+  );
+
+  assert.equal(store.getTurn(turn.id)?.status, "failed");
+  const lastEvent = events.at(-1);
+  assert.equal(lastEvent?.type, "turn/failed");
+  assert.equal(lastEvent?.type === "turn/failed" ? lastEvent.message : undefined,
+    "provider transport aborted");
+});
+
+test("非 Error Provider 拒绝值不会伪装成 interrupted", async () => {
+  const { store, turn } = createTurnWithUserMessage();
+  const events: AgentEvent[] = [];
+  const rejectingLlm = {
+    async createResponse(): Promise<never> {
+      throw "transport rejected";
+    },
+  };
+
+  const agentLoop = new AgentLoop({
+    lifecycleStore: store,
+    llm: rejectingLlm,
+    events: { emit: (event) => events.push(event) },
+  });
+
+  await assert.rejects(() => agentLoop.run(turn.id), (error: unknown) => error === "transport rejected");
+
+  assert.equal(store.getTurn(turn.id)?.status, "failed");
+  const lastEvent = events.at(-1);
+  assert.equal(lastEvent?.type, "turn/failed");
+  assert.equal(lastEvent?.type === "turn/failed" ? lastEvent.message : undefined,
+    "Unknown agent error");
+});
+
 test("取消正在等待 LLM 的 Turn 并进入 interrupted", async () => {
   const { store, turn } = createTurnWithUserMessage();
   let notifyStarted: (() => void) | undefined;
@@ -1048,6 +1442,38 @@ test("取消正在等待 LLM 的 Turn 并进入 interrupted", async () => {
   assert.equal(events.at(-1)?.type, "turn/interrupted");
 });
 
+test("运行中的 Turn 拒绝重复 run，取消后再次 run 会先恢复 interrupted 状态", async () => {
+  const { store, turn } = createTurnWithUserMessage();
+  let calls = 0;
+  let notifyStarted!: () => void;
+  const started = new Promise<void>((resolve) => { notifyStarted = resolve; });
+  const llm = {
+    createResponse(request: { signal?: AbortSignal }): Promise<{ id: string; text: string; functionCalls: [] }> {
+      calls += 1;
+      if (calls === 1) {
+        notifyStarted();
+        return new Promise((_, reject) => {
+          request.signal?.addEventListener("abort", () => reject(request.signal?.reason), { once: true });
+        });
+      }
+      return Promise.resolve({ id: "response-after-resume", text: "恢复后完成", functionCalls: [] });
+    },
+  };
+  const agentLoop = new AgentLoop({ lifecycleStore: store, llm });
+
+  const firstRun = agentLoop.run(turn.id);
+  await started;
+  await assert.rejects(agentLoop.run(turn.id), /Turn is already running/u);
+  assert.equal(agentLoop.cancel(turn.id), true);
+  await assert.rejects(firstRun, (error: unknown) => error instanceof TurnCancelledError);
+  assert.equal(store.getTurn(turn.id)?.status, "interrupted");
+
+  const resumed = await agentLoop.run(turn.id);
+  assert.equal(resumed.turn.status, "completed");
+  assert.deepEqual(resumed.assistantMessage.content, { text: "恢复后完成" });
+  assert.equal(calls, 2);
+});
+
 test("Turn 总时限到达时中断 LLM 并进入 timed_out", async () => {
   const { store, turn } = createTurnWithUserMessage();
   const events: AgentEvent[] = [];
@@ -1080,4 +1506,193 @@ test("Turn 总时限到达时中断 LLM 并进入 timed_out", async () => {
 
   assert.equal(store.getTurn(turn.id)?.status, "timed_out");
   assert.equal(events.at(-1)?.type, "turn/timed_out");
+});
+
+test("Agent Loop 构造期拒绝非法时限与孤立 Tool WAL", () => {
+  const { store } = createTurnWithUserMessage();
+  const llm = new ScriptedLlmProvider([]);
+  assert.throws(() => new AgentLoop({ lifecycleStore: store, llm, turnTimeoutMs: 0 }),
+    /turnTimeoutMs must be a positive integer/);
+  assert.throws(() => new AgentLoop({
+    lifecycleStore: store,
+    llm,
+    toolInvocationWal: { store: {}, persist: () => undefined } as never,
+  }), /Tool invocation WAL requires model invocation WAL/);
+});
+
+test("Agent Loop 在执行前拒绝越权 Tool 与非法 Skill 参数", async () => {
+  const tool: AgentTool = {
+    requiresPermission: false,
+    definition: { name: "read_skill", description: "read", parameters: { type: "object" } },
+    execute: () => ({ result: { ok: true }, modelOutput: { ok: true } }),
+  };
+  for (const scenario of [
+    { allowedTools: [] as string[], allowedSkills: ["*"] as string[], arguments: '{"name":"safe"}', message: /Tool is not allowed/ },
+    { allowedTools: ["read_skill"], allowedSkills: ["safe"], arguments: "not-json", message: /Skill is not allowed/ },
+  ]) {
+    const { store, turn } = createTurnWithUserMessage();
+    const loop = new AgentLoop({ lifecycleStore: store,
+      llm: new ScriptedLlmProvider([{ id: "response-denied-tool", text: "", functionCalls: [
+        { callId: "call-denied", name: "read_skill", arguments: scenario.arguments },
+      ] }]), toolRegistry: new ToolRegistry([tool]) });
+    await assert.rejects(() => loop.run(turn.id, {
+      allowedTools: scenario.allowedTools,
+      allowedSkills: scenario.allowedSkills,
+    }), scenario.message);
+    assert.deepEqual(store.getItemsForTurn(turn.id).map((item) => item.type), ["user_message"]);
+  }
+});
+
+test("Agent Loop 对最终回答执行拒绝后修复，并限制重复修复次数", async () => {
+  const first = createTurnWithUserMessage();
+  const repairing = new ScriptedLlmProvider([
+    { id: "bad", text: "未通过格式检查", functionCalls: [] },
+    { id: "good", text: "符合格式的最终答案", functionCalls: [] },
+  ]);
+  const loop = new AgentLoop({ lifecycleStore: first.store, llm: repairing });
+  const result = await loop.run(first.turn.id, {
+    finalResponseGuard: {
+      reject: (text) => text.includes("未通过") ? "必须给出结构化结论" : undefined,
+      repairInstructions: "请按结构化格式重写。",
+    },
+  });
+  assert.equal(result.turn.status, "completed");
+  assert.equal(repairing.requests.length, 2);
+  assert.match(repairing.requests[1]?.instructions ?? "", /结构化格式/);
+
+  const second = createTurnWithUserMessage();
+  const alwaysBad = new ScriptedLlmProvider([
+    { id: "bad-1", text: "未通过 1", functionCalls: [] },
+    { id: "bad-2", text: "未通过 2", functionCalls: [] },
+  ]);
+  const strictLoop = new AgentLoop({ lifecycleStore: second.store, llm: alwaysBad });
+  await assert.rejects(
+    () => strictLoop.run(second.turn.id, {
+      finalResponseGuard: { reject: () => "永远拒绝", repairInstructions: "重试", maxRepairAttempts: 1 },
+    }),
+    /repeatedly returned an invalid final response/,
+  );
+  assert.equal(second.store.getTurn(second.turn.id)?.status, "failed");
+});
+
+test("Agent Loop 在工具轮次耗尽后只做无工具最终化", async () => {
+  const { store, turn } = createTurnWithUserMessage();
+  const llm = new ScriptedLlmProvider([
+    { id: "tool-limit", text: "", functionCalls: [{ callId: "call-limit", name: "unknown_tool", arguments: "{}" }] },
+    { id: "finalized", text: "工具轮次已安全收口", functionCalls: [] },
+  ]);
+  const loop = new AgentLoop({ lifecycleStore: store, llm, maxToolRounds: 0 });
+  const result = await loop.run(turn.id);
+  assert.equal(result.turn.status, "completed");
+  assert.deepEqual(store.getItemsForTurn(turn.id).map((item) => item.type), ["user_message", "tool_call", "tool_result", "assistant_message"]);
+  assert.equal(llm.requests[1]?.tools?.length, 0);
+  assert.match(JSON.stringify(store.getItemsForTurn(turn.id).at(2)?.content), /tool_round_limit/);
+});
+
+test("Agent Loop 拒绝空最终回答并拒绝同一 Turn 并发运行", async () => {
+  const empty = createTurnWithUserMessage();
+  const emptyLoop = new AgentLoop({ lifecycleStore: empty.store, llm: new ScriptedLlmProvider([{ id: "empty", text: "", functionCalls: [] }]) });
+  await assert.rejects(() => emptyLoop.run(empty.turn.id), /no final assistant text/);
+  assert.equal(empty.store.getTurn(empty.turn.id)?.status, "failed");
+
+  const concurrent = createTurnWithUserMessage();
+  let release: (() => void) | undefined;
+  const pending = new Promise<void>((resolve) => { release = resolve; });
+  const waiting = { createResponse: async () => { await pending; return { id: "done", text: "完成", functionCalls: [] }; } };
+  const concurrentLoop = new AgentLoop({ lifecycleStore: concurrent.store, llm: waiting });
+  const firstRun = concurrentLoop.run(concurrent.turn.id);
+  await new Promise((resolve) => setImmediate(resolve));
+  await assert.rejects(() => concurrentLoop.run(concurrent.turn.id), /already running/);
+  release?.();
+  await firstRun;
+});
+
+test("Agent Loop 识别 run_return Tool 输出并通过 continuation 传递子 Run", async () => {
+  const { store, turn } = createTurnWithUserMessage();
+  const returned: string[][] = [];
+  const returnTool: AgentTool = {
+    requiresPermission: false,
+    definition: { name: "return_tool", description: "return", parameters: { type: "object" } },
+    execute: () => ({ result: { type: "run_return", runId: "child-run-1" }, modelOutput: { type: "run_return", runId: "child-run-1" } }),
+  };
+  const llm = new ScriptedLlmProvider([
+    { id: "delegate", text: "", functionCalls: [{ callId: "call-return", name: "return_tool", arguments: "{}" }] },
+    { id: "final", text: "父 Agent 已收到子结果", functionCalls: [] },
+  ]);
+  const loop = new AgentLoop({
+    lifecycleStore: store,
+    llm,
+    toolRegistry: new ToolRegistry([returnTool]),
+    continueAfterAgentReturns: async (_turnId, childRunIds, continuation) => {
+      returned.push(childRunIds);
+      return continuation();
+    },
+  });
+  const result = await loop.run(turn.id);
+  assert.equal(result.turn.status, "completed");
+  assert.deepEqual(returned, [["child-run-1"]]);
+});
+
+test("Agent Loop recovery matrix rejects stale work and preserves late-response facts", async () => {
+  await assert.rejects(
+    () => new AgentLoop({ lifecycleStore: new LifecycleStore(), llm: new ScriptedLlmProvider([]) }).run("missing-turn"),
+    /Turn is unavailable|not found/i,
+  );
+
+  const replay = createTurnWithUserMessage();
+  const replayProvider = new ScriptedLlmProvider([{ id: "replay", text: "一次完成", functionCalls: [] }]);
+  const replayLoop = new AgentLoop({ lifecycleStore: replay.store, llm: replayProvider });
+  const first = await replayLoop.run(replay.turn.id);
+  assert.equal(first.turn.status, "completed");
+  await assert.rejects(() => replayLoop.run(replay.turn.id), /Current Turn is not in progress/);
+  assert.equal(replayProvider.requests.length, 1);
+
+  const cancelled = createTurnWithUserMessage();
+  let release: (() => void) | undefined;
+  const pending = new Promise<void>((resolve) => { release = resolve; });
+  const cancelledLoop = new AgentLoop({ lifecycleStore: cancelled.store, llm: {
+    createResponse: async (request) => {
+      await pending;
+      if (request.signal?.aborted) throw request.signal.reason;
+      return { id: "cancelled-late", text: "late", functionCalls: [] };
+    },
+  } });
+  const running = cancelledLoop.run(cancelled.turn.id);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(cancelledLoop.cancel(cancelled.turn.id), true);
+  release?.();
+  await assert.rejects(running, /cancel|interrupt/i);
+  assert.equal(cancelled.store.getTurn(cancelled.turn.id)?.status, "interrupted");
+  assert.equal(cancelledLoop.cancel(cancelled.turn.id), false);
+
+  const resumed = createTurnWithUserMessage();
+  const resumeLoop = new AgentLoop({ lifecycleStore: resumed.store, llm: new ScriptedLlmProvider([{ id: "resume", text: "恢复完成", functionCalls: [] }]) });
+  resumed.store.interruptTurn(resumed.turn.id);
+  const resumedResult = await resumeLoop.run(resumed.turn.id);
+  assert.equal(resumedResult.turn.status, "completed");
+
+  const timed = createTurnWithUserMessage();
+  const timedLoop = new AgentLoop({ lifecycleStore: timed.store, turnTimeoutMs: 5, llm: {
+    createResponse: async (request) => new Promise((_resolve, reject) => {
+      request.signal?.addEventListener("abort", () => reject(request.signal?.reason), { once: true });
+    }),
+  } });
+  await assert.rejects(() => timedLoop.run(timed.turn.id), TurnTimeoutError);
+  assert.equal(timed.store.getTurn(timed.turn.id)?.status, "timed_out");
+
+  const empty = createTurnWithUserMessage();
+  const emptyLoop = new AgentLoop({ lifecycleStore: empty.store, llm: new ScriptedLlmProvider([{ id: "empty-recovery", text: "", functionCalls: [] }]) });
+  await assert.rejects(() => emptyLoop.run(empty.turn.id), /no final assistant text/);
+  assert.equal(empty.store.getTurn(empty.turn.id)?.status, "failed");
+
+  const unknownTool = createTurnWithUserMessage();
+  const unknownLoop = new AgentLoop({ lifecycleStore: unknownTool.store, llm: new ScriptedLlmProvider([
+    { id: "unknown-call", text: "", functionCalls: [{ callId: "unknown", name: "missing_tool", arguments: "{}" }] },
+  ]) });
+  await assert.rejects(() => unknownLoop.run(unknownTool.turn.id), /Unknown tool/);
+  assert.equal(unknownTool.store.getTurn(unknownTool.turn.id)?.status, "failed");
+
+  assert.throws(() => new AgentLoop({ lifecycleStore: new LifecycleStore(), llm: new ScriptedLlmProvider([]), turnTimeoutMs: 0 }), /turnTimeoutMs/);
+  assert.throws(() => new AgentLoop({ lifecycleStore: new LifecycleStore(), llm: new ScriptedLlmProvider([]), turnTimeoutMs: 1.5 }), /turnTimeoutMs/);
+  assert.throws(() => new AgentLoop({ lifecycleStore: new LifecycleStore(), llm: new ScriptedLlmProvider([]), toolInvocationWal: {} as never }), /requires model invocation WAL/);
 });

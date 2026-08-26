@@ -1,0 +1,48 @@
+{
+  "schemaVersion": "rt95-external-baseline-protocol-v1",
+  "baselineId": "BASELINE-REPLACE",
+  "status": "Blocked",
+  "createdAt": "YYYY-MM-DDTHH:MM:SSZ",
+  "maintainerId": "baseline-maintainer-handle",
+  "reviewerId": "non-author-reviewer-handle",
+  "source": {
+    "title": "REPLACE_WITH_PUBLIC_TITLE",
+    "urlOrDoi": "REPLACE_WITH_PUBLIC_URL_OR_DOI",
+    "repositoryCommitOrRelease": "REPLACE_WITH_FIXED_VERSION",
+    "license": "REPLACE_WITH_LICENSE",
+    "retrievedAt": "YYYY-MM-DDTHH:MM:SSZ",
+    "sourceSha256": "REPLACE_WITH_64_HEX_SHA256"
+  },
+  "candidateBinding": {
+    "commit": "REPLACE_WITH_NONZERO_40_HEX_COMMIT",
+    "preregistrationSha256": "REPLACE_WITH_64_HEX_SHA256",
+    "casePlanSha256": "REPLACE_WITH_64_HEX_SHA256"
+  },
+  "fairnessContract": {
+    "taskDefinition": "REPLACE_WITH_FROZEN_TASK_ID",
+    "faultWindows": ["REPLACE_WITH_WINDOW_IDS"],
+    "seeds": [0],
+    "oracleDefinition": "REPLACE_WITH_FROZEN_ORACLE_ID",
+    "budgetAndTimeout": "REPLACE_WITH_SAME_LIMITS_AS_CANDIDATE",
+    "retryPolicy": "REPLACE_WITH_FROZEN_POLICY",
+    "concurrency": "REPLACE_WITH_FIXED_VALUE",
+    "humanIntervention": "forbidden-or-explicitly-recorded",
+    "exclusionRule": "REPLACE_WITH_PREREGISTERED_RULE",
+    "knownDifferences": []
+  },
+  "rawDelivery": {
+    "rawResultsPath": "baseline/raw-results.json",
+    "rawResultsSha256": "REPLACE_WITH_64_HEX_SHA256",
+    "failureAndExclusionLedgerPath": "baseline/exclusion-ledger.json",
+    "failureAndExclusionLedgerSha256": "REPLACE_WITH_64_HEX_SHA256",
+    "provenancePath": "baseline/provenance.json",
+    "provenanceSha256": "REPLACE_WITH_64_HEX_SHA256"
+  },
+  "comparabilityDecision": {
+    "decision": "pending-review",
+    "decisionRationale": "",
+    "reviewedAt": null,
+    "reviewerSignatureRef": null
+  },
+  "notes": "A paper citation, screenshot, aggregate mean, or unversioned adapter is not an external baseline. If raw results or a fair protocol cannot be obtained, retain status Blocked and record the reason."
+}

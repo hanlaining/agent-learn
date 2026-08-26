@@ -206,3 +206,30 @@ test("列出目录时限制返回数量", async (t) => {
     ["a.txt", "b.txt"],
   );
 });
+
+test("Sandbox 构造与文件/目录边界全部 fail closed", async (t) => {
+  const fixture = await createFixture();
+  t.after(() => rm(fixture.parent, { recursive: true, force: true }));
+  const plainFile = join(fixture.parent, "plain.txt");
+  await writeFile(plainFile, "plain", "utf8");
+  await assert.rejects(() => WorkspaceSandbox.create(plainFile), /Workspace must be a directory/);
+  await assert.rejects(() => WorkspaceSandbox.create(fixture.workspace, { maxFileBytes: 0 }), /maxFileBytes must be a positive integer/);
+  await assert.rejects(() => WorkspaceSandbox.create(fixture.workspace, { maxListEntries: -1 }), /maxListEntries must be a positive integer/);
+
+  const sandbox = await WorkspaceSandbox.create(fixture.workspace);
+  await assert.rejects(() => sandbox.readTextFile("docs"), /Sandbox path is not a file/);
+  await assert.rejects(() => sandbox.listFiles("docs/README.md"), /Sandbox path is not a directory/);
+  await assert.rejects(() => sandbox.readTextFile(""), /Path escapes workspace/);
+  await assert.rejects(() => sandbox.readTextFile(plainFile), /Path escapes workspace/);
+});
+
+test("目录列表保留工作区内链接并静默排除越界链接", async (t) => {
+  const fixture = await createFixture();
+  t.after(() => rm(fixture.parent, { recursive: true, force: true }));
+  await symlink(join(fixture.workspace, "docs"), join(fixture.workspace, "docs-link"), "junction");
+  await symlink(fixture.outside, join(fixture.workspace, "outside-link"), "junction");
+  const sandbox = await WorkspaceSandbox.create(fixture.workspace);
+  const listed = await sandbox.listFiles(".");
+  assert.equal(listed.entries.some((entry) => entry.path === "docs-link" && entry.type === "symbolic_link"), true);
+  assert.equal(listed.entries.some((entry) => entry.path === "outside-link"), false);
+});

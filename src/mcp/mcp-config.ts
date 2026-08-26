@@ -11,6 +11,7 @@ export interface McpServerConfig {
   args: string[];
   cwd?: string;
   requestTimeoutMs?: number;
+  discoveryTimeoutMs?: number;
 }
 
 const ROOT_KEYS = new Set(["mcpServers"]);
@@ -19,6 +20,7 @@ const SERVER_KEYS = new Set([
   "args",
   "cwd",
   "requestTimeoutMs",
+  "discoveryTimeoutMs",
 ]);
 
 /**
@@ -118,8 +120,21 @@ function parseServerConfig(
     );
   }
 
+  if (
+    value.discoveryTimeoutMs !== undefined &&
+    (!Number.isInteger(value.discoveryTimeoutMs) ||
+      (value.discoveryTimeoutMs as number) <= 0)
+  ) {
+    throw new Error(
+      `Invalid MCP Server discoveryTimeoutMs: ${name}`,
+    );
+  }
+
   const cwd = value.cwd as string | undefined;
   const requestTimeoutMs = value.requestTimeoutMs as
+    | number
+    | undefined;
+  const discoveryTimeoutMs = value.discoveryTimeoutMs as
     | number
     | undefined;
 
@@ -139,6 +154,9 @@ function parseServerConfig(
     ...(requestTimeoutMs === undefined
       ? {}
       : { requestTimeoutMs }),
+    ...(discoveryTimeoutMs === undefined
+      ? {}
+      : { discoveryTimeoutMs }),
   };
 }
 

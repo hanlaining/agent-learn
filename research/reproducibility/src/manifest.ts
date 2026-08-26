@@ -17,7 +17,7 @@ import {
 const SHA256_PATTERN = /^[0-9a-f]{64}$/u;
 const COMMIT_PATTERN = /^[0-9a-f]{40}$/u;
 const SAFE_OS_VALUE_PATTERN = /^[A-Za-z0-9._+-]+$/u;
-const SENSITIVE_FILE_PATTERN = /^(?:\.env(?:\..*)?|credentials?(?:\..*)?|secrets?(?:\..*)?)$/iu;
+const SENSITIVE_FILE_PATTERN = /(?:^\.env(?:\..*)?$)|(?:^|[._-])(?:credentials?|secrets?|tokens?)(?:[._-]|$)/iu;
 const SENSITIVE_EXTENSION_PATTERN = /\.(?:key|pem|p12|pfx)$/iu;
 const SECRET_CONTENT_PATTERNS = [
   /-----BEGIN [A-Z ]*PRIVATE KEY-----/u,
@@ -171,13 +171,24 @@ export function inferContentType(relativePath: string): ArtifactContentType {
     case ".md": return "text/markdown";
     case ".txt":
     case ".log":
-    case ".repro": return "text/plain";
+    case ".repro":
+    case ".cjs":
+    case ".js":
+    case ".mjs":
+    case ".ts":
+    case ".tsx": return "text/plain";
     case ".yaml":
     case ".yml": return "application/yaml";
     case ".pdf": return "application/pdf";
     case ".zip": return "application/zip";
     default: return "application/octet-stream";
   }
+}
+
+export function assertPublishableArtifactContent(relativePath: string, content: Buffer): void {
+  const safePath = normalizeSafeRelativePath(relativePath, "publishable artifact path");
+  assertArtifactFileNameSafe(safePath);
+  assertNoHighConfidenceSecrets(content, safePath, inferContentType(safePath));
 }
 
 async function collectArtifactFiles(rootDirectory: string, manifestPath: string): Promise<ArtifactFileEntry[]> {

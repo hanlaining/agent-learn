@@ -303,6 +303,38 @@ test("安全 Markdown 只允许无凭据的 HTTP 和 HTTPS 链接", () => {
   assert.equal(links[2]?.kind === "link" ? links[2].href : undefined, undefined);
 });
 
+test("安全 Markdown 完整解析引用、有序列表、分隔线与受限行内格式", () => {
+  assert.deepEqual(parseSafeMarkdown([
+    "> 第一行",
+    "> 第二行",
+    "",
+    "1. 首项",
+    "2. 次项",
+    "",
+    "---",
+    "",
+    "多行段落",
+    "继续说明",
+  ].join("\n")), [
+    { kind: "blockquote", text: "第一行\n第二行" },
+    { kind: "ordered_list", items: ["首项", "次项"] },
+    { kind: "divider" },
+    { kind: "paragraph", text: "多行段落\n继续说明" },
+  ]);
+
+  assert.deepEqual(parseSafeInline("前缀 `code` **粗体** *强调* [链接](http://example.com) 后缀"), [
+    { kind: "text", text: "前缀 " },
+    { kind: "code", text: "code" },
+    { kind: "text", text: " " },
+    { kind: "strong", text: "粗体" },
+    { kind: "text", text: " " },
+    { kind: "emphasis", text: "强调" },
+    { kind: "text", text: " " },
+    { kind: "link", text: "链接", href: "http://example.com/" },
+    { kind: "text", text: " 后缀" },
+  ]);
+});
+
 test("同一动画帧合并文本 Delta 并只保留最新 RuntimeSession", () => {
   const running = session("running");
   const completed = { ...running, status: "completed" as const };
@@ -467,6 +499,7 @@ test("过程摘要为每种 Runtime 终态提供安全固定文案", () => {
   assert.equal(summarizeRuntimeStatus("completed"), "处理完成");
   assert.equal(summarizeRuntimeStatus("failed"), "请求未完成");
   assert.equal(summarizeRuntimeStatus("cancelled"), "已取消");
+  assert.equal(summarizeRuntimeStatus("interrupted"), "等待恢复");
   assert.equal(summarizeRuntimeStatus("timed_out"), "已超时");
 });
 
@@ -531,7 +564,7 @@ test("公开过程与最终结果按协议类型拆分并分别保持原始顺�
 
 test("只有成功完成会自动压缩公开过程，其他状态默认保持展开", () => {
   assert.equal(shouldAutoCollapseProcess("completed"), true);
-  for (const status of ["running", "failed", "cancelled", "timed_out"] as const) {
+  for (const status of ["running", "failed", "cancelled", "interrupted", "timed_out"] as const) {
     assert.equal(shouldAutoCollapseProcess(status), false);
   }
 });
@@ -546,7 +579,7 @@ test("滚动锁只在接近底部时自动跟随", () => {
 });
 
 test("失败、取消和超时完成态不会保留任何 running 动画", () => {
-  for (const status of ["failed", "cancelled", "timed_out"] as const) {
+  for (const status of ["failed", "cancelled", "interrupted", "timed_out"] as const) {
     const value = session(status);
     for (const item of value.items) {
       assert.equal(isRuntimeItemAnimated(value, item), false);

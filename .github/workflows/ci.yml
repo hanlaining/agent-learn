@@ -1,0 +1,91 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  windows-gate:
+    runs-on: windows-latest
+    timeout-minutes: 35
+    env:
+      PROVIDER_SMOKE_LIVE: "0"
+      OPENAI_API_KEY: ""
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install locked dependencies
+        run: npm ci
+
+      - name: Type check
+        run: npm run check
+
+      - name: Verify test discovery
+        run: npm run test:discovery
+
+      - name: Verify evidence consistency
+        run: npm run test:evidence
+
+      - name: Verify evidence snapshot
+        run: npm run evidence:verify
+
+      - name: Run main test gate
+        run: npm test
+
+      - name: Enforce source-only coverage floor
+        run: npm run test:coverage
+
+      - name: Run contract and ledger-adjacent tests
+        run: |
+          npm run test:lease
+          npm run test:requirements
+          npm run test:w0-contracts
+          npm run test:w0-ledgers
+
+      - name: Verify offline Provider capability contract
+        run: npm run provider:smoke
+
+      - name: Scan release candidates for credentials
+        run: npm run security:scan
+
+      - name: Run Electron integration tests
+        run: npm run test:electron
+
+      - name: Run benchmark tests
+        run: npm run test:benchmarks
+
+      - name: Run reproducibility tests
+        run: npm run test:reproducibility
+
+      - name: Run Runtime E2E gate
+        run: npm run test:runtime-e2e
+
+      - name: Run process chaos gate
+        run: npm run test:process-chaos
+
+      - name: Build Electron application
+        run: npm run electron:build
+
+      - name: Verify supported runtime environment
+        run: npm run doctor
+
+      - name: Generate CycloneDX SBOM
+        run: npm run sbom:generate
+
+      - name: Verify demo preflight
+        run: npm run demo:preflight
+
+      - name: Verify release readiness
+        run: npm run release:check

@@ -42,6 +42,28 @@ function deferred(): { promise: Promise<void>; resolve: () => void } {
   return { promise, resolve };
 }
 
+test("无活动 Lease 时 optional commit 放行、required commit 和 renew 均 fail closed", async (t) => {
+  const { statePath } = await fixture(t);
+  const coordinator = new ExecutionLeaseCoordinator(new PersistentRuntimeLeaseStore(statePath), {
+    ownerId: "no-active-owner", ttlMs: 1_000, renewIntervalMs: 500, maxRenewals: 0,
+  });
+  assert.equal(await coordinator.withActiveFencedCommit("runtime_state", () => "optional"), "optional");
+  await assert.rejects(() => coordinator.withRequiredActiveFencedCommit("runtime_state", () => 1), /No active execution lease/);
+  await assert.rejects(() => coordinator.renewActiveLease(), /No active execution lease/);
+});
+
+test("Lease 配置与 Job 输入的边界均 fail closed", async (t) => {
+  const { statePath } = await fixture(t);
+  assert.throws(() => new ExecutionLeaseCoordinator(new PersistentRuntimeLeaseStore(statePath), {
+    ownerId: "", ttlMs: 1_000, renewIntervalMs: 500, maxRenewals: 0,
+  }), /ownerId/);
+  const coordinator = new ExecutionLeaseCoordinator(new PersistentRuntimeLeaseStore(statePath), {
+    ownerId: "boundary-owner", ttlMs: 1_000, renewIntervalMs: 500, maxRenewals: 0,
+  });
+  await assert.rejects(() => coordinator.runWithJobLease("", async () => undefined), /jobId/);
+  await assert.rejects(() => coordinator.withJob("", async () => undefined), /jobId/);
+});
+
 test("two real Store/coordinator instances keep one legal Job owner across 1000 races", async (t) => {
   const { statePath } = await fixture(t);
   const clock = new ManualClock(Date.parse("2026-08-19T00:00:00.000Z"));
@@ -548,4 +570,198 @@ test("Return claim/consume and parent continuation do not advance without the Jo
   assert.equal(persistCalls, 0);
   assert.equal(runtimeStore.listReturns(job.id)[0]?.status, "ready");
   await leaseStore.release(held);
+});
+
+test("后台续租成功会更新活动 Context，续租故障则阻止最终提交", async () => {
+  const lease = {
+    resource: { type: "job" as const, id: "job-auto-renew" },
+    ownerId: "automatic-owner",
+    leaseVersion: 1,
+    fencingToken: 7,
+    expiresAt: "2026-08-24T00:00:00.050Z",
+  };
+  let renewCalls = 0;
+  let releaseCalls = 0;
+  const successfulStore: ExecutionLeaseStore = {
+    acquire: async () => structuredClone(lease),
+    renew: async (current) => {
+      renewCalls += 1;
+      return { ...current, leaseVersion: current.leaseVersion + 1, expiresAt: "2026-08-24T00:00:00.100Z" };
+    },
+    release: async () => ++releaseCalls,
+    withFencedCommit: async (current, commit) => commit(current.fencingToken),
+  };
+  const successful = new ExecutionLeaseCoordinator(successfulStore, {
+    ownerId: "automatic-owner", ttlMs: 50, renewIntervalMs: 2, maxRenewals: 1,
+  });
+  const outcome = await successful.runWithJobLease(lease.resource.id, async (context) => {
+    await new Promise((resolve) => setTimeout(resolve, 15));
+    return { version: context.leaseVersion, deadline: context.deadline };
+  });
+  assert.equal(outcome.status, "acquired");
+  if (outcome.status === "acquired") {
+    assert.deepEqual(outcome.value, { version: 2, deadline: "2026-08-24T00:00:00.100Z" });
+  }
+  assert.equal(renewCalls, 1);
+  assert.equal(releaseCalls, 1);
+
+  const renewalFailure = new Error("automatic renewal unavailable");
+  const failingStore: ExecutionLeaseStore = {
+    ...successfulStore,
+    renew: async () => { throw renewalFailure; },
+  };
+  const failing = new ExecutionLeaseCoordinator(failingStore, {
+    ownerId: "automatic-owner", ttlMs: 50, renewIntervalMs: 2, maxRenewals: 1,
+  });
+  await assert.rejects(
+    failing.runWithJobLease(lease.resource.id, async () => {
+      await new Promise((resolve) => setTimeout(resolve, 15));
+    }),
+    (error) => error === renewalFailure,
+  );
+});
+
+test("执行租约拒绝非法配置和非法重试延迟", async () => {
+  const unreachable: ExecutionLeaseStore = {
+    acquire: async () => { throw new RuntimeLeaseConflictError("lease_held", "held"); },
+    renew: async (lease) => lease,
+    release: async () => 0,
+    withFencedCommit: async (lease, commit) => commit(lease.fencingToken),
+  };
+  assert.throws(() => new ExecutionLeaseCoordinator(unreachable, { ownerId: " " }), /ownerId must not be empty/);
+  assert.throws(() => new ExecutionLeaseCoordinator(unreachable, { ownerId: "boundary", ttlMs: 0 }), /ttlMs must be a positive safe integer/);
+  assert.throws(() => new ExecutionLeaseCoordinator(unreachable, { ownerId: "boundary", ttlMs: 10, renewIntervalMs: 10 }), /renewIntervalMs must be less than ttlMs/);
+  assert.throws(() => new ExecutionLeaseCoordinator(unreachable, { maxRenewals: -1 }), /maxRenewals must be a non-negative safe integer/);
+  const invalidDelay = new ExecutionLeaseCoordinator(unreachable, {
+    ownerId: "invalid-delay", ttlMs: 100, renewIntervalMs: 50,
+    maxAcquireAttempts: 2, acquireRetryDelayMs: () => Number.NaN,
+  });
+  await assert.rejects(
+    invalidDelay.runWithJobLease("job-invalid-delay", async () => undefined),
+    /acquireRetryDelayMs must return a non-negative finite number/,
+  );
+});
+
+test("释放重试使用非零退避并在恢复后完成清理", async () => {
+  const lease = {
+    resource: { type: "job" as const, id: "job-release-backoff" },
+    ownerId: "backoff-owner", leaseVersion: 1, fencingToken: 1,
+    expiresAt: "2026-08-24T00:00:01.000Z",
+  };
+  let releaseCalls = 0;
+  const store: ExecutionLeaseStore = {
+    acquire: async () => structuredClone(lease),
+    renew: async (value) => value,
+    release: async () => {
+      releaseCalls += 1;
+      if (releaseCalls === 1) throw new Error("transient release");
+      return 0;
+    },
+    withFencedCommit: async (value, commit) => commit(value.fencingToken),
+  };
+  const coordinator = new ExecutionLeaseCoordinator(store, {
+    ownerId: "backoff-owner", maxReleaseAttempts: 2,
+    releaseRetryDelayMs: () => 1,
+  });
+  const result = await coordinator.runWithJobLease("job-release-backoff", async () => "done");
+  assert.equal(result.status, "acquired");
+  assert.equal(result.status === "acquired" ? result.value : undefined, "done");
+  assert.equal(releaseCalls, 2);
+});
+
+test("无活动租约时 fenced commit 明确区分可选与必需语义", async () => {
+  const store: ExecutionLeaseStore = {
+    acquire: async () => { throw new Error("unused"); },
+    renew: async (lease) => lease,
+    release: async () => 0,
+    withFencedCommit: async (_lease, commit) => commit(1),
+  };
+  const coordinator = new ExecutionLeaseCoordinator(store, { ownerId: "outside-owner" });
+  assert.equal(await coordinator.withActiveFencedCommit("tool_commit", () => "optional"), "optional");
+  await assert.rejects(
+    coordinator.withRequiredActiveFencedCommit("tool_commit", () => "required"),
+    /No active execution lease/,
+  );
+  await assert.rejects(coordinator.renewActiveLease(), /No active execution lease/);
+});
+
+test("获取租约在非冲突错误上立即传播，不伪造 waiting", async () => {
+  const failure = new Error("store unavailable");
+  const store: ExecutionLeaseStore = {
+    acquire: async () => { throw failure; },
+    renew: async (lease) => lease,
+    release: async () => 0,
+    withFencedCommit: async (lease, commit) => commit(lease.fencingToken),
+  };
+  const coordinator = new ExecutionLeaseCoordinator(store, { ownerId: "error-owner", maxAcquireAttempts: 3 });
+  await assert.rejects(coordinator.runWithJobLease("job-error", async () => undefined), (error) => error === failure);
+});
+
+test("冲突达到上限时返回 waiting 并保留当前 lease，而不是抛错", async () => {
+  const currentLease = {
+    resource: { type: "job" as const, id: "job-waiting" },
+    ownerId: "other-owner", leaseVersion: 2, fencingToken: 9,
+    expiresAt: "2026-08-24T00:00:01.000Z",
+  };
+  const store: ExecutionLeaseStore = {
+    acquire: async () => { throw new RuntimeLeaseConflictError("lease_held", "held", currentLease); },
+    renew: async (lease) => lease,
+    release: async () => 0,
+    withFencedCommit: async (lease, commit) => commit(lease.fencingToken),
+  };
+  const coordinator = new ExecutionLeaseCoordinator(store, { ownerId: "waiting-owner", maxAcquireAttempts: 2, acquireRetryDelayMs: () => 0 });
+  const result = await coordinator.runWithJobLease("job-waiting", async () => "must-not-run");
+  assert.equal(result.status, "waiting");
+  if (result.status === "waiting") assert.deepEqual(result.currentLease, currentLease);
+});
+
+test("释放租约失败时按上限重试，成功后返回业务结果", async () => {
+  const lease = {
+    resource: { type: "job" as const, id: "job-release-retry" }, ownerId: "release-owner",
+    leaseVersion: 1, fencingToken: 1, expiresAt: "2026-08-24T00:00:01.000Z",
+  };
+  let releases = 0;
+  const store: ExecutionLeaseStore = {
+    acquire: async () => structuredClone(lease), renew: async (value) => value,
+    release: async () => { releases += 1; if (releases < 3) throw new Error("transient release"); return 0; },
+    withFencedCommit: async (value, commit) => commit(value.fencingToken),
+  };
+  const coordinator = new ExecutionLeaseCoordinator(store, { ownerId: "release-owner", maxReleaseAttempts: 3, releaseRetryDelayMs: () => 0 });
+  const result = await coordinator.runWithJobLease("job-release-retry", async () => "done");
+  assert.equal(result.status, "acquired");
+  assert.equal(releases, 3);
+});
+
+test("释放租约连续失败时业务成功仍返回 release 错误", async () => {
+  const failure = new Error("release permanently unavailable");
+  const lease = {
+    resource: { type: "job" as const, id: "job-release-fail" }, ownerId: "release-fail-owner",
+    leaseVersion: 1, fencingToken: 1, expiresAt: "2026-08-24T00:00:01.000Z",
+  };
+  let releases = 0;
+  const store: ExecutionLeaseStore = {
+    acquire: async () => structuredClone(lease), renew: async (value) => value,
+    release: async () => { releases += 1; if (releases > 0) throw failure; return 0; },
+    withFencedCommit: async (value, commit) => commit(value.fencingToken),
+  };
+  const coordinator = new ExecutionLeaseCoordinator(store, { ownerId: "release-fail-owner", maxReleaseAttempts: 2, releaseRetryDelayMs: () => 0 });
+  await assert.rejects(coordinator.runWithJobLease("job-release-fail", async () => "done"), (error) => error === failure);
+  assert.equal(releases, 2);
+});
+
+test("活动租约续租达到上限后 fail closed", async () => {
+  const lease = {
+    resource: { type: "job" as const, id: "job-renew-limit" }, ownerId: "renew-owner",
+    leaseVersion: 1, fencingToken: 1, expiresAt: "2026-08-24T00:00:01.000Z",
+  };
+  const store: ExecutionLeaseStore = {
+    acquire: async () => structuredClone(lease), renew: async (value) => ({ ...value, leaseVersion: value.leaseVersion + 1 }),
+    release: async () => 0,
+    withFencedCommit: async (value, commit) => commit(value.fencingToken),
+  };
+  const coordinator = new ExecutionLeaseCoordinator(store, { ownerId: "renew-owner", maxRenewals: 1 });
+  await coordinator.runWithJobLease("job-renew-limit", async () => {
+    await coordinator.renewActiveLease();
+    await assert.rejects(coordinator.renewActiveLease(), /renewal limit reached/);
+  });
 });

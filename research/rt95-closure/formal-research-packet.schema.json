@@ -1,0 +1,197 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://god-agent.local/schemas/rt95-formal-research-packet-v1.json",
+  "title": "God-Agent RT95 formal research preflight packet v1",
+  "description": "Preflight-only packet. This schema cannot represent formal verification or external reproduction.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "claimBoundary",
+    "packetId",
+    "lifecycle",
+    "preflight",
+    "verification",
+    "bindings",
+    "roles",
+    "providerPreflight",
+    "plan",
+    "ledger",
+    "claimEvidence"
+  ],
+  "properties": {
+    "schemaVersion": { "const": "rt95-formal-research-packet-v1" },
+    "claimBoundary": { "const": "preflight-only-not-formal-or-external-verification" },
+    "packetId": { "$ref": "#/$defs/id" },
+    "lifecycle": { "const": "preflight" },
+    "preflight": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "blockers"],
+      "properties": {
+        "status": { "enum": ["blocked", "ready-to-run"] },
+        "blockers": { "type": "array", "uniqueItems": true, "items": { "type": "string", "minLength": 1 } }
+      }
+    },
+    "verification": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["formalVerified", "externalReproduced", "independentReviewCompleted"],
+      "properties": {
+        "formalVerified": { "const": false },
+        "externalReproduced": { "const": false },
+        "independentReviewCompleted": { "const": false }
+      }
+    },
+    "bindings": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["preregistrationPayloadSha256", "baselineCommit", "sourceTreeSha256", "lockfileSha256", "configSha256"],
+      "properties": {
+        "preregistrationPayloadSha256": { "$ref": "#/$defs/sha256" },
+        "baselineCommit": { "type": "string", "pattern": "^[0-9a-f]{40}$", "not": { "pattern": "^0+$" } },
+        "sourceTreeSha256": { "$ref": "#/$defs/nonZeroSha256" },
+        "lockfileSha256": { "$ref": "#/$defs/nonZeroSha256" },
+        "configSha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "roles": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["executorId", "reviewerId", "independence"],
+      "properties": {
+        "executorId": { "$ref": "#/$defs/id" },
+        "reviewerId": { "$ref": "#/$defs/id" },
+        "independence": { "const": "declared-independent-not-yet-reviewed" }
+      }
+    },
+    "providerPreflight": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mode", "kind", "realApiCalls", "credentialsRead", "authorizationId", "maxRequests", "maxTotalCostUsd"],
+      "properties": {
+        "mode": { "enum": ["offline-only", "live-authorized"] },
+        "kind": { "enum": ["deterministic-fake", "live-provider-authorized-not-called"] },
+        "realApiCalls": { "const": 0 },
+        "credentialsRead": { "const": false },
+        "authorizationId": { "type": ["string", "null"] },
+        "maxRequests": { "type": "integer", "minimum": 0 },
+        "maxTotalCostUsd": { "type": "number", "minimum": 0 }
+      }
+    },
+    "plan": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["experimentId", "pairing", "plannedCaseCount", "casePlanSha256", "cases"],
+      "properties": {
+        "experimentId": { "$ref": "#/$defs/id" },
+        "pairing": { "const": "same-seed-across-arms" },
+        "plannedCaseCount": { "type": "integer", "minimum": 1 },
+        "casePlanSha256": { "$ref": "#/$defs/sha256" },
+        "cases": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["caseId", "armId", "faultWindowId", "seed"],
+            "properties": {
+              "caseId": { "$ref": "#/$defs/id" },
+              "armId": { "$ref": "#/$defs/id" },
+              "faultWindowId": { "$ref": "#/$defs/id" },
+              "seed": { "type": "integer", "minimum": 1, "maximum": 4294967295 }
+            }
+          }
+        }
+      }
+    },
+    "ledger": { "$ref": "#/$defs/ledger" },
+    "claimEvidence": { "$ref": "#/$defs/claimMatrix" }
+  },
+  "$defs": {
+    "id": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$" },
+    "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "nonZeroSha256": { "allOf": [{ "$ref": "#/$defs/sha256" }, { "not": { "pattern": "^0+$" } }] },
+    "nullableId": { "anyOf": [{ "$ref": "#/$defs/id" }, { "type": "null" }] },
+    "nullableSha256": { "anyOf": [{ "$ref": "#/$defs/sha256" }, { "type": "null" }] },
+    "nullablePath": {
+      "anyOf": [
+        { "type": "string", "pattern": "^(?!/)(?![A-Za-z]:)(?!.*(?:^|/)\\.\\.(?:/|$))[A-Za-z0-9._/-]+$" },
+        { "type": "null" }
+      ]
+    },
+    "ledgerEvent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "sequence", "eventId", "eventType", "occurredAt", "caseId", "attempt", "outcome",
+        "artifactPath", "artifactSha256", "reason", "previousEventSha256", "eventSha256"
+      ],
+      "properties": {
+        "sequence": { "type": "integer", "minimum": 0 },
+        "eventId": { "$ref": "#/$defs/id" },
+        "eventType": { "enum": ["ledger-opened", "case-started", "case-recorded", "rerun-authorized", "manual-intervention-recorded", "ledger-sealed"] },
+        "occurredAt": { "type": "string", "format": "date-time" },
+        "caseId": { "$ref": "#/$defs/nullableId" },
+        "attempt": { "type": ["integer", "null"], "minimum": 1 },
+        "outcome": { "enum": ["success", "failure", "excluded", "aborted", null] },
+        "artifactPath": { "$ref": "#/$defs/nullablePath" },
+        "artifactSha256": { "$ref": "#/$defs/nullableSha256" },
+        "reason": { "type": ["string", "null"] },
+        "previousEventSha256": { "$ref": "#/$defs/nullableSha256" },
+        "eventSha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "ledger": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schemaVersion", "claimBoundary", "packetId", "bindingsSha256", "status", "events"],
+      "properties": {
+        "schemaVersion": { "const": "rt95-formal-raw-ledger-v1" },
+        "claimBoundary": { "const": "preflight-only-not-formal-or-external-verification" },
+        "packetId": { "$ref": "#/$defs/id" },
+        "bindingsSha256": { "$ref": "#/$defs/sha256" },
+        "status": { "enum": ["open", "sealed"] },
+        "events": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/ledgerEvent" } }
+      }
+    },
+    "evidenceItem": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["requirement", "status", "artifactPath", "artifactSha256", "ledgerEventSha256", "producerId", "reviewerId"],
+      "properties": {
+        "requirement": { "type": "string", "minLength": 1 },
+        "status": { "enum": ["NotVerified", "Verified"] },
+        "artifactPath": { "$ref": "#/$defs/nullablePath" },
+        "artifactSha256": { "$ref": "#/$defs/nullableSha256" },
+        "ledgerEventSha256": { "$ref": "#/$defs/nullableSha256" },
+        "producerId": { "$ref": "#/$defs/nullableId" },
+        "reviewerId": { "$ref": "#/$defs/nullableId" }
+      }
+    },
+    "claimMatrix": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schemaVersion", "claimBoundary", "claims"],
+      "properties": {
+        "schemaVersion": { "const": "rt95-claim-evidence-matrix-v1" },
+        "claimBoundary": { "const": "preflight-only-not-formal-or-external-verification" },
+        "claims": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["claimId", "claimClass", "status", "evidence"],
+            "properties": {
+              "claimId": { "$ref": "#/$defs/id" },
+              "claimClass": { "enum": ["code", "formal-result", "external", "publication", "maturity"] },
+              "status": { "enum": ["NotVerified", "CodeVerified"] },
+              "evidence": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/evidenceItem" } }
+            }
+          }
+        }
+      }
+    }
+  }
+}

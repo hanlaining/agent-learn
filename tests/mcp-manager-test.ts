@@ -298,3 +298,23 @@ test("取消 Turn 会沿 AbortSignal 中断正在执行的 MCP Tool", async (con
     /still-alive/,
   );
 });
+
+test("Manager 发现跨 Server 的重复 Runtime Tool 时关闭全部已启动进程并拒绝启动", async () => {
+  await assert.rejects(
+    McpManager.start([
+      { name: "duplicate", command: process.execPath, args: [fixturePath, "happy"], requestTimeoutMs: 2_000 },
+      { name: "duplicate", command: process.execPath, args: [fixturePath, "legacy"], requestTimeoutMs: 2_000 },
+    ]),
+    /Duplicate MCP Runtime Tool name/,
+  );
+});
+
+test("Manager 的空配置可重复关闭且返回隔离副本", async () => {
+  const manager = await McpManager.start([]);
+  const tools = manager.getAgentTools();
+  tools.push({} as never);
+  assert.deepEqual(manager.getAgentTools(), []);
+  assert.deepEqual(manager.getStatuses(), []);
+  await manager.close();
+  await manager.close();
+});

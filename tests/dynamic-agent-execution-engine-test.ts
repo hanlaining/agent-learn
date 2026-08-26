@@ -380,6 +380,38 @@ test("动态 Engine 只观察自己的 Return，不消费固定 Workflow Return"
   assert.equal(dynamic.runtime.listReturns(teamJob.id).find((item) => item.id === teamReturn.id)?.status, "ready");
 });
 
+test("Dynamic Engine 拒绝伪造 Context，并为缺失、活动与终态 Job 输出隔离 Snapshot", async () => {
+  const setup = createFixture("context-snapshot-boundary");
+  const engine = new DynamicAgentExecutionEngine(setup.runtime);
+  await assert.rejects(() => engine.start({ jobId: setup.jobId, threadId: "forged-thread", rootRunId: setup.rootRunId,
+    executionKind: "software_change", workflowVersion: "dynamic_v1", drive: async () => ({}) }), /does not match persisted Job/);
+  assert.deepEqual(engine.snapshot("missing"), { engine: "dynamic_agent", jobId: "missing", terminal: true });
+  await engine.recover(setup.jobId);
+  const active = engine.snapshot(setup.jobId);
+  assert.equal(active.workflowVersion, "dynamic_v1");
+  assert.equal(active.phase, "queued");
+  assert.equal(active.recoveryAction, "explicit_model_resume");
+  assert.equal(active.terminal, false);
+  setup.runtime.cancelJob(setup.jobId);
+  assert.equal(engine.snapshot(setup.jobId).terminal, true);
+});
+
+test("Dynamic continuation 普通失败退回原 Return，等待显式人工裁决后再投递", async () => {
+  const setup = createFixture("continuation-retry-boundary");
+  const task = addTask(setup, "completed");
+  const returned = addReturn(setup, task.id, "completed");
+  const boundaries: ExecutionLeaseCommitBoundary[] = [];
+  const engine = new DynamicAgentExecutionEngine(setup.runtime, { persist: (boundary) => { boundaries.push(boundary); } });
+  await assert.rejects(() => engine.start({ jobId: setup.jobId, threadId: setup.threadId, rootRunId: setup.rootRunId,
+    executionKind: "software_change", workflowVersion: "dynamic_v1",
+    drive: async () => { throw new Error("parent provider unavailable"); } }), /parent provider unavailable/);
+  assert.equal(setup.runtime.listReturns(setup.jobId).find((item) => item.id === returned.id)?.status, "ready");
+  assert.equal(setup.runtime.getJob(setup.jobId)?.status, "waiting_returns");
+  assert.equal(setup.runtime.getDynamicExecution(setup.jobId)?.phase, "manual_intervention");
+  assert.equal(setup.runtime.getDynamicExecution(setup.jobId)?.recoveryAction, "manual_intervention");
+  assert.equal(boundaries.filter((item) => item === "parent_continuation").length, 2);
+});
+
 function createFixture(suffix: string) {
   const runtime = new AgentRuntimeStore(); const runs = new AgentRunStore();
   const threadId = `thread-${suffix}`; const rootTurnId = `root-turn-${suffix}`;

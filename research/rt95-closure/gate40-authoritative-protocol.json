@@ -1,0 +1,95 @@
+{
+  "schemaVersion": "rt95-gate40-authoritative-protocol-v1",
+  "authority": "current-research-candidate",
+  "lifecycle": "candidate-not-frozen",
+  "claimBoundary": "local-pilot-protocol-only-not-formal",
+  "gateId": "EXP-RT95-032",
+  "pairing": "same-seed-across-arms",
+  "seedPlan": {
+    "algorithm": "xorshift32-v1",
+    "masterSeed": 20260824,
+    "seeds": [
+      469816031,
+      3443330994,
+      4121183031,
+      3314624278,
+      3472974415
+    ],
+    "seedListSha256": "5a9b5ec4193f82477fa09a5f47537915478d8982c615074725f179036342ca7b"
+  },
+  "windows": [
+    {
+      "id": "FW-MODEL-RESPONSE-COMMIT",
+      "oracleId": "ORACLE-MODEL-WAL-V1",
+      "readiness": "available",
+      "productionCommand": "node --import tsx src/app-server/main.ts",
+      "harnessPath": "research/runtime-e2e-benchmarks/src/process-chaos-harness.ts",
+      "localPilot": { "planned": 5, "passed": 5, "failed": 0 }
+    },
+    {
+      "id": "FW-TOOL-EFFECT-RECEIPT",
+      "oracleId": "ORACLE-TOOL-OUTCOME-V1",
+      "readiness": "available",
+      "productionCommand": "node --import tsx src/app-server/main.ts",
+      "harnessPath": "research/runtime-e2e-benchmarks/src/process-chaos-harness.ts",
+      "localPilot": { "planned": 5, "passed": 5, "failed": 0 }
+    },
+    {
+      "id": "FW-RETURN-RESPONSE-LEASE",
+      "oracleId": "ORACLE-RETURN-LEASE-V1",
+      "readiness": "available",
+      "productionCommand": "node --import tsx src/app-server/main.ts",
+      "harnessPath": "research/runtime-e2e-benchmarks/src/process-chaos-harness.ts",
+      "localPilot": { "planned": 5, "passed": 5, "failed": 0 }
+    },
+    {
+      "id": "FW-RETURN-PERSISTED-CONSUME",
+      "oracleId": "ORACLE-RETURN-CONSUME-V1",
+      "readiness": "available",
+      "productionCommand": "node --import tsx src/app-server/main.ts",
+      "harnessPath": "research/runtime-e2e-benchmarks/src/process-chaos-harness.ts",
+      "localPilot": { "planned": 5, "passed": 5, "failed": 0 }
+    },
+    {
+      "id": "FW-LEASE-FENCED-COMMIT",
+      "oracleId": "ORACLE-FENCING-V1",
+      "readiness": "available",
+      "productionCommand": "node --import tsx src/app-server/main.ts",
+      "harnessPath": "research/runtime-e2e-benchmarks/src/process-chaos-harness.ts",
+      "localPilot": { "planned": 5, "passed": 5, "failed": 0 }
+    },
+    {
+      "id": "FW-WORKFLOW-STAGE-COMMIT",
+      "oracleId": "ORACLE-WORKFLOW-COMMIT-V1",
+      "readiness": "available",
+      "productionCommand": "node --import tsx src/app-server/main.ts",
+      "harnessPath": "research/runtime-e2e-benchmarks/src/process-chaos-harness.ts",
+      "localPilot": { "planned": 5, "passed": 5, "failed": 0 }
+    },
+    {
+      "id": "FW-RECEIPT-COMMIT",
+      "oracleId": "ORACLE-RECEIPT-V1",
+      "readiness": "available",
+      "productionCommand": "node --import tsx src/app-server/main.ts",
+      "harnessPath": "research/runtime-e2e-benchmarks/src/process-chaos-harness.ts",
+      "localPilot": { "planned": 5, "passed": 5, "failed": 0 }
+    },
+    {
+      "id": "FW-PROOF-COMMIT",
+      "oracleId": "ORACLE-PROOF-V1",
+      "readiness": "available",
+      "productionCommand": "node --import tsx src/app-server/main.ts",
+      "harnessPath": "research/runtime-e2e-benchmarks/src/process-chaos-harness.ts",
+      "localPilot": { "planned": 5, "passed": 5, "failed": 0 }
+    }
+  ],
+  "summary": {
+    "windowCount": 8,
+    "seedsPerWindow": 5,
+    "plannedCases": 40,
+    "localPassed": 40,
+    "localFailed": 0,
+    "formalVerified": 0,
+    "completeFormalGate40": false
+  }
+}

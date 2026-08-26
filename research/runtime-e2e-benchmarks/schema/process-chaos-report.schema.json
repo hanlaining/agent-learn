@@ -61,7 +61,7 @@
     "productionEntry": { "const": "node --import tsx src/app-server/main.ts" },
     "reproCommand": {
       "type": "string",
-      "pattern": "^npm exec -- tsx research/runtime-e2e-benchmarks/src/process-chaos-cli\\.ts --seed [a-zA-Z0-9._-]+ --output <directory>$"
+      "pattern": "^npm exec -- tsx research/runtime-e2e-benchmarks/src/process-chaos-cli\\.ts --window FW-RETURN-RESPONSE-LEASE --seed [a-zA-Z0-9._-]+ --output <directory>$"
     },
     "statePath": {
       "type": "string",

@@ -48,3 +48,27 @@ test("空闲时 Ctrl+C 安全退出", () => {
 
   assert.equal(exited, true);
 });
+
+test("运行中 Ctrl+C 的取消失败通过统一错误回调收敛", async () => {
+  const source = new EventEmitter();
+  const errors: unknown[] = [];
+  const actions: string[] = [];
+
+  registerCliInterruptHandler(source, {
+    hasActiveTurn: () => true,
+    denyPendingPermission: () => actions.push("deny"),
+    cancelActiveTurn: async () => {
+      actions.push("cancel");
+      throw new Error("cancel transport failed");
+    },
+    exitIdle: () => actions.push("exit"),
+    reportError: (error) => errors.push(error),
+  });
+
+  source.emit("SIGINT");
+  await new Promise<void>((resolve) => setImmediate(resolve));
+
+  assert.deepEqual(actions, ["deny", "cancel"]);
+  assert.equal(errors.length, 1);
+  assert.match(String(errors[0]), /cancel transport failed/u);
+});

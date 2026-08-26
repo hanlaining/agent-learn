@@ -558,7 +558,7 @@ function sanitizeRuntimeSession(value) {
   if (
     !isRecord(value) ||
     typeof value.turnId !== "string" ||
-    !["running", "completed", "failed", "cancelled", "timed_out"]
+    !["running", "completed", "failed", "cancelled", "interrupted", "timed_out"]
       .includes(value.status) ||
     typeof value.startedAt !== "string" ||
     !Array.isArray(value.items)

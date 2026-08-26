@@ -65,4 +65,16 @@ test("read_skill 只按已发现名称返回完整说明", async (t) => {
     ),
     /Unknown Skill/,
   );
+  const context = { signal: new AbortController().signal };
+  assert.throws(() => tool.execute("{}", context), /only a non-empty name/);
+  assert.throws(() => tool.execute("not-json", context), /valid JSON/);
+  assert.throws(() => tool.execute('{"name":"finance-analysis","extra":true}', context), /only a non-empty name/);
+  assert.throws(() => tool.execute('{"name":""}', context), /only a non-empty name/);
+});
+
+test("read_skill 没有任何已发现 Skill 时拒绝注册", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "read-skill-empty-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const loader = await SkillLoader.create({ roots: [root] });
+  assert.throws(() => createReadSkillTool(loader), /at least one Skill/);
 });

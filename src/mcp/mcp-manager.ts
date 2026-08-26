@@ -50,6 +50,9 @@ export class McpManager {
           ...(config.requestTimeoutMs === undefined
             ? {}
             : { requestTimeoutMs: config.requestTimeoutMs }),
+          ...(config.discoveryTimeoutMs === undefined
+            ? {}
+            : { discoveryTimeoutMs: config.discoveryTimeoutMs }),
         });
         const managedServer: ManagedMcpServer = {
           name: config.name,

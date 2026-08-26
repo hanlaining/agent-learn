@@ -290,6 +290,7 @@ export function summarizeRuntimeStatus(status: RuntimeSessionStatus): string {
   if (status === "completed") return "处理完成";
   if (status === "failed") return "请求未完成";
   if (status === "cancelled") return "已取消";
+  if (status === "interrupted") return "等待恢复";
   return "已超时";
 }
 

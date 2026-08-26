@@ -6,6 +6,7 @@ import {
 } from "../src/runtime/lifecycle-store.js";
 import {
   isThreadHistoryResult,
+  parseThreadHistoryParams,
   readThreadHistory,
 } from "../src/runtime/thread-history.js";
 
@@ -59,4 +60,27 @@ test("旧版 Runtime 恢复伪用户消息加载后迁移为内部消息", () =>
   const restored = LifecycleStore.fromSnapshot(source.exportSnapshot());
   assert.deepEqual(readThreadHistory(restored, thread.id).messages.map((item) => item.text), ["恢复完成"]);
   assert.equal(restored.getItemsForTurn(turn.id)[0]?.type, "runtime_message");
+});
+
+test("Thread History 参数、断链 Turn 和损坏消息全部 fail closed", () => {
+  assert.deepEqual(parseThreadHistoryParams({ threadId: "thread-1" }), { threadId: "thread-1" });
+  for (const value of [null, [], {}, { threadId: "" }, { threadId: " " }, { threadId: 1 }]) {
+    assert.throws(() => parseThreadHistoryParams(value), /non-empty string/);
+  }
+  assert.deepEqual(parseThreadHistoryParams({ threadId: "thread", extra: true }), { threadId: "thread" });
+
+  const store = new LifecycleStore();
+  const thread = store.createThread();
+  const turn = store.createTurn(thread.id);
+  store.appendItem(turn.id, "user_message", { text: "ok" });
+  thread.turnIds.push("missing-turn");
+  assert.throws(() => readThreadHistory(store, thread.id), /Turn not found/);
+
+  const broken = new LifecycleStore();
+  const brokenThread = broken.createThread();
+  const brokenTurn = broken.createTurn(brokenThread.id);
+  broken.appendItem(brokenTurn.id, "assistant_message", { markdown: "wrong field" });
+  assert.throws(() => readThreadHistory(broken, brokenThread.id), /no text/);
+  assert.throws(() => readThreadHistory(broken, "missing-thread"), /Thread not found/);
+  assert.equal(isThreadHistoryResult({ thread: brokenThread, messages: [{ id: "m", turnId: brokenTurn.id, role: "other", text: "ok", createdAt: "now" }] }), false);
 });

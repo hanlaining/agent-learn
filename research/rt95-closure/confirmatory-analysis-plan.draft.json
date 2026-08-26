@@ -1,0 +1,16 @@
+{
+  "schemaVersion": "rt95-confirmatory-analysis-plan-v1",
+  "claimBoundary": "draft-analysis-contract-only-not-frozen",
+  "lifecycle": "draft",
+  "alpha": 0.05,
+  "confidenceLevel": 0.95,
+  "pairUnit": "seed+faultWindowId",
+  "test": "exact-mcnemar-two-sided",
+  "interval": "discordant-wilson-matched-odds-ratio",
+  "multiplicity": "holm-bonferroni",
+  "family": [
+    { "analysisId": "AN-RQ2-NO-LEASE", "comparatorArmId": "ARM-NO-LEASE" },
+    { "analysisId": "AN-RQ2-NO-RECOVERY", "comparatorArmId": "ARM-NO-RECOVERY" },
+    { "analysisId": "AN-RQ2-NO-WAL", "comparatorArmId": "ARM-NO-WAL" }
+  ]
+}

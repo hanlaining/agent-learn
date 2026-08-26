@@ -156,14 +156,33 @@ export class DesktopController {
         if (config !== undefined) this.configsByThread.set(threadId, config);
       }
       for (const persisted of sessions) {
+        // 进程重启后的 running 只是“旧执行体已消失”的事实，不等于用户取消。
+        // 与 Codex 的独立 TurnAborted 语义一致，保留 interrupted 会话并允许稍后恢复。
+        const wasRunning = isRunningState(persisted.turnState) ||
+          persisted.session.status === "running";
+        const recoveredSession = wasRunning
+          ? {
+              ...persisted.session,
+              status: "interrupted" as const,
+              completedAt: persisted.session.completedAt ?? new Date().toISOString(),
+            }
+          : persisted.session;
+        const recoveredTurnState = isRunningState(persisted.turnState)
+          ? "idle" as const
+          : persisted.turnState;
         this.runsByThread.set(persisted.threadId, {
           turnId: persisted.session.turnId,
-          state: isRunningState(persisted.turnState) ? "cancelled" : persisted.turnState,
-          round: readLatestRound(persisted.session),
-          session: persisted.session.status === "running"
-            ? { ...persisted.session, status: "cancelled", completedAt: new Date().toISOString() }
-            : persisted.session,
+          state: recoveredTurnState,
+          round: readLatestRound(recoveredSession),
+          session: recoveredSession,
         });
+        if (wasRunning) {
+          await this.runtime.setRuntimeSession(
+            persisted.threadId,
+            recoveredTurnState,
+            cloneRuntimeSession(recoveredSession),
+          ).catch(() => undefined);
+        }
       }
       this.persistentStateLoaded = true;
     }
@@ -563,7 +582,23 @@ export class DesktopController {
       await this.runtime.cancelTurn(run.turnId);
       return true;
     } catch {
-      // Turn 可能在点击停止和 RPC 到达之间自然结束；对 UI 来说目标已达到。
+      // Turn 可能在点击停止和 RPC 到达之间自然结束。读取持久终态后再收口，
+      // 避免自然完成被遗留的 cancelling 覆盖；若 Runtime 仍显示 running，
+      // 则保留 cancelling，等待真实终态事件，不能凭空猜测。
+      const persisted = await this.runtime.listRuntimeSessions().catch(() => []);
+      const recovered = persisted.find((item) =>
+        item.threadId === threadId && item.session.turnId === run.turnId,
+      );
+      if (recovered !== undefined && recovered.session.status !== "running") {
+        run.session = cloneRuntimeSession(recovered.session);
+        run.round = readLatestRound(run.session);
+        this.setTurnState(
+          threadId,
+          run,
+          isRunningState(recovered.turnState) ? "idle" : recovered.turnState,
+        );
+        this.emitRuntimeSession(threadId, run);
+      }
       return false;
     }
   }

@@ -1,0 +1,271 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://god-agent.local/schemas/rt95-preregistration-v1.json",
+  "title": "God-Agent RT95 preregistration v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "registrationId",
+    "title",
+    "lifecycle",
+    "verification",
+    "researchQuestions",
+    "hypotheses",
+    "primaryEndpoint",
+    "estimand",
+    "minimumEffectOfInterest",
+    "sampleSize",
+    "seedPlan",
+    "faultPlan",
+    "rules",
+    "arms",
+    "analyses",
+    "provenance",
+    "integrity"
+  ],
+  "properties": {
+    "schemaVersion": { "const": "rt95-preregistration-v1" },
+    "registrationId": { "$ref": "#/$defs/nonEmpty" },
+    "title": { "$ref": "#/$defs/nonEmpty" },
+    "lifecycle": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "frozenAt"],
+      "properties": {
+        "status": { "enum": ["draft", "frozen"] },
+        "frozenAt": { "type": ["string", "null"], "format": "date-time" }
+      }
+    },
+    "verification": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "evidenceActual", "reviewerConclusion"],
+      "properties": {
+        "status": { "const": "NotVerified" },
+        "evidenceActual": { "type": "null" },
+        "reviewerConclusion": { "type": "null" }
+      }
+    },
+    "researchQuestions": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/researchQuestion" }
+    },
+    "hypotheses": {
+      "type": "array",
+      "minItems": 2,
+      "items": { "$ref": "#/$defs/hypothesis" }
+    },
+    "primaryEndpoint": { "$ref": "#/$defs/primaryEndpoint" },
+    "estimand": { "$ref": "#/$defs/estimand" },
+    "minimumEffectOfInterest": { "$ref": "#/$defs/minimumEffect" },
+    "sampleSize": { "$ref": "#/$defs/sampleSize" },
+    "seedPlan": { "$ref": "#/$defs/seedPlan" },
+    "faultPlan": { "$ref": "#/$defs/faultPlan" },
+    "rules": { "$ref": "#/$defs/rules" },
+    "arms": { "$ref": "#/$defs/arms" },
+    "analyses": { "$ref": "#/$defs/analyses" },
+    "provenance": { "$ref": "#/$defs/provenance" },
+    "integrity": { "$ref": "#/$defs/integrity" }
+  },
+  "$defs": {
+    "nonEmpty": { "type": "string", "minLength": 1 },
+    "id": { "type": "string", "pattern": "^[A-Z][A-Z0-9-]*$" },
+    "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "idList": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "$ref": "#/$defs/id" } },
+    "researchQuestion": {
+      "type": "object", "additionalProperties": false, "required": ["id", "question"],
+      "properties": { "id": { "type": "string", "pattern": "^RQ[1-9][0-9]*$" }, "question": { "$ref": "#/$defs/nonEmpty" } }
+    },
+    "hypothesis": {
+      "type": "object", "additionalProperties": false, "required": ["id", "kind", "rqId", "statement"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" }, "kind": { "enum": ["null", "alternative"] },
+        "rqId": { "type": "string", "pattern": "^RQ[1-9][0-9]*$" }, "statement": { "$ref": "#/$defs/nonEmpty" }
+      }
+    },
+    "primaryEndpoint": {
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "name", "construct", "unit", "direction", "numerator", "denominator", "analysisId", "oracleId"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" }, "name": { "$ref": "#/$defs/nonEmpty" }, "construct": { "$ref": "#/$defs/nonEmpty" },
+        "unit": { "$ref": "#/$defs/nonEmpty" }, "direction": { "enum": ["higher-is-better", "lower-is-better", "two-sided"] },
+        "numerator": { "$ref": "#/$defs/nonEmpty" }, "denominator": { "$ref": "#/$defs/nonEmpty" },
+        "analysisId": { "$ref": "#/$defs/id" }, "oracleId": { "$ref": "#/$defs/id" }
+      }
+    },
+    "estimand": {
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "population", "unitOfAnalysis", "treatment", "comparator", "contrast"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" }, "population": { "$ref": "#/$defs/nonEmpty" }, "unitOfAnalysis": { "$ref": "#/$defs/nonEmpty" },
+        "treatment": { "$ref": "#/$defs/nonEmpty" }, "comparator": { "$ref": "#/$defs/nonEmpty" }, "contrast": { "$ref": "#/$defs/nonEmpty" }
+      }
+    },
+    "minimumEffect": {
+      "type": "object", "additionalProperties": false, "required": ["absoluteDifference", "unit", "rationale"],
+      "properties": {
+        "absoluteDifference": { "type": "number", "exclusiveMinimum": 0 }, "unit": { "$ref": "#/$defs/nonEmpty" }, "rationale": { "$ref": "#/$defs/nonEmpty" }
+      }
+    },
+    "sampleSize": {
+      "type": "object", "additionalProperties": false,
+      "required": ["basis", "calculationId", "alpha", "targetPower", "targetHalfWidth", "assumedBaselineRate", "perArm", "total", "rationale"],
+      "properties": {
+        "basis": { "$ref": "#/$defs/nonEmpty" }, "calculationId": { "$ref": "#/$defs/id" },
+        "alpha": { "type": "number", "exclusiveMinimum": 0, "exclusiveMaximum": 1 },
+        "targetPower": { "type": "number", "exclusiveMinimum": 0, "exclusiveMaximum": 1 },
+        "targetHalfWidth": { "type": "number", "exclusiveMinimum": 0, "exclusiveMaximum": 1 },
+        "assumedBaselineRate": { "type": "number", "minimum": 0, "maximum": 1 },
+        "perArm": { "type": "integer", "minimum": 1 }, "total": { "type": "integer", "minimum": 1 }, "rationale": { "$ref": "#/$defs/nonEmpty" }
+      }
+    },
+    "seedPlan": {
+      "type": "object", "additionalProperties": false, "required": ["id", "algorithm", "masterSeed", "seeds", "seedListSha256"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" }, "algorithm": { "const": "xorshift32-v1" },
+        "masterSeed": { "type": "integer", "minimum": 0, "maximum": 4294967295 },
+        "seeds": {
+          "type": "array",
+          "const": [469816031, 3443330994, 4121183031, 3314624278, 3472974415]
+        },
+        "seedListSha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "productionEntry": {
+      "type": "object", "additionalProperties": false, "required": ["command", "harnessPath"],
+      "properties": {
+        "command": { "anyOf": [{ "$ref": "#/$defs/nonEmpty" }, { "type": "null" }] },
+        "harnessPath": {
+          "anyOf": [
+            { "type": "string", "pattern": "^(?!/)(?!.*(?:^|/)[.][.](?:/|$))[A-Za-z0-9._/-]+$" },
+            { "type": "null" }
+          ]
+        }
+      }
+    },
+    "faultOracle": {
+      "type": "object", "additionalProperties": false, "required": ["id", "assertion"],
+      "properties": { "id": { "$ref": "#/$defs/id" }, "assertion": { "$ref": "#/$defs/nonEmpty" } }
+    },
+    "windowReadiness": {
+      "type": "object", "additionalProperties": false, "required": ["status", "blockedReason"],
+      "properties": {
+        "status": { "enum": ["available", "blocked"] },
+        "blockedReason": { "anyOf": [{ "$ref": "#/$defs/nonEmpty" }, { "type": "null" }] }
+      }
+    },
+    "faultWindow": {
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "description", "injectionPoint", "productionEntry", "oracle", "expectedArtifacts", "readiness"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "description": { "$ref": "#/$defs/nonEmpty" },
+        "injectionPoint": { "$ref": "#/$defs/nonEmpty" },
+        "productionEntry": { "$ref": "#/$defs/productionEntry" },
+        "oracle": { "$ref": "#/$defs/faultOracle" },
+        "expectedArtifacts": {
+          "type": "array", "minItems": 1, "uniqueItems": true, "items": { "$ref": "#/$defs/nonEmpty" }
+        },
+        "readiness": { "$ref": "#/$defs/windowReadiness" }
+      }
+    },
+    "faultPlan": {
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "gateId", "windowSetLifecycle", "pairing", "seedsPerWindow", "gate40PlannedCases", "totalPlannedCases", "windows"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "gateId": { "const": "EXP-RT95-032" },
+        "windowSetLifecycle": { "enum": ["candidate-not-frozen", "frozen"] },
+        "pairing": { "const": "same-seed-across-arms" },
+        "seedsPerWindow": { "const": 5 },
+        "gate40PlannedCases": { "const": 40 },
+        "totalPlannedCases": { "type": "integer", "minimum": 1 },
+        "windows": { "type": "array", "minItems": 8, "maxItems": 8, "items": { "$ref": "#/$defs/faultWindow" } }
+      }
+    },
+    "rule": {
+      "type": "object", "additionalProperties": false, "required": ["id", "condition", "action"],
+      "properties": { "id": { "$ref": "#/$defs/id" }, "condition": { "$ref": "#/$defs/nonEmpty" }, "action": { "$ref": "#/$defs/nonEmpty" } }
+    },
+    "rules": {
+      "type": "object", "additionalProperties": false, "required": ["exclusions", "reruns", "stopping"],
+      "properties": {
+        "exclusions": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/rule" } },
+        "reruns": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/rule" } },
+        "stopping": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/rule" } }
+      }
+    },
+    "baselineArm": {
+      "type": "object", "additionalProperties": false, "required": ["id", "implementation", "configurationId"],
+      "properties": { "id": { "$ref": "#/$defs/id" }, "implementation": { "$ref": "#/$defs/nonEmpty" }, "configurationId": { "$ref": "#/$defs/id" } }
+    },
+    "ablationArm": {
+      "type": "object", "additionalProperties": false, "required": ["id", "mechanismDisabled", "configurationId"],
+      "properties": { "id": { "$ref": "#/$defs/id" }, "mechanismDisabled": { "$ref": "#/$defs/nonEmpty" }, "configurationId": { "$ref": "#/$defs/id" } }
+    },
+    "externalArm": {
+      "type": "object", "additionalProperties": false, "required": ["id", "system", "configurationId"],
+      "properties": { "id": { "$ref": "#/$defs/id" }, "system": { "$ref": "#/$defs/nonEmpty" }, "configurationId": { "$ref": "#/$defs/id" } }
+    },
+    "arms": {
+      "type": "object", "additionalProperties": false, "required": ["baseline", "ablations", "externalBaselines"],
+      "properties": {
+        "baseline": { "$ref": "#/$defs/baselineArm" },
+        "ablations": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/ablationArm" } },
+        "externalBaselines": { "type": "array", "items": { "$ref": "#/$defs/externalArm" } }
+      }
+    },
+    "analysis": {
+      "type": "object", "additionalProperties": false, "required": ["id", "endpointId", "method", "interval", "multiplicity"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" }, "endpointId": { "$ref": "#/$defs/id" }, "method": { "$ref": "#/$defs/nonEmpty" },
+        "interval": { "$ref": "#/$defs/nonEmpty" }, "multiplicity": { "$ref": "#/$defs/nonEmpty" }
+      }
+    },
+    "analyses": {
+      "type": "object", "additionalProperties": false, "required": ["primaryAnalysisId", "items"],
+      "properties": { "primaryAnalysisId": { "$ref": "#/$defs/id" }, "items": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/analysis" } } }
+    },
+    "providerPolicy": {
+      "type": "object", "additionalProperties": false,
+      "required": ["mode", "authorizedLiveCalls", "approvalId", "maxRequests", "maxTotalCostUsd", "allowedProviders"],
+      "properties": {
+        "mode": { "enum": ["offline-only", "live-authorized"] }, "authorizedLiveCalls": { "type": "boolean" },
+        "approvalId": { "type": ["string", "null"] }, "maxRequests": { "type": "integer", "minimum": 0 },
+        "maxTotalCostUsd": { "type": "number", "minimum": 0 },
+        "allowedProviders": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "$ref": "#/$defs/nonEmpty" } }
+      }
+    },
+    "provenance": {
+      "type": "object", "additionalProperties": false, "required": ["baselineCommit", "configPath", "configSha256", "providerPolicy"],
+      "properties": {
+        "baselineCommit": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+        "configPath": { "type": "string", "pattern": "^(?!/)(?!.*(?:^|/)[.][.](?:/|$))[A-Za-z0-9._/-]+$" },
+        "configSha256": { "$ref": "#/$defs/sha256" }, "providerPolicy": { "$ref": "#/$defs/providerPolicy" }
+      }
+    },
+    "summary": {
+      "type": "object", "additionalProperties": false,
+      "required": ["rqIds", "hypothesisIds", "analysisIds", "armIds", "faultWindowIds", "seedValues", "availableWindowIds", "blockedWindowIds", "gate40PlannedCases", "plannedCases"],
+      "properties": {
+        "rqIds": { "$ref": "#/$defs/idList" }, "hypothesisIds": { "$ref": "#/$defs/idList" },
+        "analysisIds": { "$ref": "#/$defs/idList" }, "armIds": { "$ref": "#/$defs/idList" },
+        "faultWindowIds": { "$ref": "#/$defs/idList" },
+        "seedValues": {
+          "type": "array",
+          "const": [469816031, 3443330994, 4121183031, 3314624278, 3472974415]
+        },
+        "availableWindowIds": { "$ref": "#/$defs/idList" },
+        "blockedWindowIds": { "$ref": "#/$defs/idList" },
+        "gate40PlannedCases": { "const": 40 },
+        "plannedCases": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "integrity": {
+      "type": "object", "additionalProperties": false, "required": ["summary", "payloadSha256"],
+      "properties": { "summary": { "$ref": "#/$defs/summary" }, "payloadSha256": { "anyOf": [{ "$ref": "#/$defs/sha256" }, { "type": "null" }] } }
+    }
+  }
+}

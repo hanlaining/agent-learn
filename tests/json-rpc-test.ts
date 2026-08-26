@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   classifyJsonRpcMessage,
   isJsonRpcErrorResponse,
+  isJsonRpcMessage,
   isJsonRpcNotification,
   isJsonRpcRequest,
   isJsonRpcSuccessResponse,
@@ -71,4 +72,36 @@ test("带有 method 和 result 的冲突消息应判定为无效", () => {
   };
 
   assert.equal(classifyJsonRpcMessage(input), "invalid");
+});
+
+test("JSON-RPC 四类守卫拒绝空值、数组、非法 id 和冲突字段", () => {
+  const valid = [
+    { id: "request", method: "ping" },
+    { method: "notify" },
+    { id: 1, result: null },
+    { id: 2, error: { code: -1, message: "failed" } },
+  ];
+  for (const value of valid) {
+    assert.equal(isJsonRpcMessage(value), true);
+  }
+  const invalid: unknown[] = [
+    null,
+    [],
+    {},
+    { id: null, method: "ping" },
+    { id: true, method: "ping" },
+    { id: 1, method: 2 },
+    { method: 2 },
+    { id: 1, method: "ping", error: {} },
+    { id: 1, result: {}, method: "ping" },
+    { id: 1, result: {}, error: {} },
+    { id: 1, error: null },
+    { id: 1, error: { code: "-1", message: "failed" } },
+    { id: 1, error: { code: -1, message: 1 } },
+    { id: 1, error: { code: -1, message: "failed" }, result: null },
+  ];
+  for (const value of invalid) {
+    assert.equal(isJsonRpcMessage(value), false, JSON.stringify(value));
+    assert.equal(classifyJsonRpcMessage(value), "invalid");
+  }
 });

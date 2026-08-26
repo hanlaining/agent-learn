@@ -105,3 +105,59 @@ test("设计修改意见使旧设计失效并回到原稿与 Mock 返工", async
   assert.equal(revised.designFeedback, "首页按钮改为底部固定");
   assert.equal(isDesignConfirmed(revised), false);
 });
+
+test("Requirement Snapshot 兼容旧字段、拒绝坏版本并保持深拷贝隔离", () => {
+  const empty = RequirementStore.fromSnapshot(undefined);
+  assert.deepEqual(empty.list(), []);
+  assert.deepEqual(empty.nextPlanIdentity("chat-empty"), { requirementId: "requirement-1", revision: 1 });
+  assert.throws(() => RequirementStore.fromSnapshot({ version: 2 } as never), /Invalid requirement snapshot/);
+
+  const source = new RequirementStore(() => "2026-08-24T01:00:00.000Z");
+  const artifact = { path: "D:/plans/r1.md", contentHash: "a".repeat(64), generatedAt: "2026-08-24T01:00:00.000Z" };
+  const planned = source.prepare("chat-legacy", draft, artifact);
+  const snapshot = source.exportSnapshot();
+  delete (snapshot.requirements[0] as Partial<(typeof snapshot.requirements)[number]>).executionKind;
+  delete (snapshot.requirements[0] as Partial<(typeof snapshot.requirements)[number]>).executionState;
+
+  const restored = RequirementStore.fromSnapshot(snapshot);
+  snapshot.requirements[0]!.title = "外部篡改";
+  assert.equal(restored.get(planned.id)?.executionKind, "software_change");
+  assert.equal(restored.get(planned.id)?.executionState, "not_started");
+  assert.equal(restored.get(planned.id)?.title, draft.title);
+  assert.deepEqual(restored.nextPlanIdentity("chat-legacy"), { requirementId: planned.id, revision: 2 });
+});
+
+test("Requirement 状态机拒绝越权操作并完整映射执行终态", () => {
+  let tick = 0;
+  const store = new RequirementStore(() => `2026-08-24T02:00:${String(tick++).padStart(2, "0")}.000Z`);
+  const artifact = { path: "D:/plans/r1.md", contentHash: "b".repeat(64), generatedAt: "2026-08-24T02:00:00.000Z" };
+  const first = store.prepare("chat-a", draft, artifact);
+
+  assert.equal(store.get("missing"), undefined);
+  assert.throws(() => store.confirm("missing", 1, artifact.contentHash), /Requirement not found/);
+  assert.throws(() => store.attachJob(first.id, "job-too-early"), /not confirmed/);
+  assert.throws(() => store.confirmDesign(first.id, first.revision, artifact.contentHash), /changed or is unavailable/);
+  assert.throws(() => store.requestDesignRevision(first.id, first.revision, "change"), /unavailable/);
+
+  store.confirm(first.id, first.revision, artifact.contentHash);
+  const design = { path: "D:/plans/design.md", contentHash: "c".repeat(64), generatedAt: "2026-08-24T02:00:01.000Z" };
+  store.markDesignDraft(first.id, first.revision, design);
+  assert.throws(() => store.requestDesignRevision(first.id, first.revision, "   "), /feedback is required/);
+  assert.throws(() => store.markDesignDraft(first.id, first.revision + 1, design), /must be confirmed/);
+
+  assert.equal(store.setStatus(first.id, "executing").executionState, "executing");
+  assert.equal(store.setStatus(first.id, "completed").executionState, "completed");
+  assert.equal(store.setStatus(first.id, "failed_retryable").executionState, "failed_retryable");
+  assert.equal(store.setStatus(first.id, "cancelled").executionState, "cancelled");
+  assert.equal(store.getActive("chat-a"), undefined, "cancelled revisions must not remain active");
+  assert.equal(store.setExecutionState(first.id, "not_started").status, "confirmed");
+  assert.equal(store.setExecutionState(first.id, "executing").status, "executing");
+
+  const second = store.prepare("chat-b", { ...draft, title: "第二个需求" }, { ...artifact, contentHash: "d".repeat(64) });
+  const third = store.prepare("chat-c", { ...draft, title: "第三个需求" }, { ...artifact, contentHash: "e".repeat(64) });
+  assert.deepEqual(store.list("chat-b").map((item) => item.id), [second.id]);
+  assert.deepEqual(store.list().map((item) => item.id), [first.id, second.id, third.id]);
+  const exported = store.exportSnapshot();
+  exported.requirements[0]!.title = "外部修改";
+  assert.notEqual(store.get(first.id)?.title, "外部修改");
+});

@@ -156,6 +156,139 @@ test("Provider 调用前 prepared 与 submitted 已分别持久化", async () =>
   ]);
 });
 
+test("response_received recovery rejects each corrupted durable field without calling Provider", async () => {
+  const { lifecycleStore, turn } = createTurn();
+  const store = new ModelInvocationStore();
+  let durable: DurableSnapshot | undefined;
+  const loop = createLoop({ lifecycleStore, llm: new FakeLlm([finalResponse("corruption-base")]), modelInvocationStore: store, persist: async () => {
+    if (store.list().at(-1)?.status === "response_received") { durable = capture(lifecycleStore, store); throw new SimulatedCrash("corruption-base"); }
+  }});
+  await assert.rejects(() => loop.run(turn.id, { model: FAKE_MODEL }), SimulatedCrash);
+  const base = requireDurable(durable, "corruption-base");
+  const corruptions: Array<(entry: Record<string, unknown>) => void> = [
+    (entry) => { delete entry.providerResponseId; }, (entry) => { delete entry.normalizedResult; },
+    (entry) => { entry.providerResponseId = ""; }, (entry) => { entry.normalizedResult = { text: 1, functionCalls: [] }; },
+    (entry) => { entry.dispatchAttempts = -1; }, (entry) => { entry.updatedAt = "not-a-date"; },
+    (entry) => { entry.status = "prepared"; }, (entry) => { entry.provider = ""; },
+    (entry) => { entry.model = ""; }, (entry) => { entry.targetCommitKey = ""; },
+  ];
+  for (const [index, corrupt] of corruptions.entries()) {
+    const snapshot = structuredClone(base) as unknown as { modelInvocations: { invocations: Array<Record<string, unknown>> } };
+    corrupt(snapshot.modelInvocations.invocations[0]!);
+    if (index < 2) {
+      const restored = restore(snapshot as unknown as DurableSnapshot);
+      const replay = createLoop({ ...restored, llm: new FakeLlm([]), persist: async () => undefined });
+      await assert.rejects(() => replay.run(turn.id, { model: FAKE_MODEL }), /incomplete/);
+    } else {
+      try {
+        const restored = restore(snapshot as unknown as DurableSnapshot);
+        const replay = createLoop({ ...restored, llm: new FakeLlm([]), persist: async () => undefined });
+        await assert.rejects(() => replay.run(turn.id, { model: FAKE_MODEL }));
+      } catch {
+        // Snapshot parser rejection is the intended fail-closed outcome.
+      }
+    }
+  }
+});
+
+test("submitted 快照恢复时先转 outcome_unknown，绝不自动重发 Provider", async () => {
+  const { lifecycleStore, turn } = createTurn();
+  const modelInvocationStore = new ModelInvocationStore();
+  let durable: DurableSnapshot | undefined;
+  let crashed = false;
+  const firstLoop = createLoop({
+    lifecycleStore,
+    llm: new FakeLlm([finalResponse()]),
+    modelInvocationStore,
+    persist: async () => {
+      if (!crashed && modelInvocationStore.list().at(-1)?.status === "submitted") {
+        crashed = true;
+        durable = capture(lifecycleStore, modelInvocationStore);
+        throw new SimulatedCrash("submitted");
+      }
+    },
+  });
+
+  await assert.rejects(() => firstLoop.run(turn.id, { model: FAKE_MODEL }), SimulatedCrash);
+  const restarted = restore(requireDurable(durable, "submitted"));
+  const provider = new FakeLlm([]);
+  const restartedLoop = createLoop({
+    ...restarted,
+    llm: provider,
+    persist: async () => undefined,
+  });
+  await assert.rejects(
+    () => restartedLoop.run(turn.id, { model: FAKE_MODEL }),
+    /outcome_unknown|outcome unknown/i,
+  );
+  assert.equal(provider.requests.length, 0);
+  assert.equal(restarted.modelInvocationStore.list()[0]?.status, "outcome_unknown");
+});
+
+test("failed_terminal 快照恢复直接拒绝，不重新调用 Provider", async () => {
+  const { lifecycleStore, turn } = createTurn();
+  const modelInvocationStore = new ModelInvocationStore();
+  let durable: DurableSnapshot | undefined;
+  let changed = false;
+  const firstLoop = createLoop({
+    lifecycleStore,
+    llm: new FakeLlm([finalResponse()]),
+    modelInvocationStore,
+    persist: async () => {
+      const invocation = modelInvocationStore.list().at(-1);
+      if (!changed && invocation?.status === "prepared") {
+        changed = true;
+        modelInvocationStore.markFailed(invocation.invocationId, "failed_terminal", "manual_terminal");
+        durable = capture(lifecycleStore, modelInvocationStore);
+        throw new SimulatedCrash("failed_terminal");
+      }
+    },
+  });
+
+  await assert.rejects(() => firstLoop.run(turn.id, { model: FAKE_MODEL }), SimulatedCrash);
+  const restarted = restore(requireDurable(durable, "failed_terminal"));
+  const provider = new FakeLlm([]);
+  const restartedLoop = createLoop({
+    ...restarted,
+    llm: provider,
+    persist: async () => undefined,
+  });
+  await assert.rejects(
+    () => restartedLoop.run(turn.id, { model: FAKE_MODEL }),
+    /Model invocation is terminal/,
+  );
+  assert.equal(provider.requests.length, 0);
+});
+
+test("已提交 Invocation 但缺少 Assistant Item 时恢复直接拒绝", async () => {
+  const { lifecycleStore, turn } = createTurn();
+  const modelInvocationStore = new ModelInvocationStore();
+  let durable: DurableSnapshot | undefined;
+  let forged = false;
+  const firstLoop = createLoop({
+    lifecycleStore,
+    llm: new FakeLlm([finalResponse()]),
+    modelInvocationStore,
+    persist: async () => {
+      const invocation = modelInvocationStore.list().at(-1);
+      if (!forged && invocation?.status === "response_received") {
+        forged = true;
+        modelInvocationStore.markCommitted(invocation.invocationId, `turn:${turn.id}:assistant`);
+        lifecycleStore.completeTurn(turn.id);
+        durable = capture(lifecycleStore, modelInvocationStore);
+        throw new SimulatedCrash("committed-without-assistant");
+      }
+    },
+  });
+
+  await assert.rejects(() => firstLoop.run(turn.id, { model: FAKE_MODEL }), SimulatedCrash);
+  const restarted = restore(requireDurable(durable, "committed-without-assistant"));
+  await assert.rejects(
+    () => createLoop({ ...restarted, llm: new FakeLlm([]), persist: async () => undefined }).run(turn.id, { model: FAKE_MODEL }),
+    /Committed model invocation has no Assistant item/,
+  );
+});
+
 test("Provider 返回后先持久化 response_received，再提交 Assistant 并持久化 committed", async () => {
   const { lifecycleStore, turn } = createTurn();
   const modelInvocationStore = new ModelInvocationStore();

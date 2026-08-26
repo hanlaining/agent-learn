@@ -1,0 +1,159 @@
+{
+  "schemaVersion": "rt95-paper-claim-table-v1",
+  "project": "God-Agent",
+  "policy": {
+    "defaultEvidenceState": "NotVerified",
+    "significanceClaimed": false,
+    "unknownOrMissingEvidence": "A claim remains forbidden until every required evidence item is verified.",
+    "negativeAndNullResults": "Retain every preregistered positive, negative, null, failed, and excluded result with its frozen disposition."
+  },
+  "claims": [
+    {
+      "id": "CLAIM-PIPELINE-001",
+      "topic": "deterministic-paper-table-rendering",
+      "evidenceState": "CodeVerified",
+      "allowedClaim": "The repository contains a deterministic renderer that converts a validated rt95-statistics-report-v1 file into Markdown and CSV tables.",
+      "forbiddenClaim": "The renderer proves that the input Raw is authentic, independently reproduced, statistically significant, or publication-ready.",
+      "requiredEvidence": [
+        "passing rt95-paper-tables-test.ts",
+        "passing repository type check"
+      ]
+    },
+    {
+      "id": "CLAIM-PIPELINE-PREFLIGHT-001",
+      "topic": "formal-preflight-ledger-and-claim-closure",
+      "evidenceState": "CodeVerified",
+      "allowedClaim": "The repository contains a fail-closed formal preflight validator that binds frozen inputs, derives the preregistered case plan, validates an append-only Raw event hash chain, and requires exact Claim-to-evidence closure.",
+      "forbiddenClaim": "This preflight validator proves that a formal run occurred, that any Raw artifact is authentic without artifact verification, that a live Provider or external system was used, or that independent reproduction or publication readiness was achieved.",
+      "requiredEvidence": [
+        "passing rt95-preregistration-test.ts",
+        "passing repository type check"
+      ]
+    },
+    {
+      "id": "CLAIM-PIPELINE-CONFIRMATORY-001",
+      "topic": "paired-confirmatory-analysis-pipeline",
+      "evidenceState": "CodeVerified",
+      "allowedClaim": "The repository contains a deterministic Draft analysis entry that derives exact two-sided McNemar p-values, paired discordance intervals, and Holm-adjusted comparison outputs directly from validated paired Raw.",
+      "forbiddenClaim": "The pipeline proves that its fixture Raw is authentic, that the Draft plan is Frozen, that the sample size is sufficient, or that any formal effect is statistically significant or causal.",
+      "requiredEvidence": [
+        "passing rt95-preregistration-test.ts",
+        "passing repository type check"
+      ]
+    },
+    {
+      "id": "CLAIM-PIPELINE-PERSISTENT-LEDGER-001",
+      "topic": "persistent-append-only-run-ledger",
+      "evidenceState": "CodeVerified",
+      "allowedClaim": "The repository contains a filesystem-backed, exclusive-create event ledger that reconstructs and validates the Raw hash chain after process restart while retaining manual interventions, aborted, excluded, failed, rerun, and successful attempts.",
+      "forbiddenClaim": "The ledger proves that a formal run occurred, that its operator identities are independently authenticated, or that tail truncation is impossible without an external trusted anchor.",
+      "requiredEvidence": [
+        "passing rt95-preregistration-test.ts",
+        "passing repository type check"
+      ]
+    },
+    {
+      "id": "CLAIM-PIPELINE-PUBLISHABLE-DERIVATION-001",
+      "topic": "private-to-publishable-artifact-derivation",
+      "evidenceState": "CodeVerified",
+      "allowedClaim": "The repository contains an explicit-allowlist sanitizer that binds a private source tree digest to a public derivation receipt and rejects secrets, overwrite, replay, missing, extra, tampered, or drifted files.",
+      "forbiddenClaim": "The sanitizer proves that every sensitive pattern is detectable, that a publication release has occurred, or that the resulting bundle has received independent privacy or publication review.",
+      "requiredEvidence": [
+        "passing rt95-preregistration-test.ts",
+        "passing repository type check",
+        "passing repository security scan"
+      ]
+    },
+    {
+      "id": "CLAIM-PIPELINE-ARTIFACT-RELEASE-001",
+      "topic": "versioned-local-tooling-artifact-release",
+      "evidenceState": "CodeVerified",
+      "allowedClaim": "The repository contains a versioned, fail-closed local-tooling Artifact Release creator and verifier that binds required release roles, CodeVerified Claims, a private-source digest/public-derivation receipt, file digests, license, review boundaries, and monotonic versions.",
+      "forbiddenClaim": "The example release proves that a formal experiment occurred, that Draft preregistration was frozen, that private Raw was independently audited, that external reproduction or peer review occurred, or that the paper is publication-ready.",
+      "requiredEvidence": [
+        "passing rt95-preregistration-test.ts",
+        "passing repository type check",
+        "passing repository security scan",
+        "verified local-tooling example Artifact Release"
+      ]
+    },
+    {
+      "id": "CLAIM-METHOD-001",
+      "topic": "descriptive-statistics",
+      "evidenceState": "CodeVerified",
+      "allowedClaim": "The report and paper-table contracts label Wilson intervals, zero-failure bounds, paired effects, rate ratios, and paired bootstrap intervals as descriptive outputs with significanceClaimed=false.",
+      "forbiddenClaim": "These descriptive intervals establish statistical significance, causal superiority, or a preregistered confirmatory result.",
+      "requiredEvidence": [
+        "passing rt95-statistics-test.ts",
+        "passing rt95-paper-tables-test.ts"
+      ]
+    },
+    {
+      "id": "CLAIM-RQ1-001",
+      "topic": "recovery-reliability",
+      "evidenceState": "NotVerified",
+      "allowedClaim": "RQ1 is defined and awaits a frozen preregistration, complete Raw, Oracle evidence, artifact manifest, and independent review.",
+      "forbiddenClaim": "God-Agent is proven more reliable than a baseline or has achieved a verified recovery rate.",
+      "requiredEvidence": [
+        "frozen preregistration digest",
+        "complete paired Raw",
+        "Oracle evidence",
+        "artifact manifest",
+        "independent reviewer sign-off"
+      ]
+    },
+    {
+      "id": "CLAIM-RQ2-001",
+      "topic": "mechanism-ablation",
+      "evidenceState": "NotVerified",
+      "allowedClaim": "RQ2 proposes paired ablations for preregistered reliability mechanisms; no mechanism-effect result is currently verified.",
+      "forbiddenClaim": "Lease, WAL, evidence validation, or another individual mechanism has a causal benefit.",
+      "requiredEvidence": [
+        "frozen ablation arms",
+        "paired Raw for every arm",
+        "frozen exclusions",
+        "complete positive, negative, and null results",
+        "independent reviewer sign-off"
+      ]
+    },
+    {
+      "id": "CLAIM-REPRO-001",
+      "topic": "external-reproduction",
+      "evidenceState": "NotVerified",
+      "allowedClaim": "Repository-local deterministic generation is tested; external experimental reproduction has not been verified.",
+      "forbiddenClaim": "The findings reproduce across machines, operating systems, Providers, models, or independent teams.",
+      "requiredEvidence": [
+        "independent environment manifest",
+        "independent execution logs and Raw",
+        "digest comparison",
+        "documented discrepancy resolution"
+      ]
+    },
+    {
+      "id": "CLAIM-PAPER-001",
+      "topic": "publication-readiness",
+      "evidenceState": "NotVerified",
+      "allowedClaim": "An IMRaD manuscript scaffold and machine-readable claim boundary table exist.",
+      "forbiddenClaim": "The manuscript is submission-ready, peer-reviewed, or supported by a complete related-work review.",
+      "requiredEvidence": [
+        "verified formal results",
+        "human-verified related work",
+        "complete threats and ethics review",
+        "author approval"
+      ]
+    },
+    {
+      "id": "CLAIM-MATURITY-001",
+      "topic": "research-and-production-maturity",
+      "evidenceState": "NotVerified",
+      "allowedClaim": "The project is building auditable reliability-research infrastructure and explicitly tracks unfinished evidence.",
+      "forbiddenClaim": "Research-95, paper readiness 95+, production maturity 95+, or production-grade status has been achieved.",
+      "requiredEvidence": [
+        "all applicable research gates verified",
+        "formal experiment evidence",
+        "external reproduction",
+        "production release evidence"
+      ]
+    }
+  ]
+}

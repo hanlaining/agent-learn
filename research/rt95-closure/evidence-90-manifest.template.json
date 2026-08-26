@@ -1,0 +1,45 @@
+{
+  "schemaVersion": "rt95-evidence-90-manifest-v1",
+  "candidate": {
+    "commit": "REPLACE_WITH_NONZERO_40_HEX_COMMIT",
+    "sourceTreeSha256": "REPLACE_WITH_64_HEX_SHA256",
+    "preregistrationSha256": "REPLACE_WITH_64_HEX_SHA256",
+    "casePlanSha256": "REPLACE_WITH_64_HEX_SHA256",
+    "createdAt": "REPLACE_WITH_CANONICAL_UTC_TIMESTAMP"
+  },
+  "roles": {
+    "producerId": "author-handle",
+    "reviewerId": "non-author-reviewer-handle"
+  },
+  "formalProvider": {
+    "status": "NotVerified",
+    "authorization": { "path": "provider/provider-authorization-redacted.json", "sha256": "REPLACE_WITH_64_HEX_SHA256" },
+    "rawLedger": { "path": "provider/raw/ledger.json", "sha256": "REPLACE_WITH_64_HEX_SHA256" },
+    "receipt": { "path": "provider/receipt.json", "sha256": "REPLACE_WITH_64_HEX_SHA256" }
+  },
+  "externalBaseline": {
+    "status": "NotVerified",
+    "protocol": { "path": "baseline/protocol.json", "sha256": "REPLACE_WITH_64_HEX_SHA256" },
+    "rawResults": { "path": "baseline/raw-results.json", "sha256": "REPLACE_WITH_64_HEX_SHA256" },
+    "provenance": { "path": "baseline/provenance.json", "sha256": "REPLACE_WITH_64_HEX_SHA256" }
+  },
+  "independentReproduction": {
+    "status": "NotVerified",
+    "executorId": "second-environment-executor",
+    "environment": { "path": "reproduction/environment.json", "sha256": "REPLACE_WITH_64_HEX_SHA256" },
+    "report": { "path": "reproduction/report.json", "sha256": "REPLACE_WITH_64_HEX_SHA256" }
+  },
+  "artifactChain": {
+    "raw": { "path": "artifact/raw.json", "sha256": "REPLACE_WITH_64_HEX_SHA256" },
+    "derived": { "path": "artifact/derived.json", "sha256": "REPLACE_WITH_64_HEX_SHA256" },
+    "statistics": { "path": "artifact/statistics.json", "sha256": "REPLACE_WITH_64_HEX_SHA256" },
+    "tables": { "path": "artifact/tables.csv", "sha256": "REPLACE_WITH_64_HEX_SHA256" },
+    "figures": { "path": "artifact/figures-manifest.json", "sha256": "REPLACE_WITH_64_HEX_SHA256" },
+    "manifest": { "path": "artifact/artifact-manifest.json", "sha256": "REPLACE_WITH_64_HEX_SHA256" }
+  },
+  "claimMatrix": { "path": "claims/claim-evidence-matrix.json", "sha256": "REPLACE_WITH_64_HEX_SHA256" },
+  "publicationReview": {
+    "status": "NotVerified",
+    "report": { "path": "review/non-author-review.json", "sha256": "REPLACE_WITH_64_HEX_SHA256" }
+  }
+}

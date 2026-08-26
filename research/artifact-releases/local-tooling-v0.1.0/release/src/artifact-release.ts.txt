@@ -1,0 +1,407 @@
+import { createHash } from "node:crypto";
+import { copyFile, lstat, mkdir, readFile, readdir, writeFile } from "node:fs/promises";
+import path from "node:path";
+
+import {
+  assertPublishableArtifactContent,
+  inferContentType,
+  normalizeSafeRelativePath,
+} from "./manifest.js";
+import {
+  PUBLISHABLE_CLAIM_BOUNDARY,
+  validatePublishableDerivationReceipt,
+  type PublishableDerivationReceipt,
+} from "./publishable-sanitizer.js";
+import type { ArtifactContentType } from "./types.js";
+
+export const ARTIFACT_RELEASE_SCHEMA_VERSION = "versioned-research-artifact-release-v1" as const;
+export const ARTIFACT_RELEASE_CLAIM_BOUNDARY = "local-tooling-only-not-formal-or-external" as const;
+export const DEFAULT_ARTIFACT_RELEASE_MANIFEST = "artifact-release.json" as const;
+
+const SHA256 = /^[0-9a-f]{64}$/u;
+const COMMIT = /^[0-9a-f]{40}$/u;
+const VERSION = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/u;
+const REQUIRED_ROLES = [
+  "source-snapshot",
+  "preregistration",
+  "data-dictionary",
+  "raw-public-derivation-receipt",
+  "statistics",
+  "table",
+  "artifact-manifest",
+  "license",
+  "claim-table",
+] as const;
+
+export type ArtifactReleaseRole = typeof REQUIRED_ROLES[number];
+
+export interface ArtifactReleaseFileInput {
+  path: string;
+  role: ArtifactReleaseRole;
+}
+
+export interface ArtifactReleaseFile extends ArtifactReleaseFileInput {
+  bytes: number;
+  sha256: string;
+  contentType: ArtifactContentType;
+}
+
+export interface VersionedArtifactRelease {
+  schemaVersion: typeof ARTIFACT_RELEASE_SCHEMA_VERSION;
+  claimBoundary: typeof ARTIFACT_RELEASE_CLAIM_BOUNDARY;
+  releaseVersion: string;
+  previousReleaseVersion: string | null;
+  candidateCommit: string;
+  review: {
+    status: "local-tooling-reviewed";
+    independentReview: false;
+    formalEvidenceReviewed: false;
+  };
+  evidenceState: {
+    preregistration: "Draft";
+    formalRaw: "NotIncluded";
+    formalExperiment: "NotRun";
+    externalReproduction: "NotVerified";
+    publicationReview: "NotReviewed";
+  };
+  claims: {
+    claimTablePath: string;
+    includedClaimIds: string[];
+    includedEvidenceState: "CodeVerified";
+  };
+  rawEvidence: {
+    mode: "publishable-derivation-receipt";
+    receiptPath: string;
+    privateSourceTreeSha256: string;
+    publicDerivationTreeSha256: string;
+    receiptClaimBoundary: typeof PUBLISHABLE_CLAIM_BOUNDARY;
+  };
+  files: ArtifactReleaseFile[];
+  releaseSha256: string;
+}
+
+export async function createVersionedArtifactRelease(options: {
+  sourceRootDirectory: string;
+  outputRootDirectory: string;
+  releaseVersion: string;
+  previousReleaseVersion: string | null;
+  candidateCommit: string;
+  files: readonly ArtifactReleaseFileInput[];
+  includedClaimIds: readonly string[];
+}): Promise<VersionedArtifactRelease> {
+  const sourceRoot = await existingDirectory(options.sourceRootDirectory, "release source root");
+  const outputRoot = path.resolve(options.outputRootDirectory);
+  if (await lstat(outputRoot).catch(() => undefined) !== undefined) {
+    throw new Error("artifact release output already exists; overwrite and replay are forbidden");
+  }
+  validateVersionPair(options.releaseVersion, options.previousReleaseVersion);
+  if (!COMMIT.test(options.candidateCommit)) throw new Error("candidateCommit must be a lowercase 40-character commit hash");
+  const inputs = normalizeInputs(options.files);
+  assertRequiredRoles(inputs);
+  const prepared: Array<{ entry: ArtifactReleaseFile; source: string }> = [];
+  for (const input of inputs) {
+    const source = resolveInside(sourceRoot, input.path);
+    await regularFile(source, `release source file is missing: ${input.path}`);
+    const content = await readFile(source);
+    assertPublishableArtifactContent(input.path, content);
+    prepared.push({
+      source,
+      entry: {
+        ...input,
+        bytes: content.byteLength,
+        sha256: sha256(content),
+        contentType: inferContentType(input.path),
+      },
+    });
+  }
+  const claimEntry = singleRole(prepared.map((item) => item.entry), "claim-table");
+  const claimTable = await parseJsonFile(resolveInside(sourceRoot, claimEntry.path), "claim table");
+  validateIncludedClaims(claimTable, options.includedClaimIds);
+  const receiptEntry = singleRole(prepared.map((item) => item.entry), "raw-public-derivation-receipt");
+  const receipt = await parseJsonFile(resolveInside(sourceRoot, receiptEntry.path), "publishable derivation receipt");
+  validatePublishableDerivationReceipt(receipt);
+  assertReceiptFilesIncluded(receipt, receiptEntry.path, prepared.map((item) => item.entry));
+
+  const withoutDigest = {
+    schemaVersion: ARTIFACT_RELEASE_SCHEMA_VERSION,
+    claimBoundary: ARTIFACT_RELEASE_CLAIM_BOUNDARY,
+    releaseVersion: options.releaseVersion,
+    previousReleaseVersion: options.previousReleaseVersion,
+    candidateCommit: options.candidateCommit,
+    review: {
+      status: "local-tooling-reviewed" as const,
+      independentReview: false as const,
+      formalEvidenceReviewed: false as const,
+    },
+    evidenceState: {
+      preregistration: "Draft" as const,
+      formalRaw: "NotIncluded" as const,
+      formalExperiment: "NotRun" as const,
+      externalReproduction: "NotVerified" as const,
+      publicationReview: "NotReviewed" as const,
+    },
+    claims: {
+      claimTablePath: claimEntry.path,
+      includedClaimIds: [...options.includedClaimIds].sort(compare),
+      includedEvidenceState: "CodeVerified" as const,
+    },
+    rawEvidence: {
+      mode: "publishable-derivation-receipt" as const,
+      receiptPath: receiptEntry.path,
+      privateSourceTreeSha256: receipt.privateSource.treeSha256,
+      publicDerivationTreeSha256: receipt.publicDerivation.treeSha256,
+      receiptClaimBoundary: PUBLISHABLE_CLAIM_BOUNDARY,
+    },
+    files: prepared.map((item) => item.entry),
+  };
+  const release: VersionedArtifactRelease = {
+    ...withoutDigest,
+    releaseSha256: digestCanonical(withoutDigest),
+  };
+  validateVersionedArtifactRelease(release);
+  await mkdir(outputRoot, { recursive: false });
+  for (const item of prepared) {
+    const target = resolveInside(outputRoot, item.entry.path);
+    await mkdir(path.dirname(target), { recursive: true });
+    await copyFile(item.source, target, modeExclusive());
+  }
+  await writeFile(path.join(outputRoot, DEFAULT_ARTIFACT_RELEASE_MANIFEST), serialize(release), { flag: "wx" });
+  return verifyVersionedArtifactRelease({ outputRootDirectory: outputRoot, minimumReleaseVersion: options.releaseVersion });
+}
+
+export async function verifyVersionedArtifactRelease(options: {
+  outputRootDirectory: string;
+  minimumReleaseVersion?: string;
+}): Promise<VersionedArtifactRelease> {
+  const root = await existingDirectory(options.outputRootDirectory, "artifact release root");
+  const manifestPath = path.join(root, DEFAULT_ARTIFACT_RELEASE_MANIFEST);
+  const serialized = await readFile(manifestPath, "utf8").catch(() => { throw new Error("artifact release manifest is missing"); });
+  let release: unknown;
+  try { release = JSON.parse(serialized) as unknown; } catch { throw new Error("artifact release manifest is not valid JSON"); }
+  validateVersionedArtifactRelease(release);
+  if (serialized !== serialize(release)) throw new Error("artifact release manifest is not canonical");
+  if (options.minimumReleaseVersion !== undefined) {
+    validateVersion(options.minimumReleaseVersion, "minimumReleaseVersion");
+    if (compareVersions(release.releaseVersion, options.minimumReleaseVersion) < 0) throw new Error("artifact release version rollback detected");
+  }
+
+  const actual = await collectReleaseFiles(root);
+  const expectedPaths = release.files.map((item) => item.path);
+  const actualPaths = actual.map((item) => item.path);
+  if (JSON.stringify(expectedPaths) !== JSON.stringify(actualPaths)) {
+    const missing = expectedPaths.filter((item) => !actualPaths.includes(item));
+    const extra = actualPaths.filter((item) => !expectedPaths.includes(item));
+    throw new Error(`artifact release file set drift; missing=[${missing.join(",")}], extra=[${extra.join(",")}]`);
+  }
+  for (const expected of release.files) {
+    const found = actual.find((item) => item.path === expected.path)!;
+    if (found.bytes !== expected.bytes || found.sha256 !== expected.sha256 || found.contentType !== expected.contentType) {
+      throw new Error(`artifact release digest drift: ${expected.path}`);
+    }
+  }
+  const claimTable = await parseJsonFile(resolveInside(root, release.claims.claimTablePath), "claim table");
+  validateIncludedClaims(claimTable, release.claims.includedClaimIds);
+  const receipt = await parseJsonFile(resolveInside(root, release.rawEvidence.receiptPath), "publishable derivation receipt");
+  validatePublishableDerivationReceipt(receipt);
+  if (receipt.privateSource.treeSha256 !== release.rawEvidence.privateSourceTreeSha256
+    || receipt.publicDerivation.treeSha256 !== release.rawEvidence.publicDerivationTreeSha256) {
+    throw new Error("artifact release Raw receipt digest drift");
+  }
+  assertReceiptFilesIncluded(receipt, release.rawEvidence.receiptPath, release.files);
+  return release;
+}
+
+export function validateVersionedArtifactRelease(value: unknown): asserts value is VersionedArtifactRelease {
+  const root = object(value, "release");
+  exactKeys(root, ["schemaVersion", "claimBoundary", "releaseVersion", "previousReleaseVersion", "candidateCommit", "review", "evidenceState", "claims", "rawEvidence", "files", "releaseSha256"], "release");
+  if (root.schemaVersion !== ARTIFACT_RELEASE_SCHEMA_VERSION) throw new Error("artifact release schema version mismatch");
+  if (root.claimBoundary !== ARTIFACT_RELEASE_CLAIM_BOUNDARY) throw new Error("artifact release claim boundary overreach");
+  if (typeof root.releaseVersion !== "string") throw new Error("releaseVersion must be a string");
+  if (root.previousReleaseVersion !== null && typeof root.previousReleaseVersion !== "string") throw new Error("previousReleaseVersion must be a string or null");
+  validateVersionPair(root.releaseVersion, root.previousReleaseVersion);
+  if (typeof root.candidateCommit !== "string" || !COMMIT.test(root.candidateCommit)) throw new Error("invalid candidateCommit");
+  const review = object(root.review, "review");
+  exactKeys(review, ["status", "independentReview", "formalEvidenceReviewed"], "review");
+  if (review.status !== "local-tooling-reviewed" || review.independentReview !== false || review.formalEvidenceReviewed !== false) throw new Error("artifact release has an unreviewed or overclaimed review state");
+  const state = object(root.evidenceState, "evidenceState");
+  exactKeys(state, ["preregistration", "formalRaw", "formalExperiment", "externalReproduction", "publicationReview"], "evidenceState");
+  if (state.preregistration !== "Draft" || state.formalRaw !== "NotIncluded" || state.formalExperiment !== "NotRun" || state.externalReproduction !== "NotVerified" || state.publicationReview !== "NotReviewed") throw new Error("artifact release evidence state overclaims formal or reviewed status");
+  const claims = object(root.claims, "claims");
+  exactKeys(claims, ["claimTablePath", "includedClaimIds", "includedEvidenceState"], "claims");
+  if (typeof claims.claimTablePath !== "string") throw new Error("claim table path must be a string");
+  normalizeSafeRelativePath(claims.claimTablePath, "claim table path");
+  if (claims.includedEvidenceState !== "CodeVerified" || !Array.isArray(claims.includedClaimIds) || claims.includedClaimIds.length === 0) throw new Error("artifact release claims must be non-empty CodeVerified claims");
+  assertSortedUniqueStrings(claims.includedClaimIds, "included claims");
+  const raw = object(root.rawEvidence, "rawEvidence");
+  exactKeys(raw, ["mode", "receiptPath", "privateSourceTreeSha256", "publicDerivationTreeSha256", "receiptClaimBoundary"], "rawEvidence");
+  if (raw.mode !== "publishable-derivation-receipt" || raw.receiptClaimBoundary !== PUBLISHABLE_CLAIM_BOUNDARY) throw new Error("artifact release Raw evidence must use a bounded publishable receipt");
+  if (typeof raw.receiptPath !== "string") throw new Error("Raw receipt path must be a string");
+  normalizeSafeRelativePath(raw.receiptPath, "Raw receipt path");
+  digest(raw.privateSourceTreeSha256, "private source tree digest");
+  digest(raw.publicDerivationTreeSha256, "public derivation tree digest");
+  if (!Array.isArray(root.files)) throw new Error("artifact release files must be an array");
+  const files = root.files.map((item, index) => validateFile(item, index));
+  assertRequiredRoles(files);
+  assertSortedUniqueStrings(files.map((item) => item.path), "release file paths");
+  if (singleRole(files, "claim-table").path !== claims.claimTablePath) throw new Error("claim table role/path mismatch");
+  if (singleRole(files, "raw-public-derivation-receipt").path !== raw.receiptPath) throw new Error("Raw receipt role/path mismatch");
+  digest(root.releaseSha256, "release digest");
+  const { releaseSha256: _omitted, ...withoutDigest } = root;
+  if (root.releaseSha256 !== digestCanonical(withoutDigest)) throw new Error("artifact release manifest digest mismatch");
+}
+
+function validateFile(value: unknown, index: number): ArtifactReleaseFile {
+  const entry = object(value, `files[${index}]`);
+  exactKeys(entry, ["path", "role", "bytes", "sha256", "contentType"], `files[${index}]`);
+  if (typeof entry.path !== "string") throw new Error("release file path must be a string");
+  const safePath = normalizeSafeRelativePath(entry.path, "release file path");
+  if (safePath === DEFAULT_ARTIFACT_RELEASE_MANIFEST) throw new Error("release manifest must not include itself");
+  if (!REQUIRED_ROLES.includes(entry.role as ArtifactReleaseRole)) throw new Error(`invalid release file role: ${String(entry.role)}`);
+  if (!Number.isSafeInteger(entry.bytes) || Number(entry.bytes) < 0) throw new Error("invalid release file byte count");
+  digest(entry.sha256, "release file digest");
+  if (entry.contentType !== inferContentType(safePath)) throw new Error("release file content type mismatch");
+  return entry as unknown as ArtifactReleaseFile;
+}
+
+function validateIncludedClaims(claimTableValue: unknown, ids: readonly string[]): void {
+  const table = object(claimTableValue, "claim table");
+  if (!Array.isArray(table.claims)) throw new Error("claim table claims must be an array");
+  const normalizedIds = [...ids].sort(compare);
+  assertSortedUniqueStrings(normalizedIds, "included claim ids");
+  for (const id of normalizedIds) {
+    const found = table.claims.find((item) => object(item, "claim").id === id);
+    if (found === undefined) throw new Error(`release claim is absent from claim table: ${id}`);
+    const claim = object(found, "claim");
+    if (claim.evidenceState !== "CodeVerified") throw new Error(`release claim is unreviewed or not CodeVerified: ${id}`);
+    if (typeof claim.allowedClaim !== "string" || typeof claim.forbiddenClaim !== "string" || !Array.isArray(claim.requiredEvidence) || claim.requiredEvidence.length === 0) throw new Error(`release claim boundary is incomplete: ${id}`);
+  }
+}
+
+function assertReceiptFilesIncluded(receipt: PublishableDerivationReceipt, receiptPath: string, files: readonly ArtifactReleaseFile[]): void {
+  const prefix = path.posix.dirname(receiptPath) === "." ? "" : `${path.posix.dirname(receiptPath)}/`;
+  for (const publicFile of receipt.publicDerivation.files) {
+    const releasePath = `${prefix}${publicFile.path}`;
+    const included = files.find((item) => item.path === releasePath);
+    if (included === undefined) throw new Error(`public derivation file is missing from release: ${releasePath}`);
+    if (included.bytes !== publicFile.bytes || included.sha256 !== publicFile.sha256 || included.contentType !== publicFile.contentType) throw new Error(`public derivation digest drift in release: ${releasePath}`);
+  }
+}
+
+function normalizeInputs(values: readonly ArtifactReleaseFileInput[]): ArtifactReleaseFileInput[] {
+  if (values.length === 0) throw new Error("artifact release file list cannot be empty");
+  const normalized = values.map((item) => ({ path: normalizeSafeRelativePath(item.path, "release input path"), role: item.role })).sort((a, b) => compare(a.path, b.path));
+  assertSortedUniqueStrings(normalized.map((item) => item.path), "release input paths");
+  for (const item of normalized) if (!REQUIRED_ROLES.includes(item.role)) throw new Error(`invalid release input role: ${item.role}`);
+  return normalized;
+}
+
+function assertRequiredRoles(files: readonly Pick<ArtifactReleaseFileInput, "role">[]): void {
+  for (const role of REQUIRED_ROLES) if (!files.some((item) => item.role === role)) throw new Error(`artifact release is missing required role: ${role}`);
+}
+
+function singleRole(files: readonly ArtifactReleaseFile[], role: ArtifactReleaseRole): ArtifactReleaseFile {
+  const matches = files.filter((item) => item.role === role);
+  if (matches.length !== 1) throw new Error(`artifact release requires exactly one ${role} file`);
+  return matches[0]!;
+}
+
+async function collectReleaseFiles(root: string): Promise<ArtifactReleaseFile[]> {
+  const files: ArtifactReleaseFile[] = [];
+  await walk("");
+  return files.sort((a, b) => compare(a.path, b.path));
+  async function walk(relativeDirectory: string): Promise<void> {
+    const directory = relativeDirectory === "" ? root : resolveInside(root, relativeDirectory);
+    const entries = await readdir(directory, { withFileTypes: true });
+    entries.sort((a, b) => compare(a.name, b.name));
+    for (const item of entries) {
+      const relativePath = relativeDirectory === "" ? item.name : `${relativeDirectory}/${item.name}`;
+      const safePath = normalizeSafeRelativePath(relativePath, "release artifact path");
+      if (item.isSymbolicLink()) throw new Error(`symbolic links are forbidden in artifact releases: ${safePath}`);
+      if (item.isDirectory()) await walk(safePath);
+      else if (item.isFile() && safePath !== DEFAULT_ARTIFACT_RELEASE_MANIFEST) {
+        const content = await readFile(resolveInside(root, safePath));
+        assertPublishableArtifactContent(safePath, content);
+        files.push({ path: safePath, role: "source-snapshot", bytes: content.byteLength, sha256: sha256(content), contentType: inferContentType(safePath) });
+      } else if (!item.isFile()) throw new Error(`unsupported artifact release entry: ${safePath}`);
+    }
+  }
+}
+
+async function parseJsonFile(absolutePath: string, label: string): Promise<unknown> {
+  const content = await readFile(absolutePath, "utf8").catch(() => { throw new Error(`${label} is missing`); });
+  try { return JSON.parse(content) as unknown; } catch { throw new Error(`${label} is not valid JSON`); }
+}
+
+function validateVersionPair(current: string, previous: string | null): void {
+  validateVersion(current, "releaseVersion");
+  if (previous !== null) {
+    validateVersion(previous, "previousReleaseVersion");
+    if (compareVersions(previous, current) >= 0) throw new Error("artifact release version must advance beyond previousReleaseVersion");
+  }
+}
+
+function validateVersion(value: string, label: string): void {
+  if (!VERSION.test(value)) throw new Error(`${label} must be canonical MAJOR.MINOR.PATCH`);
+}
+
+function compareVersions(left: string, right: string): number {
+  const a = left.split(".").map(Number);
+  const b = right.split(".").map(Number);
+  for (let index = 0; index < 3; index += 1) if (a[index] !== b[index]) return a[index]! - b[index]!;
+  return 0;
+}
+
+function assertSortedUniqueStrings(values: readonly unknown[], label: string): void {
+  let previous: string | undefined;
+  for (const item of values) {
+    if (typeof item !== "string" || item.length === 0) throw new Error(`${label} must contain non-empty strings`);
+    if (previous !== undefined && previous >= item) throw new Error(`${label} must be sorted and unique`);
+    previous = item;
+  }
+}
+
+async function existingDirectory(input: string, label: string): Promise<string> {
+  const root = path.resolve(input);
+  const status = await lstat(root).catch(() => undefined);
+  if (status === undefined || !status.isDirectory() || status.isSymbolicLink()) throw new Error(`${label} must be an existing non-symbolic directory`);
+  return root;
+}
+
+async function regularFile(absolutePath: string, message: string): Promise<void> {
+  const status = await lstat(absolutePath).catch(() => undefined);
+  if (status === undefined || !status.isFile() || status.isSymbolicLink()) throw new Error(message);
+}
+
+function resolveInside(root: string, relativePath: string): string {
+  const safePath = normalizeSafeRelativePath(relativePath, "artifact release path");
+  const absolute = path.resolve(root, ...safePath.split("/"));
+  const relative = path.relative(root, absolute);
+  if (relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) throw new Error("artifact release path escapes root");
+  return absolute;
+}
+
+function modeExclusive(): number {
+  return 1; // fs.constants.COPYFILE_EXCL.
+}
+
+function serialize(value: unknown): string { return `${JSON.stringify(sortKeys(value), null, 2)}\n`; }
+function canonical(value: unknown): string { return JSON.stringify(sortKeys(value)); }
+function digestCanonical(value: unknown): string { return sha256(Buffer.from(canonical(value), "utf8")); }
+function sha256(value: Buffer): string { return createHash("sha256").update(value).digest("hex"); }
+function sortKeys(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(sortKeys);
+  if (value === null || typeof value !== "object") return value;
+  const recordValue = value as Record<string, unknown>;
+  return Object.fromEntries(Object.keys(recordValue).sort(compare).map((key) => [key, sortKeys(recordValue[key])]));
+}
+function object(value: unknown, label: string): Record<string, unknown> {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) throw new Error(`${label} must be an object`);
+  return value as Record<string, unknown>;
+}
+function exactKeys(value: Record<string, unknown>, expected: readonly string[], label: string): void {
+  const actual = Object.keys(value).sort(compare);
+  const wanted = [...expected].sort(compare);
+  if (actual.length !== wanted.length || actual.some((item, index) => item !== wanted[index])) throw new Error(`${label} key mismatch`);
+}
+function digest(value: unknown, label: string): void { if (typeof value !== "string" || !SHA256.test(value)) throw new Error(`${label} must be SHA-256`); }
+function compare(left: string, right: string): number { return left < right ? -1 : left > right ? 1 : 0; }

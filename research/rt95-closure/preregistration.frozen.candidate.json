@@ -1,0 +1,416 @@
+{
+  "schemaVersion": "rt95-preregistration-v1",
+  "registrationId": "RT95-PREREG-DRAFT-001",
+  "title": "God-Agent 持久 Runtime 可靠性配对实验（Frozen candidate protocol；无正式结果）",
+  "lifecycle": {
+    "status": "frozen",
+    "frozenAt": "2026-08-26T00:00:00.000Z"
+  },
+  "verification": {
+    "status": "NotVerified",
+    "evidenceActual": null,
+    "reviewerConclusion": null
+  },
+  "researchQuestions": [
+    {
+      "id": "RQ1",
+      "question": "持久 WAL、恢复和 Lease/Fencing 是否降低故障后的协议失败与重复外部效果？"
+    },
+    {
+      "id": "RQ2",
+      "question": "在相同 seed 与故障窗口下，分别关闭 WAL、Supervisor Recovery、Lease/Fencing 时，主要终点的配对效应如何变化？"
+    }
+  ],
+  "hypotheses": [
+    {
+      "id": "H0-RQ1",
+      "kind": "null",
+      "rqId": "RQ1",
+      "statement": "完整机制与消融条件在主要终点上的差异小于最小关注效应。"
+    },
+    {
+      "id": "H1-RQ1",
+      "kind": "alternative",
+      "rqId": "RQ1",
+      "statement": "完整机制相对消融条件在主要终点上至少达到最小关注效应。"
+    },
+    {
+      "id": "H0-RQ2",
+      "kind": "null",
+      "rqId": "RQ2",
+      "statement": "各单变量消融与完整机制的配对主要终点差异均小于最小关注效应。"
+    },
+    {
+      "id": "H1-RQ2",
+      "kind": "alternative",
+      "rqId": "RQ2",
+      "statement": "至少一个单变量消融与完整机制的配对主要终点差异达到最小关注效应；具体机制结论须通过预注册的多重比较校正。"
+    }
+  ],
+  "primaryEndpoint": {
+    "id": "EP-PRIMARY-001",
+    "name": "protocolHandlingSuccessRate",
+    "construct": "故障后在 deadline 内到达协议允许状态，且无重复推进、越权、错投或丢失已提交事实。",
+    "unit": "case-rate",
+    "direction": "higher-is-better",
+    "numerator": "protocolHandlingSuccess=true 的 eligible case 数",
+    "denominator": "按预注册计划实际注入故障且 Oracle 完整的 eligible case 数",
+    "analysisId": "AN-PRIMARY-001",
+    "oracleId": "ORACLE-PROTOCOL-V1"
+  },
+  "estimand": {
+    "id": "EST-PRIMARY-001",
+    "population": "冻结 fault plan、seed plan、task contract 和 Provider policy 下的 eligible Runtime case",
+    "unitOfAnalysis": "paired-case",
+    "treatment": "baseline 完整持久可靠性机制",
+    "comparator": "每个单变量 ablation arm",
+    "contrast": "baseline 与 ablation 的 protocolHandlingSuccess 概率配对差"
+  },
+  "minimumEffectOfInterest": {
+    "absoluteDifference": 0.1,
+    "unit": "proportion-points",
+    "rationale": "小于 10 个百分点的改善不足以抵消持久化、恢复和审计开销。"
+  },
+  "sampleSize": {
+    "basis": "coverage-grid-and-wilson-precision-draft-not-powered",
+    "calculationId": "SS-PRIMARY-001",
+    "alpha": 0.05,
+    "targetPower": 0.8,
+    "targetHalfWidth": 0.15,
+    "assumedBaselineRate": 0.8,
+    "perArm": 40,
+    "total": 160,
+    "rationale": "每 arm 40 是 8 窗口×5 seed 的覆盖格，不是已完成的 power 论证。在 assumed rate=0.8、n=40 时，32/40 的 Wilson 95% 区间约为 [0.6524,0.8950]，最大单侧距离约 0.1476，因此本 Draft 只承诺不优于 0.15 的名义边际精度；targetPower=0.8 仅是正式设计目标，当前 40 格未证明达到该 power。Freeze 前必须依据配对 discordance、窗口分层/聚类、缺失率、最小关注效应和 Holm family 重算正式样本量，正式 perArm 可以高于 40。"
+  },
+  "seedPlan": {
+    "id": "SEED-PLAN-001",
+    "algorithm": "xorshift32-v1",
+    "masterSeed": 20260824,
+    "seeds": [
+      469816031,
+      3443330994,
+      4121183031,
+      3314624278,
+      3472974415
+    ],
+    "seedListSha256": "5a9b5ec4193f82477fa09a5f47537915478d8982c615074725f179036342ca7b"
+  },
+  "faultPlan": {
+    "id": "FAULT-PLAN-001",
+    "gateId": "EXP-RT95-032",
+    "windowSetLifecycle": "frozen",
+    "pairing": "same-seed-across-arms",
+    "seedsPerWindow": 5,
+    "gate40PlannedCases": 40,
+    "totalPlannedCases": 160,
+    "windows": [
+      {
+        "id": "FW-MODEL-RESPONSE-COMMIT",
+        "description": "Provider 接受请求后、Runtime 提交响应前崩溃。",
+        "injectionPoint": "model-response-received-before-invocation-commit",
+        "productionEntry": {
+          "command": "node --import tsx src/app-server/main.ts",
+          "harnessPath": "research/runtime-e2e-benchmarks/src/process-chaos-harness.ts"
+        },
+        "oracle": {
+          "id": "ORACLE-MODEL-WAL-V1",
+          "assertion": "恢复后同一 Invocation 只有一个可接受终态，已接收响应不丢失且 Provider 请求不重复。"
+        },
+        "expectedArtifacts": [
+          "process-chaos-<seed>/runtime-state.json",
+          "process-chaos-<seed>/process-chaos-report.json",
+          "process-chaos-gate40-failures/<caseId>.json"
+        ],
+        "readiness": {
+          "status": "available",
+          "blockedReason": null
+        }
+      },
+      {
+        "id": "FW-TOOL-EFFECT-RECEIPT",
+        "description": "Tool 外部效果发生后、Runtime receipt 提交前崩溃。",
+        "injectionPoint": "tool-effect-after-occurrence-before-receipt-commit",
+        "productionEntry": {
+          "command": "node --import tsx src/app-server/main.ts",
+          "harnessPath": "research/runtime-e2e-benchmarks/src/process-chaos-harness.ts"
+        },
+        "oracle": {
+          "id": "ORACLE-TOOL-OUTCOME-V1",
+          "assertion": "恢复后按副作用策略得到 known 或 outcome_unknown，不盲重放不可查询效果且 duplicateExternalEffectCount=0。"
+        },
+        "expectedArtifacts": [
+          "process-chaos-<seed>/runtime-state.json",
+          "process-chaos-<seed>/process-chaos-report.json",
+          "process-chaos-gate40-failures/<caseId>.json"
+        ],
+        "readiness": {
+          "status": "available",
+          "blockedReason": null
+        }
+      },
+      {
+        "id": "FW-RETURN-RESPONSE-LEASE",
+        "description": "Return 最终响应已接收、Job Lease 仍由当前 App Server 持有且 Return 尚未从 delivering 提交为 ready 时强杀。",
+        "injectionPoint": "return-response-received-with-job-lease-held",
+        "productionEntry": {
+          "command": "node --import tsx src/app-server/main.ts",
+          "harnessPath": "research/runtime-e2e-benchmarks/src/process-chaos-harness.ts"
+        },
+        "oracle": {
+          "id": "ORACLE-RETURN-LEASE-V1",
+          "assertion": "重启后 Return 恢复为 ready；Lease 过期前拒绝推进，过期后只消费一次，最终 Job completed 且 return_god Provider 请求数仍为 1。"
+        },
+        "expectedArtifacts": [
+          "process-chaos-<seed>/runtime-state.json",
+          "process-chaos-<seed>/runtime-leases.json",
+          "process-chaos-<seed>/process-chaos-report.json",
+          "process-chaos-gate40-failures/<caseId>.json"
+        ],
+        "readiness": {
+          "status": "available",
+          "blockedReason": null
+        }
+      },
+      {
+        "id": "FW-RETURN-PERSISTED-CONSUME",
+        "description": "Return ready 已持久化、父级 Supervisor 尚未消费时强杀。",
+        "injectionPoint": "return-ready-persisted-before-parent-consume",
+        "productionEntry": {
+          "command": "node --import tsx src/app-server/main.ts",
+          "harnessPath": "research/runtime-e2e-benchmarks/src/process-chaos-harness.ts"
+        },
+        "oracle": {
+          "id": "ORACLE-RETURN-CONSUME-V1",
+          "assertion": "重启后同一 Return 仅被父级消费一次，阶段只推进一次且无错投。"
+        },
+        "expectedArtifacts": [
+          "process-chaos-<seed>/runtime-state.json",
+          "process-chaos-<seed>/process-chaos-report.json",
+          "process-chaos-gate40-failures/<caseId>.json"
+        ],
+        "readiness": {
+          "status": "available",
+          "blockedReason": null
+        }
+      },
+      {
+        "id": "FW-LEASE-FENCED-COMMIT",
+        "description": "旧 Owner 失去 Lease、successor 获得新 fencing token 后，旧 Owner 尝试提交。",
+        "injectionPoint": "successor-lease-acquired-before-stale-owner-commit",
+        "productionEntry": {
+          "command": "node --import tsx src/app-server/main.ts",
+          "harnessPath": "research/runtime-e2e-benchmarks/src/process-chaos-harness.ts"
+        },
+        "oracle": {
+          "id": "ORACLE-FENCING-V1",
+          "assertion": "旧 fencing token 的提交被拒绝，只有 successor 的合法 generation 可改变权威状态。"
+        },
+        "expectedArtifacts": [
+          "process-chaos-<seed>/runtime-state.json",
+          "process-chaos-<seed>/runtime-leases.json",
+          "process-chaos-<seed>/process-chaos-report.json",
+          "process-chaos-gate40-failures/<caseId>.json"
+        ],
+        "readiness": {
+          "status": "available",
+          "blockedReason": null
+        }
+      },
+      {
+        "id": "FW-WORKFLOW-STAGE-COMMIT",
+        "description": "Worker 已生成合法 Stage Result、Workflow stage 状态尚未提交时强杀。",
+        "injectionPoint": "stage-result-produced-before-workflow-stage-commit",
+        "productionEntry": {
+          "command": "node --import tsx src/app-server/main.ts",
+          "harnessPath": "research/runtime-e2e-benchmarks/src/process-chaos-harness.ts"
+        },
+        "oracle": {
+          "id": "ORACLE-WORKFLOW-COMMIT-V1",
+          "assertion": "恢复后 Stage Result 不丢失、不重复应用，Workflow stage 只推进一次。"
+        },
+        "expectedArtifacts": [
+          "process-chaos-<seed>/runtime-state.json",
+          "process-chaos-<seed>/process-chaos-report.json",
+          "process-chaos-gate40-failures/<caseId>.json"
+        ],
+        "readiness": {
+          "status": "available",
+          "blockedReason": null
+        }
+      },
+      {
+        "id": "FW-RECEIPT-COMMIT",
+        "description": "Tool Receipt 已形成但 Invocation/Workflow 尚未原子绑定该 Receipt 时强杀。",
+        "injectionPoint": "tool-receipt-produced-before-invocation-binding-commit",
+        "productionEntry": {
+          "command": "node --import tsx src/app-server/main.ts",
+          "harnessPath": "research/runtime-e2e-benchmarks/src/process-chaos-harness.ts"
+        },
+        "oracle": {
+          "id": "ORACLE-RECEIPT-V1",
+          "assertion": "恢复后稳定 Invocation ID 绑定唯一 Receipt，Outcome 不丢失且不产生第二次外部效果。"
+        },
+        "expectedArtifacts": [
+          "process-chaos-<seed>/runtime-state.json",
+          "process-chaos-<seed>/process-chaos-report.json",
+          "process-chaos-gate40-failures/<caseId>.json"
+        ],
+        "readiness": {
+          "status": "available",
+          "blockedReason": null
+        }
+      },
+      {
+        "id": "FW-PROOF-COMMIT",
+        "description": "Proof Fragment 已通过 Verifier、Completion Proof 或 Final Receipt 尚未提交时强杀。",
+        "injectionPoint": "proof-fragment-verified-before-completion-proof-commit",
+        "productionEntry": {
+          "command": "node --import tsx src/app-server/main.ts",
+          "harnessPath": "research/runtime-e2e-benchmarks/src/process-chaos-harness.ts"
+        },
+        "oracle": {
+          "id": "ORACLE-PROOF-V1",
+          "assertion": "恢复后 Proof 新鲜度与摘要仍有效，缺片或矛盾时不得 completed，满足条件时 Final Receipt 只能有一个。"
+        },
+        "expectedArtifacts": [
+          "process-chaos-<seed>/runtime-state.json",
+          "process-chaos-<seed>/process-chaos-report.json",
+          "process-chaos-gate40-failures/<caseId>.json"
+        ],
+        "readiness": {
+          "status": "available",
+          "blockedReason": null
+        }
+      }
+    ]
+  },
+  "rules": {
+    "exclusions": [
+      {
+        "id": "EX-ENV-001",
+        "condition": "Commit、fixture、config digest 或依赖环境与冻结输入不一致。",
+        "action": "case invalid；保留 Raw，不进入主要分析分母。"
+      }
+    ],
+    "reruns": [
+      {
+        "id": "RR-HARNESS-001",
+        "condition": "Harness 在故障注入前因基础设施错误终止，且没有 Runtime/Provider/Tool occurrence。",
+        "action": "允许按同 seed 重跑一次；原失败 Raw 与重跑原因必须同时保留。"
+      }
+    ],
+    "stopping": [
+      {
+        "id": "STOP-P0-001",
+        "condition": "出现双 Owner 提交、失权 fencing token 被接受、跨 Job 泄漏、未授权真实 Provider 调用或不可解释的 Raw 变化。",
+        "action": "立即停止放大该条件，保留现场并降级 Claim。"
+      }
+    ]
+  },
+  "arms": {
+    "baseline": {
+      "id": "ARM-BASELINE",
+      "implementation": "God-Agent 完整 WAL、恢复和 Lease/Fencing",
+      "configurationId": "CFG-BASELINE-V1"
+    },
+    "ablations": [
+      {
+        "id": "ARM-NO-WAL",
+        "mechanismDisabled": "model-and-tool-wal",
+        "configurationId": "CFG-NO-WAL-V1"
+      },
+      {
+        "id": "ARM-NO-RECOVERY",
+        "mechanismDisabled": "supervisor-recovery",
+        "configurationId": "CFG-NO-RECOVERY-V1"
+      },
+      {
+        "id": "ARM-NO-LEASE",
+        "mechanismDisabled": "lease-and-fencing",
+        "configurationId": "CFG-NO-LEASE-V1"
+      }
+    ],
+    "externalBaselines": []
+  },
+  "analyses": {
+    "primaryAnalysisId": "AN-PRIMARY-001",
+    "items": [
+      {
+        "id": "AN-PRIMARY-001",
+        "endpointId": "EP-PRIMARY-001",
+        "method": "paired binary contrast with two-sided confidence interval",
+        "interval": "95% confidence interval",
+        "multiplicity": "primary endpoint fixed; Holm correction for multiple ablation contrasts"
+      }
+    ]
+  },
+  "provenance": {
+    "baselineCommit": "3c78dca7747c4a87c611007a9148fc36604a1b0a",
+    "configPath": "research/benchmarks/configs/offline-default.json",
+    "configSha256": "7a1fc0eb3414c82111d48365d7ef9f118ea594afe524577c550f95c71d160484",
+    "providerPolicy": {
+      "mode": "offline-only",
+      "authorizedLiveCalls": false,
+      "approvalId": null,
+      "maxRequests": 0,
+      "maxTotalCostUsd": 0,
+      "allowedProviders": [
+        "deterministic-fake"
+      ]
+    }
+  },
+  "integrity": {
+    "summary": {
+      "rqIds": [
+        "RQ1",
+        "RQ2"
+      ],
+      "hypothesisIds": [
+        "H0-RQ1",
+        "H1-RQ1",
+        "H0-RQ2",
+        "H1-RQ2"
+      ],
+      "analysisIds": [
+        "AN-PRIMARY-001"
+      ],
+      "armIds": [
+        "ARM-BASELINE",
+        "ARM-NO-WAL",
+        "ARM-NO-RECOVERY",
+        "ARM-NO-LEASE"
+      ],
+      "faultWindowIds": [
+        "FW-MODEL-RESPONSE-COMMIT",
+        "FW-TOOL-EFFECT-RECEIPT",
+        "FW-RETURN-RESPONSE-LEASE",
+        "FW-RETURN-PERSISTED-CONSUME",
+        "FW-LEASE-FENCED-COMMIT",
+        "FW-WORKFLOW-STAGE-COMMIT",
+        "FW-RECEIPT-COMMIT",
+        "FW-PROOF-COMMIT"
+      ],
+      "seedValues": [
+        469816031,
+        3443330994,
+        4121183031,
+        3314624278,
+        3472974415
+      ],
+      "availableWindowIds": [
+        "FW-MODEL-RESPONSE-COMMIT",
+        "FW-TOOL-EFFECT-RECEIPT",
+        "FW-RETURN-RESPONSE-LEASE",
+        "FW-RETURN-PERSISTED-CONSUME",
+        "FW-LEASE-FENCED-COMMIT",
+        "FW-WORKFLOW-STAGE-COMMIT",
+        "FW-RECEIPT-COMMIT",
+        "FW-PROOF-COMMIT"
+      ],
+      "blockedWindowIds": [],
+      "gate40PlannedCases": 40,
+      "plannedCases": 160
+    },
+    "payloadSha256": "89ae6340475f90a6df2db1a37ddc411ef79b3160553dd2864762ac58fcdd6db1"
+  }
+}

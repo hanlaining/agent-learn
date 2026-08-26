@@ -8,7 +8,12 @@ import {
   applyAgentModeToTools,
   applyRequirementGateToTools,
   buildParentAgentInstructions,
+  resolveWorkflowTurnResult,
   selectInitialChildProfile,
+  routeTeamConfigForExecutionKind,
+  shouldCreateFixedSoftwareTeam,
+  requirementExecutionStateForJobStatus,
+  isExplicitRequirementRetry,
   registerAppServerHandlers,
 } from "../src/app-server/handlers.js";
 import {
@@ -33,7 +38,7 @@ import { AgentLoop } from "../src/agent/agent-loop.js";
 import type { LlmCreateResponseRequest, LlmProvider, LlmResponse } from "../src/llm/types.js";
 import type { AgentRunResult } from "../src/agents/agent-run.js";
 import type { PersistedThreadConfig } from "../src/runtime/json-file-runtime-persistence.js";
-import { DEFAULT_AGENT_TEAM_CONFIG } from "../src/agents/agent-runtime.js";
+import { DEFAULT_AGENT_TEAM_CONFIG, type AgentRole } from "../src/agents/agent-runtime.js";
 import { AgentRegistry } from "../src/agents/agent-registry.js";
 import { AgentRunStore } from "../src/agents/agent-run-store.js";
 import { AgentRuntimeStore } from "../src/agents/agent-runtime-store.js";
@@ -165,6 +170,57 @@ function deferredSignal(): { promise: Promise<void>; resolve: () => void } {
   let resolve: () => void = () => undefined;
   const promise = new Promise<void>((done) => { resolve = done; });
   return { promise, resolve };
+}
+
+test("resolveWorkflowTurnResult 对完成、设计等待、反馈阻塞和无进展状态 fail closed", () => {
+  const missingAssistant = createWorkflowResultFixture("completed");
+  missingAssistant.lifecycle.completeTurn(missingAssistant.turn.id);
+  assert.throws(() => resolveWorkflowTurnResult(missingAssistant.lifecycle, missingAssistant.runtime, missingAssistant.job.id, missingAssistant.turn.id), /committed root-turn delivery/u);
+
+  const completed = createWorkflowResultFixture("completed");
+  const assistant = completed.lifecycle.appendItem(completed.turn.id, "assistant_message", { text: "已完成" });
+  const completedTurn = completed.lifecycle.completeTurn(completed.turn.id);
+  const completedResult = resolveWorkflowTurnResult(completed.lifecycle, completed.runtime, completed.job.id, completed.turn.id);
+  assert.equal(completedResult.turn.id, completedTurn.id);
+  assert.equal(completedResult.assistantMessage.id, assistant.id);
+
+  const design = createWorkflowResultFixture("reviewing");
+  for (const profileId of ["product_design", "mock_preview"]) design.runtime.createTask({
+    jobId: design.job.id, rootRunId: design.root.id, ownerRunId: design.root.id, profileId,
+    title: profileId, objective: profileId, scope: { allowedPaths: [], deniedPaths: [], nonGoals: [] },
+    requiredOutputs: [], acceptanceCriteria: [], fileClaims: [], maxAttempts: 2, status: "completed",
+  });
+  const designResult = resolveWorkflowTurnResult(design.lifecycle, design.runtime, design.job.id, design.turn.id);
+  assert.equal(designResult.turn.status, "completed");
+  assert.match(String((designResult.assistantMessage.content as { text: string }).text), /确认设计/u);
+
+  const blocked = createWorkflowResultFixture("reviewing");
+  blocked.runtime.createTask({
+    jobId: blocked.job.id, rootRunId: blocked.root.id, ownerRunId: blocked.root.id, profileId: "backend_engineering",
+    title: "backend", objective: "backend", scope: { allowedPaths: [], deniedPaths: [], nonGoals: [] },
+    requiredOutputs: [], acceptanceCriteria: [], fileClaims: [], maxAttempts: 2, status: "blocked",
+  });
+  const blockedResult = resolveWorkflowTurnResult(blocked.lifecycle, blocked.runtime, blocked.job.id, blocked.turn.id);
+  assert.equal(blockedResult.turn.status, "completed");
+  assert.match(String((blockedResult.assistantMessage.content as { text: string }).text), /补充信息/u);
+
+  const noProgress = createWorkflowResultFixture("running");
+  assert.throws(() => resolveWorkflowTurnResult(noProgress.lifecycle, noProgress.runtime, noProgress.job.id, noProgress.turn.id), /paused without a recoverable feedback request/u);
+});
+
+function createWorkflowResultFixture(status: "completed" | "reviewing" | "running") {
+  const lifecycle = new LifecycleStore();
+  const thread = lifecycle.createThread();
+  const turn = lifecycle.createTurn(thread.id);
+  const runs = new AgentRunStore();
+  const root = runs.ensureRoot(thread.id, turn.id, "orchestrator", `resolver-${turn.id}`);
+  const runtime = new AgentRuntimeStore();
+  const job = runtime.createJob({
+    threadId: thread.id, rootTurnId: turn.id, rootRunId: root.id, configSnapshot: DEFAULT_AGENT_TEAM_CONFIG,
+    executionKind: "software_product_delivery", workflowVersion: "software_product_delivery_v3",
+  });
+  runtime.setJobStatus(job.id, status);
+  return { lifecycle, turn, runs, root, runtime, job };
 }
 
 async function drainServerResponses(app: TestAppServer): Promise<void> {
@@ -308,6 +364,33 @@ async function createConcurrentDynamicApp(
     cancelCalls: () => cancelCalls,
   };
 }
+
+test("App Server handler malformed authorization, requirement, workspace and lifecycle RPCs fail closed", async () => {
+  const app = createTestAppServer({
+    workspaceSandbox: {
+      searchFiles: async () => ({ query: "", paths: [], truncated: false }),
+      validateFilePath: async (path) => path,
+    },
+  });
+  async function rejects(method: string, params: unknown): Promise<void> {
+    const request = app.client.sendRequest(method, params);
+    await app.flushClientRequest();
+    await assert.rejects(request);
+  }
+
+  await rejects("thread/rename", { threadId: "", title: "" });
+  await rejects("thread/soft-delete", { threadIds: "not-array", batchDeleteId: "x" });
+  await rejects("thread/restore", { threadId: "missing" });
+  await rejects("workspace/search-files", { query: 42 });
+  await rejects("workspace/search-files", { query: "" });
+  await rejects("requirement/get", { threadId: "missing" });
+  await rejects("turn/start", { threadId: "missing", input: "hello" });
+  await rejects("turn/start", { threadId: "missing", input: "" });
+  await rejects("turn/cancel", { turnId: "missing" });
+  await rejects("runtime/select-model", { model: "" });
+  await rejects("invocation/outcome-unknown/list", { threadId: "missing" });
+  await rejects("invocation/outcome-unknown/resolve", { resolutionId: "missing", expectedVersion: 1 });
+});
 
 test("design-confirm RPC 拒绝旧 revision 和错误 hash，合法确认只恢复同一 v3 Job 与团队", async () => {
   const lifecycle = new LifecycleStore();
@@ -519,6 +602,60 @@ test("outcome_unknown API 使用服务端操作者权限并拒绝无权限请求
   await rejected;
 });
 
+test("outcome_unknown resolution parser 覆盖 retry、external、manual 和 malformed 分支", async () => {
+  const resolutionService = new OutcomeUnknownResolutionService(new OutcomeUnknownResolutionStore());
+  for (const [kind, id] of [["model", "parser-model"], ["tool", "parser-tool"], ["model", "parser-manual"], ["tool", "parser-abandon"]] as const) {
+    await resolutionService.registerFromRuntime({
+      invocationKind: kind,
+      invocationId: id,
+      requestDigest: `sha256:${"a".repeat(64)}`,
+      identity: kind === "model"
+        ? { threadId: id, turnId: `${id}-turn`, displayName: id, provider: "openai", model: "gpt-5.6-sol" }
+        : { threadId: id, turnId: `${id}-turn`, displayName: id, toolName: "external_write", callId: `${id}-call` },
+      sideEffectRisk: kind === "tool" ? "known" : "none",
+    });
+  }
+  const actor: OutcomeUnknownActor = { id: "parser-user", permissions: ["invocation:view", "invocation:resolve"] };
+  const app = createTestAppServer({ outcomeUnknownResolutionService: resolutionService, resolveOutcomeUnknownActor: () => actor });
+  await completeHandshake(app);
+  const listPromise = app.client.sendRequest("invocation/outcome-unknown/list", { threadId: "parser-model" });
+  await app.flushClientRequest();
+  const [retry] = await listPromise as Array<{ resolutionId: string; version: number }>;
+  assert.ok(retry);
+
+  const retryPromise = app.client.sendRequest("invocation/outcome-unknown/resolve", {
+    resolutionId: retry.resolutionId, expectedVersion: retry.version, idempotencyKey: "parser-retry",
+    resolution: { action: "confirm_not_executed_retry", reason: "未发生副作用", toolSideEffectConfirmed: false },
+  });
+  await app.flushClientRequest();
+  assert.equal((await retryPromise as { state: string }).state, "retry_authorized");
+
+  const records = ["parser-tool", "parser-manual", "parser-abandon"].flatMap((threadId) => resolutionService.list(actor).filter((item) => item.identity.threadId === threadId));
+  const tool = records.find((item) => item.identity.threadId === "parser-tool")!;
+  const manual = records.find((item) => item.identity.threadId === "parser-manual")!;
+  const abandon = records.find((item) => item.identity.threadId === "parser-abandon")!;
+  for (const [record, resolution, expected] of [
+    [tool, { action: "record_external_result", reason: "外部已完成", externalResult: { summary: "ok", value: { code: 200 } } }, "external_result_recorded"],
+    [manual, { action: "mark_manual_required", reason: "需要人工" }, "manual_required"],
+    [abandon, { action: "abandon", reason: "停止" }, "abandoned"],
+  ] as const) {
+    const request = app.client.sendRequest("invocation/outcome-unknown/resolve", {
+      resolutionId: record.resolutionId, expectedVersion: record.version, idempotencyKey: `parser-${expected}`,
+      resolution,
+    });
+    await app.flushClientRequest();
+    assert.equal((await request as { state: string }).state, expected);
+  }
+
+  const malformed = app.client.sendRequest("invocation/outcome-unknown/resolve", {
+    resolutionId: retry.resolutionId, expectedVersion: 2, idempotencyKey: "parser-malformed",
+    resolution: { action: "record_external_result", reason: "bad", externalResult: { summary: "missing value" } },
+  });
+  const rejected = assert.rejects(malformed, /Invalid outcome-unknown external result/u);
+  await app.flushClientRequest();
+  await rejected;
+});
+
 test("turn/start 直接 RPC 拒绝未知字段、超长输入和非法 Skill 名", async () => {
   const app = createTestAppServer();
   await completeHandshake(app);
@@ -712,6 +849,89 @@ test("Dynamic Engine 是确认执行后父 AgentLoop 的唯一驱动者", async 
   assert.equal(job?.status, "completed");
   assert.equal(runtime.getDynamicExecution(job!.id)?.recoveryAction, "terminate");
   assert.equal(runs.listForJob(job!.id).length, 1);
+});
+
+test("App Server helper routes execution kinds conservatively and keeps retry/idempotency semantics", () => {
+  const base = {
+    ...DEFAULT_AGENT_TEAM_CONFIG,
+    allowedProfiles: ["coder", "reviewer", "researcher", "product_design"] as AgentRole[],
+    allowedTools: ["*", "!run_agent"],
+    allowedSkills: ["finance"],
+  };
+  const analysis = routeTeamConfigForExecutionKind(base, "analysis_only");
+  assert.equal(analysis.accessMode, "read_only");
+  assert.deepEqual(analysis.allowedProfiles, ["researcher", "reviewer"]);
+  assert.deepEqual(analysis.allowedTools, ["*", "!run_agent", "!write_file", "!run_command"]);
+  const change = routeTeamConfigForExecutionKind(base, "software_change");
+  assert.deepEqual(change.allowedProfiles, ["coder", "reviewer"]);
+  assert.equal(change.accessMode, base.accessMode);
+  const product = routeTeamConfigForExecutionKind(base, "software_product_delivery");
+  assert.equal(product.engineeringChatCount, 3);
+  assert.equal(product.maxConcurrent >= 3, true);
+  assert.equal(product.allowedProfiles.includes("frontend_engineering"), true);
+  assert.equal(product.allowedProfiles.includes("backend_engineering"), true);
+  assert.equal(shouldCreateFixedSoftwareTeam("software_product_delivery"), true);
+  assert.equal(shouldCreateFixedSoftwareTeam("software_change"), false);
+  assert.equal(requirementExecutionStateForJobStatus("completed"), "completed");
+  assert.equal(requirementExecutionStateForJobStatus("failed"), "failed_retryable");
+  assert.equal(requirementExecutionStateForJobStatus("partial"), "failed_retryable");
+  assert.equal(requirementExecutionStateForJobStatus("cancelled"), "cancelled");
+  assert.equal(requirementExecutionStateForJobStatus("running"), undefined);
+  assert.equal(isExplicitRequirementRetry(" 重试。"), true);
+  assert.equal(isExplicitRequirementRetry("再次执行!"), true);
+  assert.equal(isExplicitRequirementRetry("继续"), false);
+});
+
+test("Engine 路由返回非法 root-turn 结果时 Handler fail closed", async () => {
+  const lifecycle = new LifecycleStore();
+  const runs = new AgentRunStore();
+  const runtime = new AgentRuntimeStore();
+  const requirements = new RequirementStore();
+  const malformedEngine: ExecutionEngine = {
+    id: "malformed-engine",
+    control: "engine",
+    supports: (kind) => kind === "software_product_delivery",
+    start: async () => ({ output: { unexpected: true } }),
+    resume: async () => ({ output: { unexpected: true } }),
+    cancel: async () => undefined,
+    recover: async () => undefined,
+    snapshot: (jobId) => ({ engine: "malformed-engine", jobId }),
+  };
+  const router = new ExecutionEngineRouter([
+    new DynamicAgentExecutionEngine(runtime, { runStore: runs }),
+    malformedEngine,
+  ]);
+  const app = createTestAppServer({
+    lifecycleStore: lifecycle,
+    agentLoop: { cancel: () => false, run: async () => { throw new Error("must not call root Agent"); } },
+    agentRegistry: new AgentRegistry(),
+    agentRunStore: runs,
+    agentRuntimeStore: runtime,
+    requirementStore: requirements,
+    executionEngineRouter: router,
+  });
+  await completeHandshake(app);
+  const threadRequest = app.client.sendRequest("thread/start");
+  await app.flushClientRequest();
+  const thread = await threadRequest as { id: string };
+  const planned = requirements.prepare(thread.id, {
+    executionKind: "software_product_delivery",
+    title: "malformed engine result",
+    objective: "reject malformed root delivery",
+    scope: ["src/**"], nonGoals: [], constraints: [], deliverables: ["result"],
+    acceptanceCriteria: ["fail closed"],
+    testCases: [{ id: "TC-MALFORMED-ENGINE", title: "bad output", kind: "integration", steps: ["run"], expected: "reject" }],
+    executionSteps: ["execute"],
+  }, { path: "D:/plans/malformed-engine.md", contentHash: "malformed-engine-hash", generatedAt: "2026-08-19T00:00:00.000Z" });
+  requirements.confirm(planned.id, planned.revision, planned.planArtifact.contentHash);
+  const startRequest = app.client.sendRequest("turn/start", { threadId: thread.id, input: "确认执行" });
+  await app.flushClientRequest();
+  const started = await startRequest as { turn: { id: string } };
+  const runRequest = app.client.sendRequest("turn/run", { turnId: started.turn.id });
+  await app.flushClientRequest();
+  await assert.rejects(runRequest, /root-turn result|Dynamic Engine completed|failed/i);
+  assert.equal(lifecycle.getTurn(started.turn.id)?.status, "in_progress");
+  assert.equal(runs.listForJob(runtime.getJobByRequirement(planned.id, planned.revision)?.id ?? "").some((run) => run.status === "completed"), false);
 });
 
 test("生产组合由 Handler 外层 Lease 覆盖 Job 绑定、嵌套 Engine/AgentLoop 与 finally 快照", async (t) => {

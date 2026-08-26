@@ -361,3 +361,50 @@ test("run_agent definition satisfies Responses strict schema", () => {
   );
   assert.equal(parameters.additionalProperties, false);
 });
+
+test("恢复 Task 必须属于当前 Job、必须是根 Task 且仍有可用 attempt", async () => {
+  const lifecycle = new LifecycleStore(); const thread = lifecycle.createThread(); const turn = lifecycle.createTurn(thread.id);
+  const store = new AgentRunStore(); const runtimeStore = new AgentRuntimeStore();
+  const job = runtimeStore.createJob({ threadId: thread.id, rootTurnId: turn.id, rootRunId: "pending-root",
+    configSnapshot: { ...DEFAULT_AGENT_TEAM_CONFIG, independentReview: false } });
+  const root = store.ensureRoot(thread.id, turn.id, "orchestrator", job.id);
+  const createTask = (overrides: Record<string, unknown> = {}) => runtimeStore.createTask({ jobId: job.id,
+    rootRunId: root.id, ownerRunId: root.id, profileId: "tester", title: "resume", objective: "resume",
+    scope: { allowedPaths: [], deniedPaths: [], nonGoals: [] }, requiredOutputs: [], acceptanceCriteria: [],
+    fileClaims: [], maxAttempts: 2, ...overrides } as never);
+  const scheduler = new MultiAgentScheduler({ registry: new AgentRegistry(), store, runtimeStore,
+    resolveParent: () => ({ threadId: thread.id }), prepare: () => ({ threadId: "never", turnId: "never", execute: async () => "never" }) });
+  assert.match((await scheduler.runAgent({ parentTurnId: turn.id, profileId: "tester", task: "missing", taskId: "missing" })).safeError ?? "", /Resumed Task is unavailable/);
+  const parent = createTask();
+  const child = createTask({ parentTaskId: parent.id });
+  assert.match((await scheduler.runAgent({ parentTurnId: turn.id, profileId: "tester", task: "child", taskId: child.id })).safeError ?? "", /Resumed Task is unavailable/);
+  const completed = createTask(); runtimeStore.setTaskStatus(completed.id, "completed");
+  assert.match((await scheduler.runAgent({ parentTurnId: turn.id, profileId: "tester", task: "completed", taskId: completed.id })).safeError ?? "", /no eligible attempt/);
+  const exhausted = createTask({ attempt: 2 });
+  assert.match((await scheduler.runAgent({ parentTurnId: turn.id, profileId: "tester", task: "exhausted", taskId: exhausted.id })).safeError ?? "", /no eligible attempt/);
+});
+
+test("Scheduler cancelJob 与 recoverJob 只拒绝目标 Job 的等待队列", async () => {
+  for (const action of ["cancel", "recover"] as const) {
+    const store = new AgentRunStore(); const runtimeStore = new AgentRuntimeStore();
+    const firstJob = runtimeStore.createJob({ threadId: `thread-${action}-a`, rootTurnId: `turn-${action}-a`,
+      rootRunId: "pending-a", configSnapshot: { ...DEFAULT_AGENT_TEAM_CONFIG, independentReview: false } });
+    const secondJob = runtimeStore.createJob({ threadId: `thread-${action}-b`, rootTurnId: `turn-${action}-b`,
+      rootRunId: "pending-b", configSnapshot: { ...DEFAULT_AGENT_TEAM_CONFIG, independentReview: false } });
+    const firstRoot = store.ensureRoot(firstJob.threadId, firstJob.rootTurnId, "orchestrator", firstJob.id);
+    const secondRoot = store.ensureRoot(secondJob.threadId, secondJob.rootTurnId, "orchestrator", secondJob.id);
+    let release: () => void = () => undefined;
+    const blocker = new Promise<void>((resolve) => { release = resolve; });
+    const scheduler = new MultiAgentScheduler({ registry: new AgentRegistry(), store, runtimeStore, maxConcurrentRuns: 1,
+      resolveParent: (turnId) => ({ threadId: turnId }), prepare: (_profile, task) => ({ threadId: `child-${task}`,
+        turnId: `child-turn-${task}`, execute: async () => { if (task === "first") await blocker; return task; } }) });
+    const first = scheduler.runAgent({ parentTurnId: firstRoot.turnId, profileId: "tester", task: "first" });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const queued = scheduler.runAgent({ parentTurnId: secondRoot.turnId, profileId: "tester", task: "queued" });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    if (action === "cancel") scheduler.cancelJob(secondRoot.jobId); else scheduler.recoverJob(secondRoot.jobId);
+    assert.match((await queued).safeError ?? "", action === "cancel" ? /Scheduler wait cancelled/ : /discarded during deterministic restart recovery/);
+    release();
+    assert.equal((await first).status, "completed");
+  }
+});

@@ -1,0 +1,89 @@
+{
+  "schemaVersion": 1,
+  "capturedAt": "2026-08-24T19:00:00+08:00",
+  "candidate": {
+    "baseline": "main@3c78dca7747c4a87c611007a9148fc36604a1b0a",
+    "state": "uncommitted-local-worktree",
+    "remoteVerified": false
+  },
+  "testDiscovery": {
+    "formalFiles": 113,
+    "coveredFiles": 113,
+    "omitted": 0,
+    "stale": 0
+  },
+  "mainTests": {
+    "total": 736,
+    "passed": 735,
+    "skipped": 1,
+    "failed": 0,
+    "skipBoundary": "Windows symlink privilege conditional skip"
+  },
+  "coverage": {
+    "sourceFiles": 122,
+    "loadedFiles": 116,
+    "lineCovered": 26146,
+    "lineTotal": 28672,
+    "linePercent": 91.19,
+    "gateLinePercent": 90.25,
+    "gateLoadedPercent": 93
+  },
+  "processChaos": {
+    "passed": 17,
+    "total": 17
+  },
+  "gate40": {
+    "candidate": 40,
+    "runnable": 40,
+    "localPassed": 40,
+    "localFailed": 0,
+    "blocked": 0,
+    "formalVerified": 0,
+    "complete": false,
+    "lifecycle": "candidate-not-frozen"
+  },
+  "provider": {
+    "mode": "offline-deterministic-fake",
+    "liveCalls": 0,
+    "credentialsRead": false
+  },
+  "release": {
+    "localPassed": 11,
+    "localTotal": 12,
+    "localStatus": "BLOCKED",
+    "productionStatus": "BLOCKED",
+    "auditCritical": 0,
+    "auditHigh": 3
+  },
+  "scores": {
+    "target": 95,
+    "engineering": 93,
+    "interview": 90,
+    "research": 69,
+    "paper": 47,
+    "production": 68
+  },
+  "presentation": {
+    "slides": 7,
+    "renderedSlides": 7,
+    "overflowErrors": 0,
+    "sourceNotes": 7,
+    "qaMode": "separate-render-and-notes-qa"
+  },
+  "rehearsal": {
+    "timedCompleted": 0,
+    "timedRequired": 3,
+    "nonAuthorCompleted": 0,
+    "nonAuthorRequired": 1,
+    "status": "NotRun",
+    "records": []
+  },
+  "claimBoundary": [
+    "local-ready is not production-ready",
+    "local pilot is not formal verification",
+    "offline deterministic fake is not a live Provider",
+    "author-run is not independent reproduction",
+    "test pass counts are not reliability probabilities",
+    "PPT text and notes require separate render QA"
+  ]
+}

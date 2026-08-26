@@ -1,0 +1,299 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/hanlaining/god-agent/research/runtime-e2e-benchmarks/schema/process-chaos-boundary-report.schema.json",
+  "title": "God Agent Process Chaos boundary local pilot report",
+  "description": "Fail-closed raw report for runnable W01, W02, W04, W05, W06, W07, or W08. It is local narrow E3 pilot evidence and cannot claim complete GATE-40, exactly-once, or production readiness.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion", "windowId", "evidenceLevel", "completeGate40", "exactlyOnceClaimed",
+    "productionReadyClaimed", "runStartedAt", "runCompletedAt", "environment", "seed",
+    "productionEntry", "reproCommand", "statePath", "leasePath", "rawReportPath", "pids", "oracle", "evidence"
+  ],
+  "properties": {
+    "schemaVersion": { "const": "process-chaos-boundary-report-v1" },
+    "windowId": { "enum": ["FW-MODEL-RESPONSE-COMMIT", "FW-TOOL-EFFECT-RECEIPT", "FW-RETURN-PERSISTED-CONSUME", "FW-LEASE-FENCED-COMMIT", "FW-WORKFLOW-STAGE-COMMIT", "FW-RECEIPT-COMMIT", "FW-PROOF-COMMIT"] },
+    "evidenceLevel": { "const": "local-narrow-E3-pilot" },
+    "completeGate40": { "const": false },
+    "exactlyOnceClaimed": { "const": false },
+    "productionReadyClaimed": { "const": false },
+    "runStartedAt": { "type": "string", "format": "date-time" },
+    "runCompletedAt": { "type": "string", "format": "date-time" },
+    "environment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["platform", "arch", "node", "osRelease", "local", "appServerProcess", "provider"],
+      "properties": {
+        "platform": { "type": "string", "minLength": 1 },
+        "arch": { "type": "string", "minLength": 1 },
+        "node": { "type": "string", "minLength": 1 },
+        "osRelease": { "type": "string", "minLength": 1 },
+        "local": { "const": true },
+        "appServerProcess": { "const": "real-child-process" },
+        "provider": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "realApiCalls", "credentialsRead"],
+          "properties": {
+            "kind": { "const": "deterministic-loopback-fake" },
+            "realApiCalls": { "const": false },
+            "credentialsRead": { "const": false }
+          }
+        }
+      }
+    },
+    "seed": { "type": "string", "pattern": "^[a-zA-Z0-9._-]+$" },
+    "productionEntry": { "const": "node --import tsx src/app-server/main.ts" },
+    "reproCommand": {
+      "type": "string",
+      "pattern": "^npm exec -- tsx research/runtime-e2e-benchmarks/src/process-chaos-cli\\.ts --window FW-(MODEL-RESPONSE-COMMIT|TOOL-EFFECT-RECEIPT|RETURN-PERSISTED-CONSUME|LEASE-FENCED-COMMIT|WORKFLOW-STAGE-COMMIT|RECEIPT-COMMIT|PROOF-COMMIT) --seed [a-zA-Z0-9._-]+ --output <directory>$"
+    },
+    "statePath": { "const": "runtime-state.json" },
+    "leasePath": { "const": "runtime-leases.json" },
+    "rawReportPath": { "const": "process-chaos-boundary-report.json" },
+    "pids": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["originalOwner", "successor", "auditor"],
+      "properties": {
+        "originalOwner": { "type": "integer", "minimum": 1 },
+        "successor": { "type": "integer", "minimum": 1 },
+        "auditor": { "type": ["integer", "null"], "minimum": 1 }
+      }
+    },
+    "oracle": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["id", "ownerKilledAtPersistedBoundary", "successorReloadedPersistedReturn", "returnConsumedOnce", "parentAdvancedOnce", "repeatedAdvanceChangedState"],
+          "properties": {
+            "id": { "const": "ORACLE-RETURN-CONSUME-V1" },
+            "ownerKilledAtPersistedBoundary": { "const": true },
+            "successorReloadedPersistedReturn": { "const": true },
+            "returnConsumedOnce": { "const": true },
+            "parentAdvancedOnce": { "const": true },
+            "repeatedAdvanceChangedState": { "const": false }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["id", "originalFencingToken", "successorFencingToken", "staleCommitRejected", "staleCommitError", "successorUniquelyCommitted", "originalOwnerKilled", "auditorReloadedAuthoritativeState"],
+          "properties": {
+            "id": { "const": "ORACLE-FENCING-V1" },
+            "originalFencingToken": { "type": "integer", "minimum": 1 },
+            "successorFencingToken": { "type": "integer", "minimum": 2 },
+            "staleCommitRejected": { "const": true },
+            "staleCommitError": { "type": "string", "pattern": "fencing token mismatch" },
+            "successorUniquelyCommitted": { "const": true },
+            "originalOwnerKilled": { "const": true },
+            "auditorReloadedAuthoritativeState": { "const": true }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["id", "ownerKilledAfterResponsePersisted", "successorReplayedPersistedResponse", "providerRequestNotRepeated", "assistantCommittedOnce"],
+          "properties": {
+            "id": { "const": "ORACLE-MODEL-WAL-V1" },
+            "ownerKilledAfterResponsePersisted": { "const": true },
+            "successorReplayedPersistedResponse": { "const": true },
+            "providerRequestNotRepeated": { "const": true },
+            "assistantCommittedOnce": { "const": true }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["id", "ownerKilledBeforeStageCommit", "successorRecoveredPersistedModelResult", "productModelInvocationNotRepeated", "productStageCommittedOnce"],
+          "properties": {
+            "id": { "const": "ORACLE-WORKFLOW-COMMIT-V1" },
+            "ownerKilledBeforeStageCommit": { "const": true },
+            "successorRecoveredPersistedModelResult": { "const": true },
+            "productModelInvocationNotRepeated": { "const": true },
+            "productStageCommittedOnce": { "const": true }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["id", "ownerKilledAfterEffectBeforeToolReceipt", "successorQueriedPersistedEffect", "blindReplayAvoided", "effectAppliedOnce", "receiptRecovered"],
+          "properties": {
+            "id": { "const": "ORACLE-TOOL-OUTCOME-V1" },
+            "ownerKilledAfterEffectBeforeToolReceipt": { "const": true },
+            "successorQueriedPersistedEffect": { "const": true },
+            "blindReplayAvoided": { "const": true },
+            "effectAppliedOnce": { "const": true },
+            "receiptRecovered": { "const": true }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["id", "ownerKilledAfterReceiptPersisted", "successorBoundPersistedReceipt", "toolResultCommittedOnce", "effectAppliedOnce"],
+          "properties": {
+            "id": { "const": "ORACLE-RECEIPT-V1" },
+            "ownerKilledAfterReceiptPersisted": { "const": true },
+            "successorBoundPersistedReceipt": { "const": true },
+            "toolResultCommittedOnce": { "const": true },
+            "effectAppliedOnce": { "const": true }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["id", "ownerKilledAfterProofVerified", "successorBoundPersistedProof", "proofDigestStable", "proofToolResultCommittedOnce", "effectAppliedOnce"],
+          "properties": {
+            "id": { "const": "ORACLE-PROOF-V1" },
+            "ownerKilledAfterProofVerified": { "const": true },
+            "successorBoundPersistedProof": { "const": true },
+            "proofDigestStable": { "const": true },
+            "proofToolResultCommittedOnce": { "const": true },
+            "effectAppliedOnce": { "const": true }
+          }
+        }
+      ]
+    },
+    "evidence": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["threadId", "jobId", "returnId", "persistedReturnStatus", "persistedReturnAttempts", "finalReturnStatus", "finalReturnAttempts", "finalJobStatus", "finalDeliveryRequests", "returnGodCheckpointCount", "returnGodEvidenceCount"],
+          "properties": {
+            "threadId": { "type": "string", "minLength": 1 }, "jobId": { "type": "string", "minLength": 1 },
+            "returnId": { "type": "string", "minLength": 1 }, "persistedReturnStatus": { "const": "ready" },
+            "persistedReturnAttempts": { "const": 0 }, "finalReturnStatus": { "const": "consumed" },
+            "finalReturnAttempts": { "const": 1 }, "finalJobStatus": { "const": "completed" },
+            "finalDeliveryRequests": { "const": 1 }, "returnGodCheckpointCount": { "const": 1 },
+            "returnGodEvidenceCount": { "const": 1 }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["threadId", "turnId", "invocationId", "persistedInvocationStatus", "finalInvocationStatus", "finalTurnStatus", "providerRequestsBeforeKill", "finalProviderRequests", "assistantMessageCount"],
+          "properties": {
+            "threadId": { "type": "string", "minLength": 1 }, "turnId": { "type": "string", "minLength": 1 },
+            "invocationId": { "type": "string", "minLength": 1 }, "persistedInvocationStatus": { "const": "response_received" },
+            "finalInvocationStatus": { "const": "committed" }, "finalTurnStatus": { "const": "completed" },
+            "providerRequestsBeforeKill": { "const": 1 }, "finalProviderRequests": { "const": 1 },
+            "assistantMessageCount": { "const": 1 }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["threadId", "jobId", "runId", "stageId", "stageAttempt", "invocationId", "persistedInvocationStatus", "persistedCheckpointStatus", "finalInvocationStatus", "finalCheckpointStatus", "finalJobStatus", "productInvocationCount", "productCheckpointCount", "productEvidenceCount", "productReturnCount"],
+          "properties": {
+            "threadId": { "type": "string", "minLength": 1 }, "jobId": { "type": "string", "minLength": 1 },
+            "runId": { "type": "string", "minLength": 1 }, "stageId": { "const": "product" },
+            "stageAttempt": { "const": 1 }, "invocationId": { "type": "string", "minLength": 1 },
+            "persistedInvocationStatus": { "const": "committed" }, "persistedCheckpointStatus": { "const": "running" },
+            "finalInvocationStatus": { "const": "committed" }, "finalCheckpointStatus": { "const": "completed" },
+            "finalJobStatus": { "const": "completed" }, "productInvocationCount": { "const": 1 },
+            "productCheckpointCount": { "const": 1 }, "productEvidenceCount": { "const": 1 },
+            "productReturnCount": { "const": 1 }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["helperPid", "helperProcess", "helperLedgerPath", "threadId", "turnId", "operationId", "effectId", "effectDigest", "receiptId", "receiptDigest", "proofId", "proofDigest", "persistedToolStatus", "finalToolStatus", "effectApplyCount", "helperCreateRequests", "helperDuplicateCreateRequests", "proofVerificationRequests", "providerRequests", "toolInvocationCount", "targetToolResultCount", "assistantMessageCount", "finalTurnStatus"],
+          "properties": {
+            "helperPid": { "type": "integer", "minimum": 1 },
+            "helperProcess": { "const": "real-child-process" },
+            "helperLedgerPath": { "const": "effect-ledger.json" },
+            "threadId": { "type": "string", "minLength": 1 },
+            "turnId": { "type": "string", "minLength": 1 },
+            "operationId": { "type": "string", "minLength": 1 },
+            "effectId": { "type": "string", "minLength": 1 },
+            "effectDigest": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" },
+            "receiptId": { "type": "string", "minLength": 1 },
+            "receiptDigest": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" },
+            "proofId": { "type": "string", "minLength": 1 },
+            "proofDigest": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" },
+            "persistedToolStatus": { "enum": ["executing", "result_received"] },
+            "finalToolStatus": { "const": "committed" },
+            "effectApplyCount": { "const": 1 },
+            "helperCreateRequests": { "const": 1 },
+            "helperDuplicateCreateRequests": { "const": 0 },
+            "proofVerificationRequests": { "enum": [0, 1] },
+            "providerRequests": { "enum": [2, 3] },
+            "toolInvocationCount": { "enum": [1, 2] },
+            "targetToolResultCount": { "const": 1 },
+            "assistantMessageCount": { "const": 1 },
+            "finalTurnStatus": { "const": "completed" }
+          }
+        }
+      ]
+    }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "windowId": { "const": "FW-RETURN-PERSISTED-CONSUME" } } },
+      "then": { "properties": {
+        "oracle": { "properties": { "id": { "const": "ORACLE-RETURN-CONSUME-V1" } } },
+        "evidence": { "properties": { "persistedReturnStatus": { "const": "ready" } } }
+      } }
+    },
+    {
+      "if": { "properties": { "windowId": { "const": "FW-LEASE-FENCED-COMMIT" } } },
+      "then": { "properties": {
+        "oracle": { "properties": { "id": { "const": "ORACLE-FENCING-V1" } } },
+        "evidence": { "properties": { "persistedReturnStatus": { "const": "ready" } } }
+      } }
+    },
+    {
+      "if": { "properties": { "windowId": { "const": "FW-MODEL-RESPONSE-COMMIT" } } },
+      "then": { "properties": {
+        "oracle": { "properties": { "id": { "const": "ORACLE-MODEL-WAL-V1" } } },
+        "evidence": { "properties": {
+          "persistedInvocationStatus": { "const": "response_received" },
+          "finalTurnStatus": { "const": "completed" }
+        } }
+      } }
+    },
+    {
+      "if": { "properties": { "windowId": { "const": "FW-WORKFLOW-STAGE-COMMIT" } } },
+      "then": { "properties": {
+        "oracle": { "properties": { "id": { "const": "ORACLE-WORKFLOW-COMMIT-V1" } } },
+        "evidence": { "properties": {
+          "stageId": { "const": "product" },
+          "persistedCheckpointStatus": { "const": "running" }
+        } }
+      } }
+    },
+    {
+      "if": { "properties": { "windowId": { "const": "FW-TOOL-EFFECT-RECEIPT" } } },
+      "then": { "properties": {
+        "oracle": { "properties": { "id": { "const": "ORACLE-TOOL-OUTCOME-V1" } } },
+        "evidence": { "properties": {
+          "persistedToolStatus": { "const": "executing" }, "proofVerificationRequests": { "const": 0 },
+          "providerRequests": { "const": 2 }, "toolInvocationCount": { "const": 1 }
+        } }
+      } }
+    },
+    {
+      "if": { "properties": { "windowId": { "const": "FW-RECEIPT-COMMIT" } } },
+      "then": { "properties": {
+        "oracle": { "properties": { "id": { "const": "ORACLE-RECEIPT-V1" } } },
+        "evidence": { "properties": {
+          "persistedToolStatus": { "const": "result_received" }, "proofVerificationRequests": { "const": 0 },
+          "providerRequests": { "const": 2 }, "toolInvocationCount": { "const": 1 }
+        } }
+      } }
+    },
+    {
+      "if": { "properties": { "windowId": { "const": "FW-PROOF-COMMIT" } } },
+      "then": { "properties": {
+        "oracle": { "properties": { "id": { "const": "ORACLE-PROOF-V1" } } },
+        "evidence": { "properties": {
+          "persistedToolStatus": { "const": "result_received" }, "proofVerificationRequests": { "const": 1 },
+          "providerRequests": { "const": 3 }, "toolInvocationCount": { "const": 2 }
+        } }
+      } }
+    }
+  ]
+}

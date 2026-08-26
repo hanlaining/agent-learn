@@ -1,0 +1,36 @@
+{
+  "claimBoundary": "sanitized-local-derivation-only-not-formal-or-external",
+  "policy": {
+    "allowlistSha256": "c3c3be01f6d2fb7cd6c1a3b58f67594fa763865e4519afdf44f1d76ef1a8e987",
+    "mode": "explicit-allowlist",
+    "privatePathsDisclosed": false,
+    "secretsCopied": false
+  },
+  "privateSource": {
+    "byteCount": 8432,
+    "fileCount": 3,
+    "treeSha256": "7e7d6c303fc2fce2218e20b565354cdfb11b76a5306f8562b37128b953e4db8e"
+  },
+  "publicDerivation": {
+    "byteCount": 8428,
+    "excludedFileCount": 1,
+    "fileCount": 2,
+    "files": [
+      {
+        "bytes": 7849,
+        "contentType": "application/json",
+        "path": "statistics.json",
+        "sha256": "1c2556036f61f30bedb76c5a67b21fe78a0eff1ca873159c367d08f61c534e0a"
+      },
+      {
+        "bytes": 579,
+        "contentType": "text/csv",
+        "path": "summary.csv",
+        "sha256": "bc18f8f7af63002762a5ddd96c90786f539adc954a56ddb15908255b956a74ed"
+      }
+    ],
+    "treeSha256": "a36df4d22d83a9d51a6f1ceb996e2a08984965413a9b840dde6eaa419d1ef127"
+  },
+  "receiptSha256": "d067a209826a27479a78baede7ff7842dc7f7bed2ccd1f487d3d46c40e3c4b7f",
+  "schemaVersion": "publishable-derivation-receipt-v1"
+}

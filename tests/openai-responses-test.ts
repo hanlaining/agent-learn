@@ -30,6 +30,18 @@ test("Provider 拒绝非法 timeoutMs 配置", () => {
   );
 });
 
+test("Provider 构造与模型切换参数全部 fail closed", () => {
+  const base = { apiKey: "test-key", model: "test-model" };
+  assert.throws(() => new OpenAiResponsesProvider({ ...base, apiKey: " " }), /API key must not be empty/);
+  assert.throws(() => new OpenAiResponsesProvider({ ...base, maxRetries: -1 }), /maxRetries must be a non-negative integer/);
+  assert.throws(() => new OpenAiResponsesProvider({ ...base, retryBaseDelayMs: -1 }), /retryBaseDelayMs must be a non-negative integer/);
+  const provider = new OpenAiResponsesProvider(base);
+  assert.equal(provider.getModel(), "test-model");
+  assert.throws(() => provider.setModel(" "), /model must not be empty/);
+  provider.setModel("next-model");
+  assert.equal(provider.getModel(), "next-model");
+});
+
 test("解析 OpenAI function_call", () => {
   const response = parseOpenAiResponse({
     id: "response-1",
@@ -76,6 +88,13 @@ test("解析 OpenAI SSE 响应", () => {
 
   assert.equal(response.id, "response-sse");
   assert.equal(response.text, "SSE 回答");
+});
+
+test("SSE 解析忽略空帧和非对象事件，但缺响应 ID 必须失败", () => {
+  assert.throws(() => parseOpenAiResponseBody([
+    "data: [DONE]", "", "data: null", "", "data: []", "",
+    'data: {"type":"response.output_text.delta","delta":"orphan"}', "",
+  ].join("\n"), "text/event-stream"), /missing response id/);
 });
 
 test("Provider 在 SSE 完成前发送文本和推理摘要增量", async () => {

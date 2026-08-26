@@ -1,8 +1,15 @@
 import type { RequirementExecutionKind } from "../requirements/requirement.js";
 import type { FixedProductStage } from "../agents/fixed-software-team-coordinator.js";
-import type { ExecutionContext } from "./execution-context.js";
-import type { ExecutionEngine, ExecutionEngineResult, ExecutionEngineSnapshot } from "./execution-engine.js";
-import type { ExecutionControl, ExecutionFeedback } from "./execution-engine.js";
+import { assertExecutionContext, type ExecutionContext } from "./execution-context.js";
+import {
+  assertExecutionEngineSnapshot,
+  assertExecutionFeedback,
+  type ExecutionControl,
+  type ExecutionEngine,
+  type ExecutionEngineResult,
+  type ExecutionEngineSnapshot,
+  type ExecutionFeedback,
+} from "./execution-engine.js";
 
 export interface StageAdvancingExecutionEngine extends ExecutionEngine {
   advance(jobId: string, expectedStage: FixedProductStage): Promise<{ stage: FixedProductStage; changed: boolean }>;
@@ -20,12 +27,16 @@ export class ExecutionEngineRouter {
     return matches[0]!;
   }
 
-  start(context: ExecutionContext): Promise<ExecutionEngineResult> { return this.route(context.executionKind).start(context); }
+  start(context: ExecutionContext): Promise<ExecutionEngineResult> {
+    assertExecutionContext(context);
+    return this.route(context.executionKind).start(context);
+  }
   control(kind: RequirementExecutionKind): ExecutionControl { return this.route(kind).control; }
   isActive(kind: RequirementExecutionKind, jobId: string): boolean {
     return this.route(kind).isActive?.(jobId) ?? false;
   }
   provideFeedback(kind: RequirementExecutionKind, jobId: string, feedback: ExecutionFeedback): Promise<boolean> {
+    assertExecutionFeedback(feedback);
     return this.route(kind).provideFeedback?.(jobId, feedback) ?? Promise.resolve(false);
   }
   validateStart(kind: RequirementExecutionKind, allowedTools: string[], workflowVersion?: string): void {
@@ -34,7 +45,12 @@ export class ExecutionEngineRouter {
   resume(kind: RequirementExecutionKind, jobId: string): Promise<ExecutionEngineResult> { return this.route(kind).resume(jobId); }
   cancel(kind: RequirementExecutionKind, jobId: string): Promise<void> { return this.route(kind).cancel(jobId); }
   recover(kind: RequirementExecutionKind, jobId: string): Promise<void> { return this.route(kind).recover(jobId); }
-  snapshot(kind: RequirementExecutionKind, jobId: string): ExecutionEngineSnapshot { return this.route(kind).snapshot(jobId); }
+  snapshot(kind: RequirementExecutionKind, jobId: string): ExecutionEngineSnapshot {
+    const engine = this.route(kind);
+    const snapshot = engine.snapshot(jobId);
+    assertExecutionEngineSnapshot(snapshot, { engine: engine.id, jobId });
+    return snapshot;
+  }
 
   advance(kind: RequirementExecutionKind, jobId: string, expectedStage: FixedProductStage): Promise<{ stage: FixedProductStage; changed: boolean }> {
     const engine = this.route(kind) as Partial<StageAdvancingExecutionEngine>;

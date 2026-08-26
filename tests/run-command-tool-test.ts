@@ -100,4 +100,16 @@ test("run_command 拒绝额外参数和未知配方", async (t) => {
     ),
     /Command recipe is not allowed/,
   );
+
+  for (const [input, expected] of [
+    ["not-json", /valid JSON/],
+    ["null", /must be an object/],
+    ["[]", /must be an object/],
+    ["{}", /non-empty string/],
+    ['{"command":"   "}', /non-empty string/],
+    ['{"command":1}', /non-empty string/],
+  ] as const) {
+    await assert.rejects(() => registry.execute("run_command", input), expected);
+    assert.throws(() => registry.getPermissionDescription("run_command", input), expected);
+  }
 });

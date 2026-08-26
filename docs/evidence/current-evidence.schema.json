@@ -1,0 +1,240 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://god-agent.local/schema/current-evidence-v1.json",
+  "title": "God-Agent current evidence snapshot",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "capturedAt",
+    "candidate",
+    "testDiscovery",
+    "mainTests",
+    "coverage",
+    "processChaos",
+    "gate40",
+    "provider",
+    "release",
+    "scores",
+    "presentation",
+    "rehearsal",
+    "claimBoundary"
+  ],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "capturedAt": { "type": "string", "format": "date-time" },
+    "candidate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["baseline", "state", "remoteVerified"],
+      "properties": {
+        "baseline": { "type": "string", "minLength": 1 },
+        "state": { "const": "uncommitted-local-worktree" },
+        "remoteVerified": { "const": false }
+      }
+    },
+    "testDiscovery": { "$ref": "#/$defs/discovery" },
+    "mainTests": { "$ref": "#/$defs/mainTests" },
+    "coverage": { "$ref": "#/$defs/coverage" },
+    "processChaos": { "$ref": "#/$defs/processChaos" },
+    "gate40": { "$ref": "#/$defs/gate40" },
+    "provider": { "$ref": "#/$defs/provider" },
+    "release": { "$ref": "#/$defs/release" },
+    "scores": { "$ref": "#/$defs/scores" },
+    "presentation": { "$ref": "#/$defs/presentation" },
+    "rehearsal": { "$ref": "#/$defs/rehearsal" },
+    "claimBoundary": {
+      "type": "array",
+      "minItems": 5,
+      "uniqueItems": true,
+      "items": { "type": "string", "minLength": 1 }
+    }
+  },
+  "$defs": {
+    "discovery": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["formalFiles", "coveredFiles", "omitted", "stale"],
+      "properties": {
+        "formalFiles": { "type": "integer", "minimum": 1 },
+        "coveredFiles": { "type": "integer", "minimum": 0 },
+        "omitted": { "const": 0 },
+        "stale": { "const": 0 }
+      }
+    },
+    "mainTests": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["total", "passed", "skipped", "failed", "skipBoundary"],
+      "properties": {
+        "total": { "type": "integer", "minimum": 1 },
+        "passed": { "type": "integer", "minimum": 0 },
+        "skipped": { "type": "integer", "minimum": 0 },
+        "failed": { "const": 0 },
+        "skipBoundary": { "type": "string", "minLength": 1 }
+      }
+    },
+    "coverage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["sourceFiles", "loadedFiles", "lineCovered", "lineTotal", "linePercent", "gateLinePercent", "gateLoadedPercent"],
+      "properties": {
+        "sourceFiles": { "type": "integer", "minimum": 1 },
+        "loadedFiles": { "type": "integer", "minimum": 0 },
+        "lineCovered": { "type": "integer", "minimum": 0 },
+        "lineTotal": { "type": "integer", "minimum": 1 },
+        "linePercent": { "type": "number", "minimum": 0, "maximum": 100 },
+        "gateLinePercent": { "type": "number", "minimum": 0, "maximum": 100 },
+        "gateLoadedPercent": { "type": "number", "minimum": 0, "maximum": 100 }
+      }
+    },
+    "processChaos": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["passed", "total"],
+      "properties": {
+        "passed": { "type": "integer", "minimum": 0 },
+        "total": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "gate40": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["candidate", "runnable", "localPassed", "localFailed", "blocked", "formalVerified", "complete", "lifecycle"],
+      "properties": {
+        "candidate": { "const": 40 },
+        "runnable": { "type": "integer", "minimum": 0, "maximum": 40 },
+        "localPassed": { "type": "integer", "minimum": 0, "maximum": 40 },
+        "localFailed": { "type": "integer", "minimum": 0, "maximum": 40 },
+        "blocked": { "type": "integer", "minimum": 0, "maximum": 40 },
+        "formalVerified": { "const": 0 },
+        "complete": { "const": false },
+        "lifecycle": { "const": "candidate-not-frozen" }
+      }
+    },
+    "provider": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mode", "liveCalls", "credentialsRead"],
+      "properties": {
+        "mode": { "const": "offline-deterministic-fake" },
+        "liveCalls": { "const": 0 },
+        "credentialsRead": { "const": false }
+      }
+    },
+    "release": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["localPassed", "localTotal", "localStatus", "productionStatus", "auditCritical", "auditHigh"],
+      "properties": {
+        "localPassed": { "type": "integer", "minimum": 0 },
+        "localTotal": { "type": "integer", "minimum": 1 },
+        "localStatus": { "enum": ["READY", "BLOCKED"] },
+        "productionStatus": { "const": "BLOCKED" },
+        "auditCritical": { "type": "integer", "minimum": 0 },
+        "auditHigh": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "scores": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["target", "engineering", "interview", "research", "paper", "production"],
+      "properties": {
+        "target": { "const": 95 },
+        "engineering": { "type": "integer", "minimum": 0, "maximum": 94 },
+        "interview": { "type": "integer", "minimum": 0, "maximum": 94 },
+        "research": { "type": "integer", "minimum": 0, "maximum": 94 },
+        "paper": { "type": "integer", "minimum": 0, "maximum": 94 },
+        "production": { "type": "integer", "minimum": 0, "maximum": 94 }
+      }
+    },
+    "rehearsal": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["timedCompleted", "timedRequired", "nonAuthorCompleted", "nonAuthorRequired", "status", "records"],
+      "properties": {
+        "timedCompleted": { "type": "integer", "minimum": 0, "maximum": 3 },
+        "timedRequired": { "const": 3 },
+        "nonAuthorCompleted": { "type": "integer", "minimum": 0, "maximum": 1 },
+        "nonAuthorRequired": { "const": 1 },
+        "status": { "enum": ["NotRun", "InProgress", "Passed"] },
+        "records": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/rehearsalRecord" }
+        }
+      }
+    },
+    "rehearsalRecord": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id", "kind", "status", "performedAt", "participant", "participantRole", "observer", "durationSeconds",
+        "candidateRef", "challengeNonce", "independent", "authorInterventions", "factsVerified",
+        "sensitiveDataCheck", "issues", "artifacts"
+      ],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "kind": { "enum": ["timed", "non-author"] },
+        "status": { "enum": ["Run-Failed", "Run-Conditional", "Passed"] },
+        "performedAt": { "type": "string", "format": "date-time" },
+        "participant": { "type": "string", "minLength": 1 },
+        "participantRole": { "enum": ["author", "non-author"] },
+        "observer": { "type": "string", "minLength": 1 },
+        "durationSeconds": { "type": "integer", "minimum": 1 },
+        "candidateRef": { "type": "string", "minLength": 1 },
+        "challengeNonce": { "type": "string", "pattern": "^[a-f0-9]{32}$" },
+        "independent": { "type": "boolean" },
+        "authorInterventions": { "type": "string" },
+        "factsVerified": { "type": "boolean" },
+        "sensitiveDataCheck": { "enum": ["Passed", "Failed"] },
+        "issues": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/rehearsalIssue" }
+        },
+        "artifacts": {
+          "type": "array",
+          "minItems": 2,
+          "items": { "$ref": "#/$defs/rehearsalArtifact" }
+        }
+      }
+    },
+    "rehearsalArtifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "path", "sha256"],
+      "properties": {
+        "kind": { "enum": ["recording", "observer-attestation"] },
+        "path": { "type": "string", "minLength": 1 },
+        "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+      }
+    },
+    "rehearsalIssue": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "severity", "status", "retestArtifactSha256"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "severity": { "enum": ["P0", "P1", "P2"] },
+        "status": { "enum": ["Open", "Closed"] },
+        "retestArtifactSha256": {
+          "oneOf": [
+            { "type": "null" },
+            { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+          ]
+        }
+      }
+    },
+    "presentation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["slides", "renderedSlides", "overflowErrors", "sourceNotes", "qaMode"],
+      "properties": {
+        "slides": { "const": 7 },
+        "renderedSlides": { "const": 7 },
+        "overflowErrors": { "const": 0 },
+        "sourceNotes": { "const": 7 },
+        "qaMode": { "const": "separate-render-and-notes-qa" }
+      }
+    }
+  }
+}

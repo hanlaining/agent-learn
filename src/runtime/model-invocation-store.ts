@@ -197,6 +197,9 @@ function parseModelInvocation(value: ModelInvocation): ModelInvocation {
   }
   assertIdentity(value);
   assertNonEmpty(value.invocationId, "invocationId");
+  if (value.invocationId !== createModelInvocationId(value)) {
+    throw new Error("Invalid stable model invocation ID");
+  }
   assertRequestDigest(value.requestDigest);
   assertNonEmpty(value.provider, "provider");
   assertNonEmpty(value.model, "model");

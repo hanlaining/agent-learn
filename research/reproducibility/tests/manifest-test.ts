@@ -9,6 +9,9 @@ import test from "node:test";
 import {
   createArtifactManifest,
   serializeArtifactManifest,
+  inferContentType,
+  normalizeSafeRelativePath,
+  assertPublishableArtifactContent,
   validateArtifactManifest,
   verifyArtifactManifest,
 } from "../src/manifest.js";
@@ -142,6 +145,77 @@ test("自定义 Manifest 相对路径仍保持规范化并排除自身", async (
     serializeArtifactManifest(manifest, manifestPath),
   );
   await verifyArtifactManifest({ rootDirectory: root, manifestPath });
+});
+
+test("Manifest 路径、内容类型和可发布正文边界覆盖全部安全分支", () => {
+  const expected: Record<string, string> = {
+    "a.json": "application/json", "a.jsonl": "application/x-ndjson", "a.ndjson": "application/x-ndjson",
+    "a.csv": "text/csv", "a.md": "text/markdown", "a.txt": "text/plain", "a.log": "text/plain",
+    "a.repro": "text/plain", "a.cjs": "text/plain", "a.js": "text/plain", "a.mjs": "text/plain",
+    "a.ts": "text/plain", "a.tsx": "text/plain", "a.yaml": "application/yaml", "a.yml": "application/yaml",
+    "a.pdf": "application/pdf", "a.zip": "application/zip", "a.bin": "application/octet-stream",
+  };
+  for (const [file, contentType] of Object.entries(expected)) assert.equal(inferContentType(file), contentType);
+  assert.equal(normalizeSafeRelativePath("nested/report.json"), "nested/report.json");
+  assert.equal(normalizeSafeRelativePath("结果.md"), "结果.md");
+  for (const unsafe of ["", "../outside", "/absolute", "C:/absolute", "nested//file", "nested/./file", "nested/../file", "nested\\file", "nested\0file"]) {
+    assert.throws(() => normalizeSafeRelativePath(unsafe), /safe relative|normalized relative|unsafe path segment|escapes/u);
+  }
+  assert.doesNotThrow(() => assertPublishableArtifactContent("results/report.json", Buffer.from('{"ok":true}\n')));
+  assert.throws(() => assertPublishableArtifactContent("results/token.txt", Buffer.from("ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789")), /sensitive|credential|absolute path/u);
+  assert.throws(() => assertPublishableArtifactContent("../token.txt", Buffer.from("safe")), /safe relative|unsafe path segment/u);
+});
+
+test("Manifest 拒绝时间倒退、非 canonical 时间和命令换行", async (context) => {
+  const root = await fixtureRoot(context);
+  await assert.rejects(createArtifactManifest({ ...createOptions(root), startedAt: "2026-08-20T01:05:00.000Z", finishedAt: "2026-08-20T01:00:00.000Z" }), /finishedAt precedes/u);
+  await assert.rejects(createArtifactManifest({ ...createOptions(root), startedAt: "2026-08-20T01:00:00Z" }), /canonical ISO-8601/u);
+  await assert.rejects(createArtifactManifest({ ...createOptions(root), command: "npm test\nsecret" }), /run command|must not contain/u);
+});
+
+test("Manifest 拒绝非法 baseline、Node/OS 和 Provider 状态", async (context) => {
+  const root = await fixtureRoot(context);
+  const base = await createArtifactManifest(createOptions(root));
+  assert.throws(() => validateArtifactManifest({ ...base, baselineCommit: "g".repeat(40) }), /baselineCommit/u);
+  assert.throws(() => validateArtifactManifest({ ...base, environment: { ...base.environment, node: "node" } }), /Node version/u);
+  assert.throws(() => validateArtifactManifest({ ...base, environment: { ...base.environment, os: { ...base.environment.os, arch: "x64 space" } } }), /OS arch/u);
+  assert.throws(() => validateArtifactManifest({ ...base, provider: { ...base.provider, kind: "live" } }), /provider kind/u);
+  assert.throws(() => validateArtifactManifest({ ...base, provider: { ...base.provider, credentialsRead: true } }), /zero credential reads/u);
+});
+
+test("Manifest 拒绝文件条目空值、无序、非法摘要和错误 contentType", async (context) => {
+  const root = await fixtureRoot(context);
+  const base = await createArtifactManifest(createOptions(root));
+  const first = base.files[0]!;
+  assert.throws(() => validateArtifactManifest({ ...base, files: [{ ...first, bytes: -1 }] }), /byte count/u);
+  assert.throws(() => validateArtifactManifest({ ...base, files: [{ ...first, sha256: "bad" }] }), /SHA-256/u);
+  assert.throws(() => validateArtifactManifest({ ...base, files: [{ ...first, contentType: "text/plain" }] }), /content type/u);
+  assert.throws(() => validateArtifactManifest({ ...base, files: [{ ...first, path: "z.json" }, { ...first, path: "a.json" }] }), /deterministic path order/u);
+});
+
+test("Manifest 拒绝敏感文件名、二进制私钥和不可发布占位内容", async (context) => {
+  const root = await fixtureRoot(context);
+  await writeFile(path.join(root, "secret.pem"), "safe\n", "utf8");
+  await assert.rejects(createArtifactManifest(createOptions(root)), /sensitive file/u);
+  const privateRoot = await fixtureRoot(context);
+  const privateKeyHeader = `-----BEGIN ${"PRIVATE"} KEY-----`;
+  await writeFile(path.join(privateRoot, "a.json"), JSON.stringify({ key: privateKeyHeader }), "utf8");
+  await assert.rejects(createArtifactManifest(createOptions(privateRoot)), /credential/u);
+  assert.throws(() => assertPublishableArtifactContent("report.json", Buffer.from([0xff, 0xfe])), /credential|absolute path|replacement/u);
+});
+
+test("Manifest verify 拒绝 canonical 漂移、目录代替文件和自包含路径", async (context) => {
+  const root = await fixtureRoot(context);
+  await createArtifactManifest(createOptions(root));
+  const manifestPath = path.join(root, "artifact-manifest.json");
+  const text = await readFile(manifestPath, "utf8");
+  await writeFile(manifestPath, text.replace("\n", "\r\n"), "utf8");
+  await assert.rejects(verifyArtifactManifest({ rootDirectory: root }), /canonical/u);
+  const second = await fixtureRoot(context);
+  await mkdir(path.join(second, "artifact-manifest.json"));
+  await assert.rejects(createArtifactManifest(createOptions(second)), /regular file/u);
+  const base = await createArtifactManifest(createOptions(await fixtureRoot(context)));
+  assert.throws(() => validateArtifactManifest({ ...base, files: [{ ...base.files[0]!, path: "artifact-manifest.json" }] }), /must not include itself/u);
 });
 
 async function fixtureRoot(context: test.TestContext): Promise<string> {
