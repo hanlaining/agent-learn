@@ -1,0 +1,114 @@
+{
+  "schemaVersion": "rt95-paper-contract-alignment-v1",
+  "reportStatus": "AuditOnly",
+  "sampledAt": "2026-08-26",
+  "claimBoundary": "contract-alignment-only-not-formal-evidence",
+  "sources": {
+    "frozenCandidate": {
+      "path": "research/rt95-closure/preregistration.frozen.candidate.json",
+      "sha256": "e11c075f5b5ef9f7708c9ec058e12cc7d7ee4b746aa23be67d37c9045136171a",
+      "registrationId": "RT95-PREREG-DRAFT-001",
+      "lifecycle": "frozen",
+      "verificationStatus": "NotVerified",
+      "frozenAt": "2026-08-26T00:00:00.000Z",
+      "payloadSha256": "89ae6340475f90a6df2db1a37ddc411ef79b3160553dd2864762ac58fcdd6db1"
+    },
+    "confirmatoryAnalysisDraft": {
+      "path": "research/rt95-closure/confirmatory-analysis-plan.draft.json",
+      "sha256": "c1d3cf2b57535c5bba4e1dd2f088e69028384dc6ce62f89fe1c89a8fac9f601a",
+      "status": "Draft"
+    },
+    "claimTable": {
+      "path": "research/paper/CLAIM-TABLE.json",
+      "sha256": "1476f965f4775d6ba0421dc2842296704ed9c49ed6781e4075bfaeb9f5c4e555",
+      "defaultEvidenceState": "NotVerified",
+      "significanceClaimed": false
+    },
+    "manuscript": {
+      "path": "research/paper/MANUSCRIPT-DRAFT.zh-CN.md",
+      "sha256": "6cc813da8b3d7c26724c564b6897c1e408b19d0891319953199ee61a9df55caa"
+    }
+  },
+  "aligned": [
+    {
+      "id": "RQ-SET",
+      "status": "Aligned",
+      "source": "Frozen researchQuestions=[RQ1,RQ2]",
+      "manuscript": "RQ1/RQ2 are the only in-scope research questions; latency/cost are explicitly out of scope",
+      "claimTable": "CLAIM-RQ1-001 and CLAIM-RQ2-001 present with NotVerified state"
+    },
+    {
+      "id": "PRIMARY-ENDPOINT",
+      "status": "AlignedWithLocatorGap",
+      "source": "EP-PRIMARY-001 protocolHandlingSuccessRate; higher-is-better; ORACLE-PROTOCOL-V1; AN-PRIMARY-001",
+      "manuscript": "Success is defined by preregistered Oracle; arm success rate and paired contrast are described",
+      "claimTable": "RQ claims require complete Raw, Oracle, Manifest and independent sign-off",
+      "gap": "Manuscript does not yet repeat endpoint/oracle IDs or bind an Artifact locator; this remains TODO until formal evidence exists"
+    },
+    {
+      "id": "PAIRING-PLAN",
+      "status": "Aligned",
+      "source": "same-seed-across-arms; 5 seeds/window; 8 windows; 160 planned cases",
+      "manuscript": "All arms share identical (seed, faultWindowId) pairs and each combination is unique",
+      "claimTable": "RQ2 requires paired Raw for every arm and frozen exclusions"
+    },
+    {
+      "id": "ANALYSIS-CONTRACT",
+      "status": "AlignedWithDraftBoundary",
+      "source": "AN-PRIMARY-001 paired binary contrast, 95% CI, Holm for ablation contrasts; significanceClaimed=false",
+      "manuscript": "Wilson/descriptive outputs and Draft exact McNemar/Holm path are separated; no significance claim before Frozen formal inputs and review",
+      "claimTable": "CLAIM-METHOD-001 allows descriptive outputs only and forbids significance/causal claims"
+    },
+    {
+      "id": "FAILURE-POLICY",
+      "status": "Aligned",
+      "source": "Frozen exclusions EX-ENV-001; rerun RR-HARNESS-001; STOP-P0-001",
+      "manuscript": "Failures, negative/null, exclusions and reruns must be retained and reported",
+      "claimTable": "Policy requires retention of every positive, negative, null, failed and excluded result"
+    }
+  ],
+  "unresolved": [
+    {
+      "id": "EXTERNAL-BASELINE-SCOPE",
+      "severity": "P1",
+      "status": "ResolvedInManuscriptScope",
+      "sourceFact": "Frozen candidate arms.externalBaselines=[]",
+      "action": "RQ1 wording narrowed from 'baseline or ablation' to 'preregistered ablation'; external baseline remains a separate future gate",
+      "remaining": "No external baseline evidence exists; CLAIM-REPRO-001 remains NotVerified"
+    },
+    {
+      "id": "ENDPOINT-LOCATOR-BINDING",
+      "severity": "P1",
+      "status": "Open",
+      "actionRequired": "After formal Raw exists, create candidate-bound Claim records with endpoint/oracle locators and Artifact SHA-256",
+      "blockedBy": "formal Raw, Oracle receipt, Artifact Manifest and non-author reviewer"
+    },
+    {
+      "id": "CITATION-ALIGNMENT",
+      "severity": "P1",
+      "status": "Open",
+      "actionRequired": "Move section-7 candidate sources into the citation checklist only after author opens each first-party source and records exact page/section; keep status NotVerified until non-author review",
+      "blockedBy": "first-party full-text access and human citation review"
+    },
+    {
+      "id": "FORMAL-EVIDENCE",
+      "severity": "P0",
+      "status": "Open",
+      "actionRequired": "Provide Frozen author-approved preregistration, complete formal Raw/Oracle/Manifest, external baseline and independent reproduction",
+      "blockedBy": "external execution and independent reviewers"
+    }
+  ],
+  "verificationCommands": [
+    "npm run test:paper",
+    "npm run test:paper-consistency",
+    "npm run test:paper-evidence",
+    "npm run test:preregistration"
+  ],
+  "decision": {
+    "contractAlignment": "Partial",
+    "formalEvidence": "NotVerified",
+    "paperReadinessScore": 47,
+    "eligibleFor90PlusReview": false,
+    "reason": "Contract fields are mostly aligned and one scope drift was narrowed, but formal Raw, external baseline, independent reproduction, citation verification and non-author review are absent."
+  }
+}
