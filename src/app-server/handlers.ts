@@ -59,6 +59,12 @@ import type {
   OutcomeUnknownActor,
   ResolveOutcomeUnknownInput,
 } from "../runtime/outcome-unknown-resolution.js";
+import type { DistillableChatMessage } from "../skills/chat-skill-distiller.js";
+import type { KnowledgeOutputKind, KnowledgeWriteResult } from "../skills/skill-runtime.js";
+
+export interface DistillThreadKnowledgeResult extends KnowledgeWriteResult {
+  capabilities: RuntimeCapabilities;
+}
 
 export interface AppServerDependencies {
   lifecycleStore: LifecycleStore;
@@ -86,6 +92,10 @@ export interface AppServerDependencies {
   resolveOutcomeUnknownActor?: () => OutcomeUnknownActor | undefined;
   refreshOutcomeUnknownFromRuntime?: () => void | Promise<void>;
   waitForStartupRecovery?: () => Promise<void>;
+  distillThreadKnowledge?: (
+    messages: readonly DistillableChatMessage[],
+    kind: KnowledgeOutputKind,
+  ) => Promise<DistillThreadKnowledgeResult>;
 }
 
 /**
@@ -124,9 +134,11 @@ export function registerAppServerHandlers(
     resolveOutcomeUnknownActor = () => undefined,
     refreshOutcomeUnknownFromRuntime = () => undefined,
     waitForStartupRecovery = async () => undefined,
+    distillThreadKnowledge,
   } = dependencies;
 
   let clientInitialized = false;
+  const activeKnowledgeDistillations = new Map<string, Promise<DistillThreadKnowledgeResult>>();
 
   function requireInitialized(): void {
     if (!clientInitialized) {
@@ -246,6 +258,29 @@ export function registerAppServerHandlers(
       lifecycleStore,
       request.threadId,
     );
+  });
+
+  connection.onRequest("knowledge/distill-thread", async (params) => {
+    requireInitialized();
+    if (!isRecord(params) || Object.keys(params).some((key) => !["threadId", "kind"].includes(key)) ||
+      typeof params.threadId !== "string" || params.threadId.trim().length === 0 ||
+      (params.kind !== "skill" && params.kind !== "sop")) {
+      throw new Error("knowledge/distill-thread requires threadId and kind");
+    }
+    if (distillThreadKnowledge === undefined) throw new Error("Knowledge distillation is unavailable");
+    const history = readThreadHistory(lifecycleStore, params.threadId);
+    if (history.messages.length === 0 || history.messages.every((message) => message.text.trim().length === 0)) {
+      throw new Error("当前 Chat 中没有足够的可复用知识");
+    }
+    const hasRunningTurn = history.thread.turnIds.some((turnId) => lifecycleStore.getTurn(turnId)?.status === "in_progress");
+    const hasRunningJob = agentRuntimeStore?.listJobs(params.threadId).some((job) => !["completed", "partial", "failed", "cancelled"].includes(job.status)) === true;
+    if (hasRunningTurn || hasRunningJob) throw new Error("当前 Job 正在运行，暂时不能沉淀");
+    const key = `${params.threadId}:${params.kind}`;
+    const existing = activeKnowledgeDistillations.get(key);
+    if (existing !== undefined) return existing;
+    const request = distillThreadKnowledge(history.messages.map(({ role, text }) => ({ role, text })), params.kind);
+    activeKnowledgeDistillations.set(key, request);
+    try { return await request; } finally { if (activeKnowledgeDistillations.get(key) === request) activeKnowledgeDistillations.delete(key); }
   });
   connection.onRequest("agent/runtime", (params) => {
     if (!isRecord(params) || typeof params.threadId !== "string") throw new Error("Invalid agent runtime request");

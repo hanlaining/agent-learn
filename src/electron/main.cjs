@@ -5,6 +5,7 @@ const {
   WebContentsView,
   ipcMain,
   shell,
+  nativeImage,
 } = require("electron");
 const { PreviewServer } = require("./preview-server.cjs");
 const { BrowserManager } = require("./browser-manager.cjs");
@@ -23,6 +24,8 @@ const DESKTOP_DESIGN_FEEDBACK_CHANNEL = "desktop:design-feedback";
 const DESKTOP_ENGINEERING_REWORK_CHANNEL = "desktop:engineering-rework";
 const DESKTOP_ADVANCE_FIXED_PRODUCT_CHANNEL = "desktop:advance-fixed-product";
 const DESKTOP_OPEN_PLAN_CHANNEL = "desktop:open-plan";
+const DESKTOP_DISTILL_THREAD_KNOWLEDGE_CHANNEL = "desktop:distill-thread-knowledge";
+const DESKTOP_OPEN_GENERATED_PATH_CHANNEL = "desktop:open-generated-path";
 const PREVIEW_GET_STATUS_CHANNEL = "preview:get-status";
 const PREVIEW_START_CHANNEL = "preview:start";
 const PREVIEW_STOP_CHANNEL = "preview:stop";
@@ -64,6 +67,7 @@ let desktopController;
 let browserManager;
 let shutdownPromise;
 let quitAllowed = false;
+const generatedPaths = new Set();
 const pendingPermissions = new Map();
 const previewServer = new PreviewServer(join(app.getAppPath(), "examples", "today-fortune"));
 
@@ -102,12 +106,16 @@ function denyPendingPermissions(reason) {
 
 function createMainWindow() {
   const window = new BrowserWindow({
+    // 开发环境可能残留屏幕外的窗口位置；显式给出可见初始位置，保证启动后用户能看到最新 UI。
+    x: 80,
+    y: 80,
     width: 1180,
     height: 760,
     minWidth: 900,
     minHeight: 620,
-    show: false,
-    title: "god-agent",
+    show: true,
+    title: "GodAgent",
+    icon: createGodAgentIcon(),
     backgroundColor: "#f6f7f9",
     webPreferences: {
       preload: join(__dirname, "preload.cjs"),
@@ -163,6 +171,11 @@ function createMainWindow() {
   );
 
   return window;
+}
+
+function createGodAgentIcon() {
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32"><circle cx="16" cy="16" r="15" fill="#27343b"/><path d="M22.4 10.3A9.1 9.1 0 1 0 23.6 20" fill="none" stroke="#e3eded" stroke-width="2.1" stroke-linecap="round"/><path d="M16 16h7.2v5.6" fill="none" stroke="#e3eded" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"/><circle cx="9.8" cy="10.4" r="1.35" fill="#91d7ad"/></svg>`;
+  return nativeImage.createFromDataURL(`data:image/svg+xml;base64,${Buffer.from(svg, "utf8").toString("base64")}`);
 }
 
 function createRuntimeClient(AppServerClient) {
@@ -293,6 +306,18 @@ ipcMain.handle(DESKTOP_OPEN_PLAN_CHANNEL, async (_event, path) => {
   if (result) throw new Error("无法打开计划文档");
   return true;
 });
+ipcMain.handle(DESKTOP_DISTILL_THREAD_KNOWLEDGE_CHANNEL, (_event, kind) => desktopCall(async () => {
+  if (kind !== "skill" && kind !== "sop") throw new Error("Invalid knowledge kind");
+  const result = await desktopController?.distillActiveThreadToKnowledge(kind);
+  if (result?.path) generatedPaths.add(result.path);
+  return result;
+}, "沉淀失败，请检查 Chat 是否包含可复用知识后重试"));
+ipcMain.handle(DESKTOP_OPEN_GENERATED_PATH_CHANNEL, (_event, path) => desktopCall(async () => {
+  if (typeof path !== "string" || !generatedPaths.has(path)) throw new Error("文件路径不可访问");
+  const error = await shell.openPath(path);
+  if (error) throw new Error("无法打开生成文件");
+  return true;
+}, "无法打开生成文件，请复制路径后手动打开"));
 ipcMain.handle(PREVIEW_GET_STATUS_CHANNEL, () => previewServer.getStatus());
 ipcMain.handle(PREVIEW_START_CHANNEL, () => desktopCall(() => previewServer.start(), "无法启动本地项目预览"));
 ipcMain.handle(PREVIEW_STOP_CHANNEL, () => desktopCall(() => previewServer.stop(), "无法停止本地项目预览"));

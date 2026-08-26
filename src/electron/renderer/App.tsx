@@ -17,7 +17,6 @@ import {
   MessageSquare,
   PanelLeftClose,
   PanelLeftOpen,
-  PanelRightClose,
   PanelRightOpen,
   Plus,
   RotateCw,
@@ -86,13 +85,19 @@ import {
   type ComposerSuggestion,
 } from "./composer-suggestions.js";
 import { groupThreads, shouldAutoOpenToday } from "./history-groups.js";
+import {
+  canDistillCurrentChat,
+  chatSkillUiReducer,
+  INITIAL_CHAT_SKILL_UI_STATE,
+} from "./chat-skill-ui.js";
 
 type InspectorTab = "changes" | "activity" | "terminal" | "browser" | "extensions";
 
 const DEFAULT_LEFT_SIDEBAR_WIDTH = 236;
 const MIN_LEFT_SIDEBAR_WIDTH = 108;
 const MAX_LEFT_SIDEBAR_WIDTH = 360;
-const DEFAULT_RIGHT_INSPECTOR_WIDTH = 520;
+// 右侧检查器默认占约三成窗口宽度，给中央 Chat 留出更舒适的阅读区。
+const DEFAULT_RIGHT_INSPECTOR_WIDTH = 360;
 const MIN_RIGHT_INSPECTOR_WIDTH = 240;
 const MAX_RIGHT_INSPECTOR_WIDTH = 760;
 const MIN_WORKSPACE_WIDTH = 280;
@@ -134,9 +139,13 @@ export function App() {
   const draftsRef = useRef(new Map<string, string>());
   const [historyQuery, setHistoryQuery] = useState("");
   const [showHistorySearch, setShowHistorySearch] = useState(false);
+  const [skillDistillOpen, setSkillDistillOpen] = useState(false);
+  const [skillOutputKind, setSkillOutputKind] = useState<"skill" | "sop">("skill");
+  const [skillOutputPath, setSkillOutputPath] = useState<string>();
+  const [chatSkillUi, dispatchChatSkillUi] = useReducer(chatSkillUiReducer, INITIAL_CHAT_SKILL_UI_STATE);
+  const [skillDistillNoticeOpen, setSkillDistillNoticeOpen] = useState(false);
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
   const [shortcutNotice, setShortcutNotice] = useState<string>();
-  const [agentSwitchOpen, setAgentSwitchOpen] = useState(false);
   const [permissionMenuOpen, setPermissionMenuOpen] = useState(false);
   const [modelMenuOpen, setModelMenuOpen] = useState(false);
   const [modelMenuView, setModelMenuView] = useState<"simple" | "advanced">("simple");
@@ -175,6 +184,7 @@ export function App() {
   const autoFollowRef = useRef(true);
   const pendingEventsRef = useRef<DesktopEvent[]>([]);
   const eventFrameRef = useRef<number | undefined>(undefined);
+  const chatSkillResetRef = useRef<number | undefined>(undefined);
   const runtimeRefreshRef = useRef<number | undefined>(undefined);
   const knownHistoryThreadIdsRef = useRef<Set<string> | undefined>(undefined);
 
@@ -355,7 +365,15 @@ export function App() {
   useEffect(() => {
     autoFollowRef.current = true;
     setShowJumpToBottom(false);
-    setAgentSwitchOpen(false);
+    setSkillDistillOpen(false);
+    setSkillDistillNoticeOpen(false);
+    setSkillOutputKind("skill");
+    setSkillOutputPath(undefined);
+    if (chatSkillResetRef.current !== undefined) {
+      window.clearTimeout(chatSkillResetRef.current);
+      chatSkillResetRef.current = undefined;
+    }
+    dispatchChatSkillUi({ type: "reset" });
     setPermissionMenuOpen(false);
     setModelMenuOpen(false);
     setModelMenuView("simple");
@@ -363,11 +381,12 @@ export function App() {
   }, [ui.runtimeSession?.turnId, ui.snapshot?.activeThreadId]);
 
   useEffect(() => {
-    if (!agentSwitchOpen && !permissionMenuOpen && !modelMenuOpen && historyMenu === undefined && !commandPaletteOpen) return;
+    if (!skillDistillOpen && !skillDistillNoticeOpen && !permissionMenuOpen && !modelMenuOpen && historyMenu === undefined && !commandPaletteOpen) return;
 
     const closeOnEscape = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
-        setAgentSwitchOpen(false);
+        setSkillDistillOpen(false);
+        setSkillDistillNoticeOpen(false);
         setPermissionMenuOpen(false);
         setModelMenuOpen(false);
         setModelMenuView("simple");
@@ -380,7 +399,7 @@ export function App() {
     return () => {
       window.removeEventListener("keydown", closeOnEscape);
     };
-  }, [agentSwitchOpen, permissionMenuOpen, modelMenuOpen, historyMenu, commandPaletteOpen]);
+  }, [skillDistillOpen, skillDistillNoticeOpen, permissionMenuOpen, modelMenuOpen, historyMenu, commandPaletteOpen]);
 
   function jumpToBottom() {
     autoFollowRef.current = true;
@@ -453,6 +472,46 @@ export function App() {
     }
   }
 
+  const canDistillChat = canDistillCurrentChat({
+    connected: runtime.state === "connected",
+    hasActiveThread: ui.snapshot?.activeThreadId !== undefined,
+    messageCount: ui.snapshot?.messages.length ?? 0,
+    jobRunning: isRunning,
+    phase: chatSkillUi.phase,
+  });
+
+  async function distillCurrentChat(kind: "skill" | "sop" = skillOutputKind) {
+    if (!canDistillChat) return;
+    dispatchChatSkillUi({ type: "start" });
+    try {
+      const result = await window.godAgent.desktop.distillThreadToKnowledge(kind);
+      if (ui.snapshot !== undefined) dispatch({ type: "snapshot", snapshot: { ...ui.snapshot, capabilities: result.capabilities } });
+      dispatchChatSkillUi({ type: "succeed", skillName: result.name });
+      setSkillOutputPath(result.path);
+      if (chatSkillResetRef.current !== undefined) window.clearTimeout(chatSkillResetRef.current);
+      chatSkillResetRef.current = window.setTimeout(() => {
+        dispatchChatSkillUi({ type: "reset" });
+        chatSkillResetRef.current = undefined;
+      }, 5000);
+    } catch (error) {
+      dispatchChatSkillUi({ type: "fail", message: readError(error) });
+    }
+  }
+
+  function toggleSkillDistillPanel() {
+    if (skillDistillOpen) { setSkillDistillOpen(false); return; }
+    if (!canDistillChat) {
+      setPermissionMenuOpen(false);
+      setModelMenuOpen(false);
+      setSkillDistillNoticeOpen(true);
+      return;
+    }
+    setPermissionMenuOpen(false);
+    setModelMenuOpen(false);
+    setSkillDistillNoticeOpen(false);
+    setSkillDistillOpen(true);
+  }
+
   const capabilities = ui.snapshot?.capabilities;
   const activeModelSettings = ui.snapshot?.agentConfig;
   const availablePowerPresets = POWER_PRESETS.filter((preset) => {
@@ -469,6 +528,7 @@ export function App() {
   const activeAgentCount = ui.snapshot?.agentRuns.filter((run) =>
     ["queued", "running", "waiting_children", "resuming"].includes(run.status),
   ).length ?? 0;
+  const agentCollaborationEnabled = ui.snapshot?.agentConfig.agentTeam?.mode === "auto";
   const visibleLeftSidebarWidth = leftOpen
     ? clamp(
         leftSidebarWidth,
@@ -578,7 +638,6 @@ export function App() {
   }
 
   function openCommandPalette() {
-    setAgentSwitchOpen(false);
     setPermissionMenuOpen(false);
     setModelMenuOpen(false);
     setHistoryMenu(undefined);
@@ -906,6 +965,64 @@ export function App() {
                   <PanelRightOpen />
                 </button>
               )}
+              <div className={`header-agent-control${agentCollaborationEnabled ? " is-enabled" : ""}`}>
+                <button
+                  className={`icon-button header-round-button${agentCollaborationEnabled ? " is-selected" : ""}`}
+                  type="button"
+                  aria-label="父子 Agent 协作"
+                  aria-pressed={agentCollaborationEnabled}
+                  title={agentCollaborationEnabled ? "父子 Agent 已启动：再次点击关闭" : "点击启动父子 Agent"}
+                  onClick={() => {
+                    setPermissionMenuOpen(false);
+                    setModelMenuOpen(false);
+                    void replaceSnapshot(window.godAgent.desktop.updateAgentTeam({
+                      mode: agentCollaborationEnabled ? "off" : "auto",
+                    }));
+                  }}
+                >
+                  <Bot />
+                  {agentCollaborationEnabled && <i className="header-round-check"><CircleCheck /></i>}
+                </button>
+                <span className="header-round-tooltip" role="tooltip">
+                  {agentCollaborationEnabled ? "父子 Agent · 已启动，再次点击关闭" : "父子 Agent · 点击直接启动协作"}
+                </span>
+              </div>
+              <div className={`skill-distill-control${skillDistillOpen ? " is-open" : ""}`} data-state={chatSkillUi.phase}>
+                <button
+                  className={`icon-button header-round-button skill-distill-button${skillDistillOpen ? " is-selected" : ""}`}
+                  type="button"
+                  aria-label="沉淀当前 Chat 为 Skill 或 SOP"
+                  aria-expanded={skillDistillOpen}
+                  aria-pressed={skillDistillOpen}
+                  title="沉淀当前 Chat · 生成 SOP / Skill"
+                  onClick={toggleSkillDistillPanel}
+                >
+                  {chatSkillUi.phase === "loading" ? <CircleDashed /> : chatSkillUi.phase === "success" ? <CircleCheck /> : chatSkillUi.phase === "error" ? <X /> : <Sparkles />}
+                  {skillDistillOpen && <i className="header-round-check"><CircleCheck /></i>}
+                </button>
+                <span className="header-round-tooltip" role="tooltip">沉淀当前 Chat · 生成 SOP / Skill 草稿</span>
+                {skillDistillNoticeOpen && <section className="skill-distill-notice" role="status" aria-label="沉淀提示">
+                  <strong>当前还没有可沉淀的 Chat</strong>
+                  <p>请先完成一轮对话，再生成 Skill 或 SOP.md。</p>
+                  <button type="button" onClick={() => setSkillDistillNoticeOpen(false)}>知道了</button>
+                </section>}
+                {skillDistillOpen && <section className="skill-distill-panel" aria-label="沉淀当前 Chat">
+                  <header><strong>沉淀当前 Chat</strong><small>生成可复用的 SOP 或 Skill</small></header>
+                  <div className="knowledge-kind-switch" role="radiogroup" aria-label="输出类型">
+                    <button type="button" role="radio" aria-checked={skillOutputKind === "skill"} onClick={() => setSkillOutputKind("skill")}><Sparkles />Skill</button>
+                    <button type="button" role="radio" aria-checked={skillOutputKind === "sop"} onClick={() => setSkillOutputKind("sop")}><FileCode2 />SOP.md</button>
+                  </div>
+                  <p>已读取当前 Chat 的工作记录、证据和验收状态。敏感信息会自动参数化。</p>
+                  <div className="skill-distill-panel-actions">
+                    <button type="button" className="secondary-button" onClick={() => setSkillDistillOpen(false)}>关闭</button>
+                    <button type="button" className="primary-button" disabled={!canDistillChat || chatSkillUi.phase === "loading"} onClick={() => void distillCurrentChat(skillOutputKind)}>
+                      {chatSkillUi.phase === "loading" ? <CircleDashed /> : <Sparkles />}开始沉淀
+                    </button>
+                  </div>
+                </section>}
+                {chatSkillUi.phase === "success" && <div className="skill-distill-feedback" role="status">{skillOutputKind === "sop" ? <>已生成 SOP：{chatSkillUi.skillName}</> : <>已沉淀为 Skill：{chatSkillUi.skillName}</>}{skillOutputPath !== undefined && <button type="button" onClick={() => void window.godAgent.desktop.openGeneratedPath(skillOutputPath)}>打开结果</button>}</div>}
+                {chatSkillUi.phase === "error" && <div className="skill-distill-feedback" role="alert">{chatSkillUi.message}</div>}
+              </div>
               <button className="icon-button" type="button" aria-label="更多任务操作"><Menu /></button>
             </div>
           </header>
@@ -1084,7 +1201,7 @@ export function App() {
                       aria-label={`权限模式：${formatAccessMode(ui.snapshot?.agentConfig.agentTeam?.accessMode)}`}
                       aria-haspopup="menu"
                       aria-expanded={permissionMenuOpen}
-                      onClick={() => { setAgentSwitchOpen(false); setModelMenuOpen(false); setPermissionMenuOpen(!permissionMenuOpen); }}
+                      onClick={() => { setModelMenuOpen(false); setPermissionMenuOpen(!permissionMenuOpen); }}
                     >
                       <Shield /><span className="control-label"><span className="control-label-long">{formatAccessMode(ui.snapshot?.agentConfig.agentTeam?.accessMode)}</span><span className="control-label-short">权限</span></span><ChevronDown />
                     </button>
@@ -1112,7 +1229,6 @@ export function App() {
                       disabled={(capabilities?.models.length ?? 0) === 0}
                       onClick={() => {
                         setPermissionMenuOpen(false);
-                        setAgentSwitchOpen(false);
                         setModelMenuView(activePowerIndex < 0 ? "advanced" : "simple");
                         setModelMenuOpen(!modelMenuOpen);
                       }}
@@ -1161,22 +1277,6 @@ export function App() {
                       </>}
                     </section>}
                   </div>
-                  <div className="agent-switch-wrap">
-                    <button
-                      className="model-select agent-switch-button"
-                      type="button"
-                      aria-label={`子 Agent：${ui.snapshot?.agentConfig.agentTeam?.mode === "off" ? "关闭" : "开启"}`}
-                      aria-haspopup="menu"
-                      aria-expanded={agentSwitchOpen}
-                      onClick={() => { setPermissionMenuOpen(false); setModelMenuOpen(false); setAgentSwitchOpen(!agentSwitchOpen); }}
-                    >
-                      <span className="control-label"><span className="control-label-long">子 Agent：{ui.snapshot?.agentConfig.agentTeam?.mode === "off" ? "关闭" : "开启"}</span><span className="control-label-short">子 Agent</span></span><ChevronDown />
-                    </button>
-                    {agentSwitchOpen && <section className="agent-switch-menu" role="menu" aria-label="子 Agent 开关">
-                      <button type="button" role="menuitemradio" aria-checked={ui.snapshot?.agentConfig.agentTeam?.mode !== "off"} onClick={() => { setAgentSwitchOpen(false); void replaceSnapshot(window.godAgent.desktop.updateAgentTeam({ mode: "auto" })); }}><i /> <span><strong>开启</strong><small>子 Agent 执行，父 Agent 监工验收</small></span></button>
-                      <button type="button" role="menuitemradio" aria-checked={ui.snapshot?.agentConfig.agentTeam?.mode === "off"} onClick={() => { setAgentSwitchOpen(false); void replaceSnapshot(window.godAgent.desktop.updateAgentTeam({ mode: "off" })); }}><i /> <span><strong>关闭</strong><small>当前 Chat 只由父 Agent 执行</small></span></button>
-                    </section>}
-                  </div>
                 </div>
                 {isRunning ? (
                   <button className="primary-button" type="button" onClick={() => void window.godAgent.desktop.cancelTurn()}>
@@ -1196,13 +1296,13 @@ export function App() {
           <div
             className="right-inspector-resizer pane-resizer"
             role="separator"
-            aria-label="调整工作区检查器宽度"
+            aria-label="拖动调整工作区检查器比例"
             aria-orientation="vertical"
             aria-valuemin={MIN_RIGHT_INSPECTOR_WIDTH}
             aria-valuemax={rightInspectorMaxWidth}
             aria-valuenow={visibleRightInspectorWidth}
             tabIndex={rightOpen ? 0 : -1}
-            title="按住左右拖动，双击恢复默认宽度"
+            title="按住拖动调整检查器比例，双击恢复默认宽度"
             onPointerDown={startRightInspectorResize}
             onPointerMove={(event) => {
               if (inspectorResizing && event.currentTarget.hasPointerCapture(event.pointerId)) {
@@ -1225,10 +1325,12 @@ export function App() {
             }}
           />
           <header className="inspector-header">
-            <strong>工作区检查器</strong>
-            <button className="icon-button" type="button" aria-label="收起右侧栏" onClick={() => setRightOpen(false)}>
-              <PanelRightClose />
-            </button>
+            <div className="inspector-title-group">
+              <button className="icon-button inspector-toggle-button" type="button" aria-label="收起工作区检查器" title="收起工作区检查器" onClick={() => setRightOpen(false)}>
+                <Menu />
+              </button>
+              <strong>工作区检查器</strong>
+            </div>
           </header>
           <div className="inspector-tabs">
             <InspectorTabButton id="changes" current={inspectorTab} setCurrent={setInspectorTab}>变更</InspectorTabButton>

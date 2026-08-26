@@ -46,11 +46,13 @@ import {
 } from "./runtime-status.js";
 import {
   isDesktopOutcomeUnknownResolution,
+  isDesktopKnowledgeDistillResult,
   isDesktopWorkspaceSearchResult,
   type DesktopMessageInput,
   type DesktopOutcomeUnknownResolution,
   type DesktopResolveOutcomeUnknownInput,
   type DesktopWorkspaceSearchResult,
+  type DesktopKnowledgeDistillResult,
 } from "./desktop-types.js";
 
 export interface AppServerClientOptions {
@@ -197,6 +199,14 @@ export class AppServerClient {
       throw new Error("Invalid thread/history response");
     }
 
+    return value;
+  }
+
+  async distillThreadKnowledge(threadId: string, kind: "skill" | "sop"): Promise<DesktopKnowledgeDistillResult> {
+    if (threadId.trim().length === 0) throw new Error("Thread id is required");
+    if (kind !== "skill" && kind !== "sop") throw new Error("Knowledge kind is invalid");
+    const value = await this.sendRequest("knowledge/distill-thread", { threadId, kind });
+    if (!isDesktopKnowledgeDistillResult(value)) throw new Error("Invalid knowledge/distill-thread response");
     return value;
   }
 

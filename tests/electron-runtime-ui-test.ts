@@ -729,7 +729,7 @@ test("三栏支持小手拖拽、联动边界、宽度记忆与双击复位", ()
   assert.match(styles, /\.pane-resizer \{[\s\S]*?cursor: grab/);
   assert.match(styles, /cursor: grabbing/);
   assert.match(styles, /var\(--left-sidebar-width, 236px\)/);
-  assert.match(styles, /var\(--right-inspector-width, 520px\)/);
+  assert.match(styles, /var\(--right-inspector-width, 360px\)/);
 });
 
 test("右侧浏览器使用 Codex 风格多标签、真实地址栏与隔离网页区域", () => {
@@ -816,7 +816,22 @@ test("输入工具栏与左栏按各自容器切换紧凑模式", () => {
   assert.match(app, /const MIN_LEFT_SIDEBAR_WIDTH = 108/);
   assert.match(app, /className="control-label-short">权限</);
   assert.match(app, /className="control-label-short">模型</);
-  assert.match(app, /className="control-label-short">子 Agent</);
+  assert.match(app, /aria-label="父子 Agent 协作"/);
+  assert.match(app, /aria-pressed=\{agentCollaborationEnabled\}/);
+  assert.match(app, /updateAgentTeam\(\{\s*mode: agentCollaborationEnabled \? "off" : "auto"/);
+  assert.match(app, /aria-label="沉淀当前 Chat 为 Skill 或 SOP"/);
+  assert.doesNotMatch(app, /disabled=\{!canDistillChat && !skillDistillOpen\}/);
+  assert.match(app, /skillDistillNoticeOpen && <section className="skill-distill-notice"/);
+  assert.match(app, /当前还没有可沉淀的 Chat/);
+  assert.match(app, /className="inspector-title-group"/);
+  assert.match(app, /aria-label="收起工作区检查器"/);
+  assert.match(app, /className="icon-button inspector-toggle-button"/);
+  assert.doesNotMatch(app, /aria-label="收起右侧栏"/);
+  assert.match(styles, /\.skill-distill-notice/);
+  assert.match(styles, /\.skill-distill-panel/);
+  assert.match(styles, /\.inspector-toggle-button/);
+  assert.doesNotMatch(app, /className="model-select agent-switch-button"/);
+  assert.doesNotMatch(app, /<section className="agent-switch-menu" role="menu" aria-label="子 Agent 开关">/);
   assert.match(styles, /\.left-sidebar \{[\s\S]*container-name: sidebar;[\s\S]*container-type: inline-size;/);
   assert.match(styles, /\.composer-toolbar \{[\s\S]*flex-wrap: wrap;/);
   assert.match(styles, /@container sidebar \(max-width: 210px\)/);
@@ -831,7 +846,9 @@ test("右侧浏览器按容器降级且三栏不再组合出横向最小宽度",
   assert.match(app, /className="browser-history-action"/);
   assert.match(app, /className="browser-secondary-action"/);
   assert.match(styles, /\.right-inspector \{[\s\S]*container-name: inspector;[\s\S]*container-type: inline-size;/);
-  assert.match(styles, /grid-template-columns: minmax\(0, var\(--left-sidebar-width, 236px\)\) minmax\(0, 1fr\) minmax\(0, var\(--right-inspector-width, 520px\)\)/);
+  assert.match(styles, /grid-template-columns: minmax\(0, var\(--left-sidebar-width, 236px\)\) minmax\(0, 1fr\) minmax\(0, var\(--right-inspector-width, 360px\)\)/);
+  assert.match(app, /aria-label="拖动调整工作区检查器比例"/);
+  assert.match(styles, /\.right-inspector-resizer::before/);
   assert.match(styles, /\.browser-tabs \{[\s\S]*overflow-x: auto;/);
   assert.match(styles, /\.browser-surface \{ width: 100%; height: 100%; min-width: 0;/);
   assert.match(styles, /\.browser-address input \{ width: 100%; min-width: 0;/);
